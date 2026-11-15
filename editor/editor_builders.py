@@ -5,6 +5,17 @@ import os.path
 import methods
 
 
+def make_tiiny_jobs_source(target, source, env):
+    with methods.generated_wrapper(str(target[0])) as file:
+        for item in source:
+            name = os.path.splitext(os.path.basename(str(item)))[0].upper()
+            with open(item.abspath, encoding="utf-8") as script:
+                text = script.read()
+            if ')TIINY_JOBS"' in text:
+                raise ValueError("Tiiny job script contains its C++ raw-string delimiter")
+            file.write(f'inline constexpr const char *TIINY_JOBS_{name} = R"TIINY_JOBS({text})TIINY_JOBS";\n')
+
+
 def doc_data_class_path_builder(target, source, env):
     paths = dict(sorted(source[0].read().items()))
     data = "\n".join([f'\t{{"{key}", "{value}"}},' for key, value in paths.items()])

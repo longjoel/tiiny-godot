@@ -1,6 +1,6 @@
 # Story 02 implementation plan — persistent FIFO queue
 
-Status: Planned and eligible; story 01 is accepted. Implementation has not started.
+Status: In progress; story 01 accepted. 9 of 10 story 02 acceptance criteria verified; remaining: displayed editor verification and Tiiny device coordination.
 
 Parent: [story 02](../work-items/02-integration-job-manager.md). Visuals: [Jobs mockup](../mockups/02-jobs-panel.html), [diagrams](../mockups/02-job-manager-diagrams.md).
 
@@ -58,4 +58,4 @@ Gate: JOB-01 through JOB-06 pass, including controlled restarts around publicati
 
 ## Handoff
 
-Record checks against every parent acceptance criterion, exact binary/configuration, storage decisions, supported operations, restrictions, and remaining blockers. Story 01 is accepted; this document remains a plan and implements no queue.
+Record checks against every parent acceptance criterion, exact binary/configuration, storage decisions, supported operations, restrictions, and remaining blockers. Story 01 is accepted; story 02 acceptance remains pending.

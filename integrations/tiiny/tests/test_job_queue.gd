@@ -1,0 +1,136 @@
+extends SceneTree
+
+const Queue = preload("res://editor/tiiny/jobs/queue.gd")
+var failures := 0
+
+func check(condition: bool, message: String) -> void:
+	if not condition:
+		push_error(message)
+		failures += 1
+
+func validate(operation: String, parameters: Dictionary) -> String:
+	return "" if operation == "fixture" and parameters.has("value") else "unsupported request"
+
+func append_thread(queue: RefCounted, index: int) -> Dictionary:
+	return queue.append("thread-%d" % index, "fixture", {"value": index}, validate)
+
+func _initialize() -> void:
+	var root := OS.get_environment("TIINY_QUEUE_TEST_DIR")
+	if root.is_empty():
+		push_error("TIINY_QUEUE_TEST_DIR is required")
+		quit(1)
+		return
+	var path := root.path_join("queue.json")
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	var queue = Queue.new()
+	check(queue.open(path, "test-project"), "open")
+	var contender = Queue.new()
+	check(not contender.open(path, "test-project"), "exclusive lease")
+	check(queue.append("bad", "other", {}, validate).has("error"), "reject invalid")
+	check(queue.append("unsafe", "fixture", {"value": INF}, validate).has("error"), "reject non-JSON parameters")
+	var first: Dictionary = queue.append("one", "fixture", {"value": 1}, validate)
+	check(first.get("sequence") == 1, "first accepted")
+	check(queue.append("one", "fixture", {"value": 1}, validate).get("duplicate") == true, "deduplicate")
+	check(queue.append("one", "fixture", {"value": 2}, validate).has("error"), "key conflict")
+	var second: Dictionary = queue.append("two", "fixture", {"value": 2}, validate)
+	check(queue.start_next().get("id") == first.id, "FIFO start")
+	check(queue.start_next().is_empty(), "single slot")
+	var third: Dictionary = queue.append("three", "fixture", {"value": 3}, validate)
+	check(third.sequence == 3, "append while running")
+	check(queue.finish(first.id, "failed", {"error": "fixture failure"}), "failure")
+	check(queue.start_next().is_empty(), "failure stops")
+	check(queue.resolve(first.id, "retry"), "retry")
+	check(queue.start_next().is_empty(), "resolution requires resume")
+	check(queue.set_paused(false), "resume retry")
+	check(queue.start_next().get("id") == first.id, "retry before later work")
+	check(queue.set_paused(true), "pause")
+	check(queue.finish(first.id, "completed", {}), "complete")
+	check(queue.snapshot().jobs[0].attempts[0].result.error == "fixture failure", "attempt diagnostics retained")
+	check(queue.snapshot().jobs[0].attempts[0].resolution.decision == "retry", "retry decision retained")
+	check(queue.start_next().is_empty(), "pause prevents dispatch")
+	queue.close()
+	var restored = Queue.new()
+	check(restored.open(path, "test-project"), "restore")
+	check(restored.append("one", "fixture", {"value": 1}, validate).get("duplicate") == true, "deduplication survives JSON numeric round trip")
+	check(restored.snapshot().paused, "pause persisted")
+	check(restored.set_paused(false), "resume")
+	check(restored.start_next().get("id") == second.id, "second in order")
+	restored.close()
+	var interrupted = Queue.new()
+	check(interrupted.open(path, "test-project"), "interrupted restore")
+	check(interrupted.snapshot().jobs[1].state == "interrupted", "unknown outcome interrupted")
+	check(interrupted.start_next().is_empty(), "interruption stops")
+	check(not interrupted.resolve(second.id, "retry"), "unknown outcome cannot retry")
+	check(not interrupted.resolve(second.id, "skip"), "unknown outcome cannot skip")
+	check(interrupted.reconcile(second.id, "failed", {"error": "no effect published"}), "reconcile")
+	check(interrupted.resolve(second.id, "skip"), "explicit skip")
+	check(interrupted.start_next().is_empty(), "skip requires resume")
+	check(interrupted.set_paused(false), "resume after skip")
+	check(interrupted.start_next().get("id") == third.id, "third after skip")
+	interrupted.close()
+	var corrupt := FileAccess.open(path, FileAccess.WRITE)
+	corrupt.store_string("{broken")
+	corrupt.close()
+	var rejected = Queue.new()
+	check(not rejected.open(path, "test-project"), "corruption stops")
+	var concurrent_path := root.path_join("concurrent.json")
+	if FileAccess.file_exists(concurrent_path):
+		DirAccess.remove_absolute(concurrent_path)
+	var concurrent = Queue.new()
+	check(concurrent.open(concurrent_path, "test-project"), "concurrent store open")
+	var threads: Array[Thread] = []
+	for i in range(16):
+		var thread := Thread.new()
+		check(thread.start(append_thread.bind(concurrent, i)) == OK, "start append thread")
+		threads.append(thread)
+	var positions := {}
+	for thread in threads:
+		var accepted: Dictionary = thread.wait_to_finish()
+		check(accepted.has("sequence"), "concurrent append accepted")
+		if accepted.has("sequence"):
+			positions[accepted.sequence] = true
+	check(positions.size() == 16 and concurrent.snapshot().jobs.size() == 16, "concurrent positions unique")
+	concurrent.close()
+	var concurrent_reload = Queue.new()
+	check(concurrent_reload.open(concurrent_path, "test-project"), "concurrent records persisted")
+	check(concurrent_reload.snapshot().jobs.size() == 16, "all concurrent appends restored")
+	concurrent_reload.close()
+	var malformed := FileAccess.open(concurrent_path, FileAccess.READ)
+	var document: Dictionary = JSON.parse_string(malformed.get_as_text())
+	malformed.close()
+	document.jobs[0].state = "completed"
+	malformed = FileAccess.open(concurrent_path, FileAccess.WRITE)
+	malformed.store_string(JSON.stringify(document))
+	malformed.close()
+	var invalid = Queue.new()
+	check(not invalid.open(concurrent_path, "test-project"), "inconsistent attempts rejected")
+	var journal_path := root.path_join("journal.json")
+	if FileAccess.file_exists(journal_path):
+		DirAccess.remove_absolute(journal_path)
+	var journal = Queue.new()
+	check(journal.open(journal_path, "journal-project"), "journal store open")
+	var item: Dictionary = journal.append("journal", "fixture", {"value": 1}, validate)
+	check(journal.start_next().id == item.id, "journal job starts")
+	check(not journal.publication(item.id, "published"), "cannot publish before prepare")
+	check(journal.publication(item.id, "prepared", {"source": "stage/tree.png", "destination": "tree.png", "artifact": {"sha256": "fixture"}}), "record publication intent")
+	check(journal.publication(item.id, "published"), "record publication")
+	check(not journal.publication(item.id, "aborted"), "cannot abort after publication")
+	check(journal.finish(item.id, "failed", {"error": "import failed"}), "failure recorded")
+	check(journal.snapshot().jobs[0].state == "interrupted", "published effect requires reconciliation")
+	check(not journal.resolve(item.id, "retry"), "cannot retry ambiguous publication")
+	journal.close()
+	var journal_reload = Queue.new()
+	check(journal_reload.open(journal_path, "journal-project"), "journal survives restart")
+	check(journal_reload.snapshot().jobs[0].attempts[0].publication.phase == "published", "publication phase persisted")
+	check(journal_reload.start_next().is_empty(), "ambiguous publication stops dispatch")
+	check(not journal_reload.reconcile(item.id, "failed", {}), "published effect cannot be classified as no effect")
+	check(journal_reload.reconcile(item.id, "completed", {"artifact": "verified imported fixture"}), "reconcile verified import")
+	check(journal_reload.snapshot().jobs[0].attempts[0].publication.phase == "imported", "reconciliation records import")
+	journal_reload.close()
+	var verified_reload = Queue.new()
+	check(verified_reload.open(journal_path, "journal-project"), "reconciled journal survives restart")
+	check(verified_reload.snapshot().paused, "reconciliation requires resume")
+	verified_reload.close()
+	print("job queue failures: ", failures)
+	quit(1 if failures else 0)

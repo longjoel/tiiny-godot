@@ -31,9 +31,32 @@ func _tool(dock: Control, calls: Variant) -> void:
 func run(plugin: EditorPlugin) -> String:
 	var dock = load("res://fake_chat.gd").new()
 	plugin.add_child(dock)
+	dock.jobs_service = plugin.get_tree().root.find_child("Tiiny Jobs", true, false)
 	var logs: Array[String] = []
 	dock.log_message.connect(func(message: String, _kind: int): logs.append(message))
 	if not await _recover(dock): return "Basic text response failed."
+	if dock.jobs_service == null or not dock.jobs_service.available: return "Built-in Jobs service unavailable to chat fixture."
+	_begin(dock)
+	var append := {"id": "job-append", "type": "function", "function": {"name": "append_job", "arguments": JSON.stringify({"operation": "create_tree", "destination": "res://chat_fixture_tree.png"})}}
+	await _tool(dock, [append])
+	var accepted: Variant = JSON.parse_string(dock.turn_messages.back().content)
+	if not accepted is Dictionary or not accepted.get("accepted", false) or not accepted.get("id") is String or not accepted.get("sequence") is float: return "Chat did not receive a durable job acceptance."
+	if not str(accepted.message).contains("not yet known"): return "Chat claimed the job had completed."
+	var job_id: String = accepted.id
+	_begin(dock)
+	var status_call := {"id": "job-status", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+	await _tool(dock, [status_call])
+	var job_status: Variant = JSON.parse_string(dock.turn_messages.back().content)
+	if not job_status is Dictionary or job_status.get("id") != job_id or job_status.get("state") not in ["queued", "running", "completed"]: return "Chat job status did not report the accepted job."
+	_begin(dock)
+	append.function.arguments = JSON.stringify({"operation": "create_tree", "destination": "res://../escape.png"})
+	append.id = "job-invalid"
+	await _tool(dock, [append])
+	if not str(dock.turn_messages.back().content).begins_with("Error:"): return "Invalid job was accepted by chat."
+	var deadline := Time.get_ticks_msec() + 30000
+	while Time.get_ticks_msec() < deadline and dock.jobs_service.get_job_status(job_id).get("state") in ["queued", "running"]:
+		await plugin.get_tree().create_timer(0.05).timeout
+	if dock.jobs_service.get_job_status(job_id).get("state") != "completed": return "Chat-submitted fixture did not complete."
 	# Malformed envelopes and transport failures unlock controls and allow a new turn.
 	for envelope in [{}, {"choices": []}, {"choices": [null]}, {"choices": [{"message": {"role": "user", "content": "wrong role"}}]}]:
 		_begin(dock)

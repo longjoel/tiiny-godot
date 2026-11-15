@@ -31,6 +31,7 @@
 #include "editor_node.h"
 #include "tiiny_ai_dock_source.h"
 #include "tiiny_ai_manager_source.h"
+#include "tiiny_jobs_source.gen.h"
 #include "core/object/script_language.h"
 
 #include "core/config/engine.h"
@@ -9452,6 +9453,46 @@ EditorNode::EditorNode() {
 
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
+	VBoxContainer *tiiny_jobs_content = nullptr;
+
+	// The job service is editor-owned and its scripts are embedded in the
+	// executable, independent of the currently opened project's resources.
+	if (ClassDB::class_exists("GDScript")) {
+		auto load_job_script = [](const char *p_source) -> Ref<Script> {
+			Ref<Script> script = Ref<Script>(Object::cast_to<Script>(ClassDB::instantiate("GDScript")));
+			if (script.is_valid()) {
+				script->set_source_code(String::utf8(p_source));
+				if (script->reload() != OK) {
+					script.unref();
+				}
+			}
+			return script;
+		};
+		Ref<Script> queue_script = load_job_script(TIINY_JOBS_QUEUE);
+		Ref<Script> executor_script = load_job_script(TIINY_JOBS_EXECUTOR);
+		Ref<Script> worker_script = load_job_script(TIINY_JOBS_TREE_WORKER);
+		Ref<Script> publisher_script = load_job_script(TIINY_JOBS_TREE_PUBLISHER);
+		Ref<Script> attach_script = load_job_script(TIINY_JOBS_ATTACH_WORKER);
+		Ref<Script> panel_script = load_job_script(TIINY_JOBS_PANEL);
+		if (queue_script.is_valid() && executor_script.is_valid() && worker_script.is_valid() && publisher_script.is_valid() && attach_script.is_valid() && panel_script.is_valid()) {
+			VBoxContainer *jobs_content = memnew(VBoxContainer);
+			tiiny_jobs_content = jobs_content;
+			jobs_content->set_script(panel_script);
+			jobs_content->set("queue_script", queue_script);
+			jobs_content->set("executor_script", executor_script);
+			jobs_content->set("worker_script", worker_script);
+			jobs_content->set("publisher_script", publisher_script);
+			jobs_content->set("attach_script", attach_script);
+			jobs_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
+			EditorDock *jobs_dock = memnew(EditorDock);
+			jobs_dock->set_title("Jobs");
+			jobs_dock->set_default_slot(EditorDock::DOCK_SLOT_BOTTOM);
+			jobs_dock->add_child(jobs_content);
+			editor_dock_manager->add_dock(jobs_dock);
+		} else {
+			ERR_PRINT("Could not load the built-in Tiiny Jobs scripts.");
+		}
+	}
 
 	// Tiiny AI is built into the editor and does not depend on project files.
 	if (ClassDB::class_exists("GDScript")) {
@@ -9462,6 +9503,9 @@ EditorNode::EditorNode() {
 				VBoxContainer *tiiny_content = memnew(VBoxContainer);
 				tiiny_content->set_name("Tiiny Assistant");
 				tiiny_content->set_script(tiiny_script);
+				if (tiiny_jobs_content) {
+					tiiny_content->set("jobs_service", tiiny_jobs_content);
+				}
 				tiiny_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
 				EditorDock *tiiny_dock = memnew(EditorDock);
 				tiiny_dock->set_title("Tiiny Chat");

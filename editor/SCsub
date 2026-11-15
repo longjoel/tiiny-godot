@@ -10,6 +10,11 @@ Import("env")
 env.editor_sources = []
 
 if env.editor_build:
+    env.CommandNoCache(
+        "tiiny_jobs_source.gen.h",
+        [f"tiiny/jobs/{name}.gd" for name in ("queue", "executor", "tree_worker", "tree_publisher", "attach_worker", "panel")],
+        env.Run(editor_builders.make_tiiny_jobs_source),
+    )
     # Generate doc data paths
     env.CommandNoCache(
         "doc/doc_data_class_path.gen.h",

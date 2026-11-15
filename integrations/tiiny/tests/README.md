@@ -1,5 +1,35 @@
 # Tiiny prototype verification
 
+The in-progress job queue has additional Linux editor checks (they do not yet
+cover the story 02 acceptance scenarios):
+
+```sh
+mkdir -p /tmp/tiiny-job-test
+TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_queue.gd
+TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_executor.gd
+TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_publication.gd
+TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_tree_worker.gd
+python3 integrations/tiiny/tests/check_job_process.py
+python3 integrations/tiiny/tests/check_editor_tree.py
+python3 integrations/tiiny/tests/check_builtin_jobs.py
+```
+
+The process test owns its temporary directory, kills its own fixture processes,
+checks exclusive locking, and checks recovery after a journaled publication. The
+native storage currently supports Unix platforms only; unsupported platforms
+fail closed. Do not delete a queue's permanent `.lock` file while an editor
+may be using it.
+
+The standalone tree fixture uses a test-only copy callback and checks malformed
+and symlink outputs. The disposable headless editor fixture connects the tree
+worker to the journaled Unix publisher, validates a `Texture2D` after import,
+checks a destination conflict, and reconciles a published file after reopening
+the queue. Hard links require staging and destination on one filesystem. These
+The built-in Jobs fixture opens the embedded panel in a disposable project,
+submits a tree, verifies import and hidden queue storage, and reopens the
+project to check persisted history and duplicate submissions. Displayed layout,
+assistant tools and device coordination are still separate checks.
+
 Build once, then run from the repository root:
 
 ```sh
@@ -23,6 +53,10 @@ Without flags, the runner extracts the exact embedded manager/chat scripts, chec
 Planner/panel fixtures cover incompatible capabilities, unknown metadata, allocation/SSD headroom, staging/reserves, protected coding replacement, duplicates, context limits, stale checks, compact cells at 600/1400 pixels, horizontal overflow, Info popups, and a single inventory table. Settings migration preserves existing Advanced values. Progress fixtures cover terminal chunking/escapes, device percentages, CLI percentages, and duplicate suppression.
 
 The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow.
+
+The fake chat protocol fixture also submits a reviewed tree job through the
+real built-in Jobs service, checks the returned acceptance and status, rejects
+an invalid path, and waits for the fixture to complete. It uses no device.
 
 `fake_chat.gd` replaces only the HTTP submission boundary. Protocol fixtures cover text, normal tool/result/final text, malformed/multiple/repeated calls and limits, matched unknown/failed tools, traversal, duplicate create, real temporary script creation, completed-artifact retention, subsequent-turn recovery, context reset and error redaction. The built-in dock also rejects an invalid call to detect stale binaries.
 

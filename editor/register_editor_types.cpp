@@ -45,6 +45,7 @@
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
 #include "editor/editor_undo_redo_manager.h"
+#include "editor/tiiny_job_storage.h"
 #include "editor/export/editor_export_platform.h"
 #include "editor/export/editor_export_platform_apple_embedded.h"
 #include "editor/export/editor_export_platform_extension.h"
@@ -152,6 +153,7 @@ void register_editor_types() {
 	EditorStringNames::create();
 
 	GDREGISTER_CLASS(EditorPaths);
+	GDREGISTER_CLASS(TiinyJobStorage);
 	GDREGISTER_ABSTRACT_CLASS(ScenePaint2DEditor);
 	GDREGISTER_VIRTUAL_CLASS(EditorPlugin);
 	GDREGISTER_CLASS(EditorTranslationParserPlugin);

@@ -15,9 +15,12 @@ class ResourceToolLibrary:
 		return [
 			{"type": "function", "function": {"name": "generate_image", "description": "Generate a PNG asset in the project with the configured warm image model.", "parameters": {"type": "object", "properties": {"prompt": {"type": "string", "description": "Detailed description of the image"}}, "required": ["prompt"]}}},
 			{"type": "function", "function": {"name": "create_gdscript", "description": "Create a new GDScript file in the project. Existing files are never overwritten.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "New res:// path ending in .gd"}, "source": {"type": "string", "description": "Complete Godot 4 GDScript source"}}, "required": ["path", "source"]}}},
+			{"type": "function", "function": {"name": "append_job", "description": "Append a reviewed create_tree fixture job to the Jobs queue. Acceptance does not mean the image has been generated; use get_job_status to check it. The destination must be a new PNG path in an existing folder.", "parameters": {"type": "object", "properties": {"operation": {"type": "string", "enum": ["create_tree"]}, "destination": {"type": "string", "description": "Explicit new res:// PNG path"}}, "required": ["operation", "destination"]}}},
+			{"type": "function", "function": {"name": "get_job_status", "description": "Get the current status and result of an accepted job by its ID.", "parameters": {"type": "object", "properties": {"id": {"type": "string", "description": "Job ID returned by append_job"}}, "required": ["id"]}}},
 		]
 
 var prompt: TextEdit
+var jobs_service: Node
 var output: TextEdit
 var status: Label
 var send_button: Button
@@ -414,6 +417,10 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				tool_result = await _generate_image_tool(arguments.prompt)
 			elif function.get("name") == "create_gdscript" and arguments.size() == 2 and arguments.get("path") is String and arguments.get("source") is String:
 				tool_result = _create_script_tool(arguments.path, arguments.source)
+			elif function.get("name") == "append_job" and arguments.size() == 2 and arguments.get("operation") is String and arguments.get("destination") is String:
+				tool_result = _append_job_tool(arguments.operation, arguments.destination)
+			elif function.get("name") == "get_job_status" and arguments.size() == 1 and arguments.get("id") is String:
+				tool_result = _job_status_tool(arguments.id)
 			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": tool_result})
 			# Preserve actual tool effects even when the continuation fails.
 			conversation = turn_messages.duplicate(true)
@@ -463,6 +470,31 @@ func _continue_agent() -> void:
 # Narrow HTTP boundary shared by initial requests and tool continuations.
 func _submit_chat(payload: Dictionary) -> int:
 	return request.request(pending_url + "/chat/completions", _inference_headers(pending_key, pending_host), HTTPClient.METHOD_POST, JSON.stringify(payload))
+
+func _append_job_tool(operation: String, destination: String) -> String:
+	if not is_instance_valid(jobs_service) or not jobs_service.has_method("append_job"):
+		return "Error: Jobs service is unavailable."
+	var key := "chat-" + Crypto.new().generate_random_bytes(16).hex_encode()
+	var result: Dictionary = jobs_service.append_job(key, operation, {"destination": destination, "timeout_ms": 60000})
+	if result.has("error"):
+		return "Error: " + str(result.error)
+	return JSON.stringify({"accepted": true, "id": result.id, "sequence": result.sequence, "message": "Job accepted; completion is not yet known."})
+
+func _job_status_tool(id: String) -> String:
+	if not is_instance_valid(jobs_service) or not jobs_service.has_method("get_job_status"):
+		return "Error: Jobs service is unavailable."
+	if id.is_empty() or id.length() > 128:
+		return "Error: Invalid job ID."
+	var job: Dictionary = jobs_service.get_job_status(id)
+	if job.has("error"):
+		return "Error: " + str(job.error)
+	var result: Dictionary = job.get("result", {})
+	var response := {"id": job.id, "sequence": job.sequence, "operation": job.operation, "state": job.state, "attempts": job.attempts.size()}
+	if result.has("artifact"):
+		response["artifact"] = result.artifact
+	if result.has("error"):
+		response["error"] = result.error
+	return JSON.stringify(response)
 
 func _create_script_tool(path: String, source: String) -> String:
 	var normalized := path.simplify_path()

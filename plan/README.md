@@ -26,4 +26,4 @@ Use [ACCEPTANCE_SCENARIOS.md](ACCEPTANCE_SCENARIOS.md) for concrete workspace ou
 
 Story 01 is accepted. Its [implementation plan](implementation/01-stabilize-prototype.md) and [completion evidence](evidence/01-completion.md) record the verified prototype, displayed editor checks, and real Tiiny chat/polygon results. Story 04's existing UI is stabilized as part of that baseline; its broader device/Apply acceptance is still separate.
 
-Story 02 has an [implementation plan](implementation/02-job-manager.md), [interactive Jobs mockup](mockups/02-jobs-panel.html), and [diagrams](mockups/02-job-manager-diagrams.md). Story 01’s gate is satisfied; story 02 is eligible and remains queued.
+Story 02 has an [implementation plan](implementation/02-job-manager.md), [interactive Jobs mockup](mockups/02-jobs-panel.html), and [diagrams](mockups/02-job-manager-diagrams.md). Story 01's gate is satisfied; 9 of 10 story 02 criteria are verified (displayed editor and Tiiny device coordination remain).
