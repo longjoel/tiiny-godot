@@ -1,6 +1,6 @@
 # Story 02 implementation plan — persistent FIFO queue
 
-Status: In progress; story 01 accepted. 9 of 10 story 02 acceptance criteria verified; remaining: displayed editor verification and Tiiny device coordination.
+Status: In progress; story 01 accepted. 9 of 10 story 02 acceptance criteria verified; remaining: displayed editor and Tiiny device coordination.
 
 Parent: [story 02](../work-items/02-integration-job-manager.md). Visuals: [Jobs mockup](../mockups/02-jobs-panel.html), [diagrams](../mockups/02-job-manager-diagrams.md).
 

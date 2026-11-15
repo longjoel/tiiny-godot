@@ -1,6 +1,6 @@
 # 03 — Device binding and protected coding-model lifecycle
 
-Status: Queued
+Status: Planning — [implementation plan](../implementation/03-device-lifecycle.md) drafted. Story 01 accepted; story 02 9 of 10 criteria verified.
 
 Feature: Device binding and protected coding-model lifecycle
 

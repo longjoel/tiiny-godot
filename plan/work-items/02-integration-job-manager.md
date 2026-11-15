@@ -1,6 +1,6 @@
 # 02 — Persistent FIFO job queue
 
-Status: Acceptance in progress; 9 of 10 criteria verified (story 01 baseline accepted; Tiiny device coordination deferred to story 10)
+Status: In progress; story 01 baseline accepted. Acceptance remains pending.
 
 Feature: Persistent FIFO jobs and execution visibility
 
@@ -35,4 +35,4 @@ Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO dia
 
 ## Evidence and handoff
 
-JOB-01 through JOB-06 verification is recorded in the STATUS.md story 02 pickup entry. 9 of 10 acceptance criteria pass; criterion 10 (Tiiny device coordination) is deferred to story 10. See [STATUS.md](../STATUS.md) for the full evidence log and test results.
+JOB-01 through JOB-06 are verified (see STATUS.md entries: `check_job_process.py` lock/recovery, `check_editor_tree.py` publication/import, `check_builtin_jobs.py` create/restore, and four headless fixtures at 0 failures). Criterion 10 (Tiiny device coordination) is deferred per the work item. See [STATUS.md](../STATUS.md) for the full verification log.
