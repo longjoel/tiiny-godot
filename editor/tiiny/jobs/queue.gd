@@ -468,6 +468,27 @@ func verify_device_operation(id: String) -> bool:
 	_mutex.unlock()
 	return ok
 
+# An inventory observation is evidence for the user, not proof that a remote
+# process has stopped. It never changes the interrupted state or enables retry.
+func observe_device_operation(id: String, observation: Dictionary) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty() and _json_safe(observation) and observation.size() <= 10 and JSON.stringify(observation).length() <= 4096:
+		for job in _data.jobs:
+			if job.id != id or job.state != "interrupted" or job.attempts.is_empty():
+				continue
+			var attempt: Dictionary = job.attempts.back()
+			var operations: Array = attempt.get("device_operations", [])
+			if operations.is_empty(): break
+			var last: Dictionary = operations.back()
+			if observation.get("connection") != last.connection or observation.get("model") != last.model or observation.get("verb") != last.verb:
+				break
+			attempt["device_observation"] = observation.duplicate(true)
+			ok = _save()
+			break
+	_mutex.unlock()
+	return ok
+
 # Called only by the scene verifier after it has inspected both the saved
 # scene and the current clean editor scene. The decision is durably recorded.
 func reconcile_scene(id: String, outcome: String, evidence: Dictionary) -> bool:

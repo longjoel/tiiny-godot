@@ -212,6 +212,12 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	settings.set_setting("tiiny_ai/models/image_model", "fixture-image")
 	await manager.refresh_device()
 	if not manager.is_ready(): return "Real HTTP inventory/readiness failed."
+	var other := OS.get_environment("TIINY_TEST_OTHER_HTTP_URL")
+	if other.is_empty(): return "Second device fixture is missing."
+	if await manager._run_cli(["load", "fixture-model"]) != 0: return "Bound CLI fixture failed."
+	var arguments := FileAccess.get_file_as_string("res://cli-arguments").strip_edges().split("\n")
+	if arguments.size() != 5 or arguments[0] != "--device-address" or arguments[1] != base.trim_prefix("http://"):
+		return "CLI management targeted a different device from inference."
 	settings.set_setting("tiiny_ai/advanced/device_address", "wrong-device")
 	if manager.is_ready() or manager.is_model_loaded("fixture-code"): return "Changed device retained readiness from the old snapshot."
 	settings.set_setting("tiiny_ai/advanced/device_address", base.trim_prefix("http://"))
@@ -246,7 +252,7 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	manager.busy = true
 	if manager.is_ready(): return "Busy manager reported readiness."
 	manager.busy = false
-	settings.set_setting("tiiny_ai/advanced/api_url", "http://wrong-device/v1")
+	settings.set_setting("tiiny_ai/advanced/api_url", other + "/v1")
 	if not manager.inference_connection().has("error"): return "Inference allowed a different device."
 	settings.set_setting("tiiny_ai/advanced/api_url", base + "/v1")
 	# A stale snapshot revalidates automatically instead of requiring a manual Refresh.

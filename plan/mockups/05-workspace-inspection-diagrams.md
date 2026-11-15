@@ -16,11 +16,12 @@ sequenceDiagram
     I->>E: Read edited scene root and revision
     alt No scene
         I-->>C: no_scene
-    else Scene unsaved or missing scene_file_path
+    else Missing scene_file_path (never saved)
         I-->>C: scene_not_saved
-    else Scene changed since turn_context
+    else Scene path/base/session revision changed
         I-->>C: stale_scene
-    else Scene matches
+    else Scene matches (clean or dirty)
+        I->>I: Report dirty + session_revision
         I->>S: Resolve scene-relative path
         alt Missing or outside scene
             I-->>C: target_missing / outside_scene
@@ -38,19 +39,20 @@ sequenceDiagram
 flowchart LR
     A[Edited scene root] --> B{scene_file_path set?}
     B -- No --> D[scene_not_saved]
-    B -- Yes --> C{path in get_unsaved_scenes?}
-    C -- Yes --> D
-    C -- No --> E[revision = SHA-256 of file]
-    A --> F[root_instance_id]
-    A --> G[selection]
-    A --> H[playing = is_playing_scene]
-    E --> I[Turn context binds path + revision + root id]
-    I --> J{Later call matches?}
-    J -- No --> K[stale_scene]
-    J -- Yes --> L[Resolve paths]
+    B -- Yes --> E[revision = SHA-256 of file]
+    A --> F[session_revision = undo history version]
+    A --> G[dirty = path in get_unsaved_scenes]
+    A --> H[root_instance_id]
+    A --> I[selection]
+    A --> J[playing = is_playing_scene]
+    E --> K[Turn context binds path + base revision + session revision + root id]
+    F --> K
+    K --> L{Later call matches?}
+    L -- No --> M[stale_scene]
+    L -- Yes --> N[Resolve paths]
 ```
 
-The running remote scene is never used. `edited_scene_only` is always true; runtime/debugger values belong to story 12. Saved scenes are required: unsaved scenes cannot be inspected or planned against.
+The running remote scene is never used. `edited_scene_only` is always true; runtime/debugger values belong to story 12. A scene must be saved at least once; dirty scenes are inspectable and report `dirty` plus a session revision. Mutations require a clean scene.
 
 ## Node identity and ownership
 

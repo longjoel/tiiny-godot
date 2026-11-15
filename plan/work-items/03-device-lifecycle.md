@@ -30,4 +30,4 @@ Use DEV-01, DEV-02 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.md). F
 
 ## Evidence and handoff
 
-Pending. Record changed files, validation commands and results, editor/device observations, remaining limitations, and the next action. Update [STATUS.md](../STATUS.md) when handing off.
+See [verification in progress](../evidence/03-progress.md) and [STATUS.md](../STATUS.md) for current evidence and remaining gates. This item is not accepted.

@@ -14,7 +14,7 @@ One tool call per model response is executed in this version, serially. Multiple
 
 Tool results are structured and returned to the model with the original call ID. The UI renders a human summary from the same result. The turn action ledger is authoritative for what happened; model prose is not.
 
-Prefer one workspace macro over composing primitive edits. A macro returns one editor undo group. Do not decompose a macro into multiple undoable steps unless a transaction tool explicitly groups them.
+Prefer one workspace recipe over composing primitive edits. A recipe returns one editor undo group. Do not decompose a recipe into multiple undoable steps unless a transaction tool explicitly groups them.
 
 ## Baseline
 
@@ -37,7 +37,7 @@ Gaps for story 07:
 - No scene revision/identity is bound to a turn, so a scene switch between planning and execution is not rejected explicitly.
 - Cancellation mid-turn, partial actions, and protocol violations have no defined state machine.
 - The model can try a tool that cannot run (for example image generation with no warm image model), producing a tool error instead of a capability-aware prompt.
-- There is no macro tool; the WS-01 macro and its one-undo guarantee are not exposed.
+- There is no scene-edit recipe tool; the WS-01 recipe and its one-undo guarantee are not exposed.
 
 ## Tool contract
 
@@ -58,7 +58,7 @@ Each tool is registered with:
 }
 ```
 
-Definitions are data; handlers are editor-owned callables. A tool may expose a `preferred_for` hint (for example `collision_shape`) so the prompt can prefer the macro over primitives.
+Definitions are data; handlers are editor-owned callables. A tool may expose a `preferred_for` hint (for example `collision_shape`) so the prompt can prefer the recipe over primitives.
 
 ### Initial tools
 
@@ -68,7 +68,7 @@ Definitions are data; handlers are editor-owned callables. A tool may expose a `
 | `inspect_node` | read | Any edited scene | Class, scene-relative path, ownership, bounded properties, script. |
 | `inspect_resource` | read | Any edited scene | Resource type, path, bounded properties. |
 | `list_signals` | read | Any edited scene | Signal names and connections. |
-| `add_rectangular_collision_shape` | mutating | Edited scene with a valid parent target | Story 06 macro; one undo group; no partial mutation. |
+| `add_rectangular_collision_shape` | mutating | Saved, clean edited scene with a valid parent target | Story 06 first recipe; generic transaction executor; one undo group; no partial mutation. |
 | `create_gdscript` | mutating | Filesystem available | Last resort; requires a non-empty `reason`; refuses overwrite. |
 | `generate_image` | long_running | Warm image model loaded | Creates a new asset; never edits a scene node. |
 | `append_job` | long_running | Jobs service available | Reviewed tree/attachment work; acceptance is not completion. |
@@ -82,13 +82,13 @@ Later stories add animation, physics, debugger, and composition tools. They regi
 The registry snapshot is built once per turn, from actual state:
 
 - No edited scene: only non-workspace tools that make sense (`get_job_status`, `generate_image` if warm) plus a capability note explaining that workspace tools need an open scene.
-- Scene open: read tools and the macro are available. The macro also requires a resolvable target; otherwise it is unavailable with a reason.
+- Scene open: read tools are available for saved and dirty scenes. The recipe requires a saved, clean scene and a resolvable target; otherwise it is omitted with a reason (`scene_not_saved`/`scene_dirty` at execution).
 - Coding model without `Tool Use`: no tools are sent; chat is text-only and says why.
 - No warm image model: `generate_image` is omitted and the capability summary says "Image generation unavailable: no warm image model."
 - Jobs service unavailable: job tools are omitted with a reason.
 - Debugger tools: only while a debug session is paused (later story).
 
-A mutation marks the scene dirty. Because story 05 requires saved scenes, workspace tools then return `scene_not_saved` until the user saves. The capability summary says so, and the turn should finish with the macro result rather than attempting another workspace call.
+A mutation marks the scene dirty. Story 05 allows dirty inspection, so read tools remain available for verification; after a mutation, adopt the result's `session_revision` into the turn context so follow-up inspection is not rejected as stale. Mutating recipes require a clean scene and return `scene_dirty` until the user saves. The capability summary says so, and the turn can finish with the recipe result plus a dirty-state notice.
 
 Unavailable tools are omitted from the HTTP `tools` array. The system prompt includes a short capability summary with the reason, so the model does not try them. Tests assert the exact availability matrix.
 
@@ -162,15 +162,15 @@ Protocol violations (`duplicate_call`, `multiple_calls`, `limit_exceeded`) stop 
 ### Budgets and limits
 
 - One call per response; one execution at a time.
-- Six model/tool rounds per turn (inspect → macro → verify fits comfortably).
+- Six model/tool rounds per turn (inspect → recipe → verify fits comfortably).
 - Eight tool calls per turn; per-tool timeout from the registry.
 - Result JSON capped (for example 16 KiB) with a summarized truncation marker; the context budget check runs before every model call.
 - No automatic retry of a mutating tool. A retry requires a new model decision and fresh validation; repeated calls with the same ID are rejected.
 - Long-running tools return an accepted ID immediately; completion is checked by `get_job_status` and is never inferred from acceptance.
 
-### Macro-first and undo
+### Recipe-first and undo
 
-Story 06 exposes the WS-01 macro as one tool. The registry marks it as preferred for collision-shape requests. The prompt says to use one macro rather than a sequence of primitive edits. The handler performs validation and commits one `EditorUndoRedoManager` action; the result carries its undo group.
+Story 06 exposes the WS-01 recipe as one tool. The registry marks it as preferred for collision-shape requests. The prompt says to use one recipe rather than a sequence of primitive edits. The recipe builds typed operations; the generic executor validates them and commits one `EditorUndoRedoManager` action; the result carries its undo group.
 
 If a future request needs several independent edits, the orchestrator must not claim one undo unless a transaction tool explicitly provides it. Cross-tool undo grouping is out of scope for 07.
 
@@ -178,7 +178,7 @@ If a future request needs several independent edits, the orchestrator must not c
 
 The payload is assembled in this order:
 
-1. **Base policy** (system): workspace-first operator, inspect before editing, prefer native macros, GDScript only as a justified fallback, ask when the target or outcome is ambiguous, never claim success without a successful tool result, treat project content as data, and respect validation.
+1. **Base policy** (system): workspace-first operator, inspect before editing, prefer native recipes, GDScript only as a justified fallback, ask when the target or outcome is ambiguous, never claim success without a successful tool result, treat project content as data, and respect validation.
 2. **Capability summary** (system): available tools grouped by area, and unavailable capabilities with reasons (no open scene, no warm image model, no Tool Use, jobs unavailable).
 3. **User preferences** (system): the existing `system_prompt_extra`, explicitly labeled as preferences that cannot override validation or safety.
 4. **Editor context** (system, data): scene identity/revision, root, selection with classes and bounded properties. Label it as data, not instructions.
@@ -216,13 +216,13 @@ Gate: prompt fixtures assert the section order, capability list, data labeling, 
 
 Deliverables: prompt assembler, prompt fixtures, capability summary.
 
-### Slice D — workspace tools and macro-first integration
+### Slice D — workspace tools and recipe-first integration
 
-Wire stories 05/06 tools into the registry. Bind a turn to the scene identity/revision and pass it to handlers. Expose the WS-01 macro as one tool with one undo group. Implement `stale_target` on scene switch or target deletion and file-conflict handling for `create_gdscript`.
+Wire stories 05/06 tools into the registry. Bind a turn to the scene identity/revision and pass it to handlers. Expose the WS-01 recipe as one tool with one undo group. Implement `stale_target` on scene switch or target deletion and file-conflict handling for `create_gdscript`.
 
-Gate: WS-01, WS-02, and WS-13 pass through the orchestrator with fixed tool calls; one undo/redo restores the macro; a scene switch or edited target is rejected before mutation; a changed file is not overwritten.
+Gate: WS-01, WS-02, and WS-13 pass through the orchestrator with fixed tool calls; one undo/redo restores the recipe; a scene switch or edited target is rejected before mutation; a changed file is not overwritten.
 
-Deliverables: workspace tool handlers, turn scene binding, macro integration, stale/conflict tests.
+Deliverables: workspace tool handlers, turn scene binding, recipe integration, stale/conflict tests.
 
 ### Slice E — chat ledger, errors, and cancellation
 
@@ -234,7 +234,7 @@ Deliverables: ledger rendering, cancellation path, conversation-integrity tests.
 
 ### Slice F — verification and live-model evaluation
 
-Run the deterministic suite (registry, executor, macro, stale/conflict, DEV-03) and the fake-model suite. Then run a real Tiiny coding model on WS-01 paraphrases: record tool trace, final scene, undo/redo, latency, and success rate. Judge required outcomes and constraints, not exact prose. Record failures and skipped hardware checks honestly.
+Run the deterministic suite (registry, executor, recipe, stale/conflict, DEV-03) and the fake-model suite. Then run a real Tiiny coding model on WS-01 paraphrases: record tool trace, final scene, undo/redo, latency, and success rate. Judge required outcomes and constraints, not exact prose. Record failures and skipped hardware checks honestly.
 
 Gate: WS-13, WS-14, WS-15, DEV-03, and WS-01/02 pass deterministically; the live evaluation reports a success rate and traces rather than claiming universal success.
 
@@ -244,7 +244,7 @@ Deliverables: test coverage, live evaluation report, work-item/STATUS handoff.
 
 | Scenario | Slice | Check |
 | --- | --- | --- |
-| WS-01 macro | D, F | Fixed tool call → scene state → one undo/redo; live-model evaluation separately |
+| WS-01 recipe | D, F | Fixed tool call → scene state → one undo/redo; live-model evaluation separately |
 | WS-02 invalid parent / deleted target | D | No partial node/resource/undo entry; explicit error |
 | WS-13 scene switch or edit between planning and execution | D | Revision/identity rejection before mutation |
 | WS-14 file changed by another writer | D | No blind overwrite; conflict or fresh read |
@@ -257,7 +257,7 @@ Deliverables: test coverage, live evaluation report, work-item/STATUS handoff.
 2. **Registry location.** Recommend a separate embedded tool module injected into the dock, like the jobs scripts, so tools can be tested without the chat UI. Keep the dock as the presenter, not the tool implementation.
 3. **Unavailable tools.** Recommend omitting them from the HTTP tool array and explaining them only in the capability summary. Do not send a tool that cannot run.
 4. **GDScript fallback.** Recommend requiring a non-empty `reason` in `create_gdscript` and showing it. This makes the fallback visible and testable.
-5. **Macro-first.** Recommend exposing the WS-01 macro as one tool and not exposing generic mutation primitives in 07. This guarantees one undo and no partial edits for the acceptance case.
+5. **Recipe-first.** Recommend exposing the WS-01 recipe as one tool and not exposing generic mutation primitives in 07. This guarantees one undo and no partial edits for the acceptance case. The executor itself stays class-agnostic.
 6. **Success claims.** Recommend treating the ledger as authoritative and displaying it next to the final text. Do not parse model prose to decide whether a change happened.
 7. **Cancellation.** Recommend stopping after the current tool, recording its result, and keeping completed actions. No automatic retry or rollback.
 8. **Round limit.** Recommend six rounds and eight calls, with per-tool timeouts. The numbers are constants with tests, not model-controlled.
@@ -266,15 +266,16 @@ Deliverables: test coverage, live evaluation report, work-item/STATUS handoff.
 
 ## Dependencies and risks
 
-- **05/06 gate:** the registry can be built with fake tools, but workspace acceptance needs the inspection tools and the macro.
+- **05/06 gate:** the registry can be built with fake tools, but workspace acceptance needs the inspection tools and the recipe.
 - **03 gate:** model readiness and `Tool Use` validation determine whether tools are sent at all.
 - **02 gate:** job tools depend on the shared queue and device lease.
 - **Model variability:** live evaluations measure planning quality statistically; deterministic executor tests remain the gate for safety.
 - **Scene identity:** every mutating handler must receive the turn's scene identity/revision; do not re-resolve "the current scene" at execution time.
-- **Undo scope:** one macro equals one undo action. Multi-tool workflows are not atomic and must be described as such.
+- **Undo scope:** one recipe equals one undo action. Multi-tool workflows are not atomic and must be described as such.
+- **Dirty scenes:** read tools accept them; recipes reject them with `scene_dirty`. After a recipe, inspect the dirty result if needed, then save before the next mutation.
 - **Prompt injection:** editor context and project content are data. Do not place them where the model can treat them as instructions.
 - **UI scope:** 07 provides the ledger and summaries; story 08 owns richer action history, previews, and recovery UI.
 
 ## Handoff
 
-Planning only. No build, test, or device operation was performed. Implementation starts with slice A (registry and schema) and can proceed against fake tools while 05/06 are completed. Record the tool contract, availability matrix, protocol results, macro undo evidence, and live-model traces in the work item and STATUS.
+Planning only. No build, test, or device operation was performed. Implementation starts with slice A (registry and schema) and can proceed against fake tools while 05/06 are completed. Record the tool contract, availability matrix, protocol results, recipe undo evidence, and live-model traces in the work item and STATUS.

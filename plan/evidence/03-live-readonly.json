@@ -1,0 +1,87 @@
+{
+  "created_utc": "2026-11-15T22:28:36.001409+00:00",
+  "mode": "live-readonly",
+  "stages": [
+    {
+      "name": "binary_version",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.032
+    },
+    {
+      "name": "parse_manager.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.398
+    },
+    {
+      "name": "parse_chat.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.282
+    },
+    {
+      "name": "planner_panel",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.473
+    },
+    {
+      "name": "invalid_generated_script",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 1,
+      "expected_script_errors": 1,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.297
+    },
+    {
+      "name": "parse_test_stabilization.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.283
+    },
+    {
+      "name": "parse_test_chat_protocol.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.283
+    },
+    {
+      "name": "editor_smoke",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 4.929
+    }
+  ],
+  "sources": {
+    "tiiny_ai_manager_source.h": "bfd0398285395b8f9e6dbfed216eda288bb1e740d39d6ac131bf2d3823b3c240",
+    "tiiny_ai_dock_source.h": "c9df57d6b7ebe60ecadb89b0eb00ca29567bc3aece4c049141628d35e1000bf3"
+  },
+  "revision": "ced1ea4c5231eb1dd40aade48778baa1f4287d97",
+  "binary": {
+    "sha256": "7ade3fd8e4c36045b4d26855a33bfba06c364b32175070623ce524a7da94e018",
+    "version": "4.8.beta.custom_build.ced1ea4c5"
+  }
+}

@@ -232,10 +232,13 @@ func _acquire_device(purpose: String) -> bool:
 
 func _release_device() -> void:
 	if not device_lease.is_empty() and is_instance_valid(device_lease_owner):
-		device_lease_owner.release_device(self, device_lease)
+		if not device_lease_owner.release_device(self, device_lease): return
 	device_lease = ""
 	device_lease_owner = null
 	uncertain_job_id = ""
+
+func confirm_device_success(id: String) -> bool:
+	return is_instance_valid(device_lease_owner) and device_lease_owner.has_method("confirm_device_request") and device_lease_owner.confirm_device_request(self, device_lease, id)
 
 func _process(_delta: float) -> void:
 	if not device_lease.is_empty() and not is_inference_busy() and not device_outcome_uncertain and not queued_chat_started:
@@ -357,8 +360,12 @@ func poll_queued_chat(job: Dictionary) -> Dictionary:
 			return _finish_queued_chat("failed", "The selected model or device changed since submission")
 		if not _acquire_device("queued chat"):
 			return {"state": "running", "stage": "Waiting for Tiiny"}
-		if not jobs_service.queue.device_started(job.id):
-			_release_device()
+		if not jobs_service.begin_device_request(self, device_lease, job.id, queued_chat_parameters.model, queued_chat_parameters.connection_hash):
+			var recorded: Dictionary = jobs_service.get_job_status(job.id)
+			if not recorded.get("attempts", []).is_empty() and recorded.attempts.back().get("device_started", false):
+				device_outcome_uncertain = true
+				uncertain_job_id = str(job.id)
+				queued_chat_started = true
 			return _finish_queued_chat("failed", "Could not record device execution")
 		queued_chat_started = true
 		pending_key = connection.key
@@ -783,8 +790,12 @@ func poll_resource_job(job: Dictionary) -> Dictionary:
 			return _resource_job_error("failed", "The selected model or device changed since submission")
 		if not _acquire_device("queued resource generation"):
 			return {"state": "running", "stage": "Waiting for Tiiny"}
-		if not jobs_service.queue.device_started(job.id):
-			_release_device()
+		if not jobs_service.begin_device_request(self, device_lease, job.id, job.parameters.model, job.parameters.connection_hash):
+			var recorded: Dictionary = jobs_service.get_job_status(job.id)
+			if not recorded.get("attempts", []).is_empty() and recorded.attempts.back().get("device_started", false):
+				device_outcome_uncertain = true
+				uncertain_job_id = str(job.id)
+				resource_job_started = true
 			return _resource_job_error("failed", "Could not record device execution")
 		resource_job_started = true
 		resource_requests += 1

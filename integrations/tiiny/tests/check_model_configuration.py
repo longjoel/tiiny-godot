@@ -120,11 +120,16 @@ with tempfile.TemporaryDirectory(prefix="tiiny-model-config-") as directory:
         if args.http_smoke:
             from http_fixture import start
             server = start()
+            other_server = start()
             atexit.register(server.server_close)
+            atexit.register(other_server.server_close)
             editor_environment["TIINY_TEST_HTTP_URL"] = "http://127.0.0.1:" + str(server.server_port)
+            editor_environment["TIINY_TEST_OTHER_HTTP_URL"] = "http://127.0.0.1:" + str(other_server.server_port)
         if args.displayed:
             capture = (args.report.parent if args.report else Path("/tmp")) / "tiiny-story01-captures"
             capture.mkdir(parents=True, exist_ok=True)
             editor_environment["TIINY_TEST_CAPTURE_DIR"] = str(capture.resolve())
         options = ["--display-driver", args.display_driver] if args.displayed else ["--headless"]
         run_stage("editor_smoke", [str(args.godot.resolve()), *options, "--editor", "--path", directory, "--rendering-method", "gl_compatibility"], editor_environment, 480 if args.live_inference else 90, "Editor Models section smoke check passed")
+        if args.http_smoke and (server.request_count == 0 or other_server.request_count != 0):
+            raise SystemExit("Two-device binding fixture contacted an unexpected endpoint")

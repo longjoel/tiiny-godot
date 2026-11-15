@@ -30,6 +30,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        self.server.request_count += 1
         records = [
             {"model_id": "fixture-code", "name": "Fixture Code", "type": "Text Generation", "supported": ["Tool Use"], "context_window": 32768, "npu_usage": 47, "status": "running", "tags": [{"size": 100}]},
             {"model_id": "fixture-image", "name": "Fixture Image", "type": "Text-to-Image", "npu_usage": 23, "status": "running", "tags": [{"size": 100}]},
@@ -41,6 +42,7 @@ class Handler(BaseHTTPRequestHandler):
         }.get(self.path, {}))
 
     def do_POST(self):
+        self.server.request_count += 1
         data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         prompt = str(data.get("prompt", "")) + json.dumps(data.get("messages", []))
         if "http_timeout" in prompt:
@@ -60,5 +62,6 @@ class Handler(BaseHTTPRequestHandler):
 
 def start():
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.request_count = 0
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

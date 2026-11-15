@@ -63,10 +63,10 @@ Every terminal path keeps the action ledger and a matching tool result for every
 flowchart TD
     A[Turn starts] --> B{Edited scene open?}
     B -- No --> C[Omit workspace tools]
-    B -- Yes --> D[Add read tools]
-    D --> E{Resolvable parent target?}
-    E -- Yes --> F[Add scene macro]
-    E -- No --> G[Macro unavailable: explain target]
+    B -- Yes --> D[Add read tools: saved or dirty]
+    D --> E{Saved, clean scene + resolvable target?}
+    E -- Yes --> F[Add scene recipe]
+    E -- No --> G[Recipe unavailable: explain save/dirty/target]
     A --> H{Coding model has Tool Use?}
     H -- No --> I[Send no tools; text-only reply]
     H -- Yes --> J[Attach capability summary]
@@ -101,12 +101,12 @@ flowchart LR
 
 Envelope failures (multiple calls, duplicate ID, limit) stop the turn. Recoverable failures return a tool error and let the model correct within the budget. Domain validation always runs, even when the schema passes.
 
-## Macro-first
+## Recipe-first
 
 ```mermaid
 flowchart TD
-    A[Request: add rectangular collision shape] --> B{Macro tool available?}
-    B -- Yes --> C[Call macro once]
+    A[Request: add rectangular collision shape] --> B{Recipe tool available?}
+    B -- Yes --> C[Call recipe once]
     C --> D[Validate target, class, ownership, resource]
     D --> E[Commit one undo action]
     E --> F[Return undo group + affected nodes]
@@ -114,7 +114,7 @@ flowchart TD
     F --> H[Final text + ledger]
 ```
 
-The macro is one tool call and one undo action. The orchestrator does not decompose it into primitive edits in 07.
+The recipe is one tool call and one undo action. Story 06 turns it into typed operations through a generic transaction executor; the orchestrator does not decompose it into primitive edits in 07.
 
 ## Ledger
 

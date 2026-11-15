@@ -2,86 +2,138 @@
 
 Design artifacts only. See the [implementation plan](../implementation/06-workspace-transactions.md), [story 05 inspection](../implementation/05-workspace-inspection.md), and [story 07 tool contract](../implementation/07-orchestrator.md).
 
-## Macro call
+## Recipe → transaction → undo
 
 ```mermaid
 sequenceDiagram
     participant M as Model / fixture
-    participant T as Macro executor
-    participant I as Story 05 inspector
+    participant R as Recipe registry
+    participant P as Recipe
+    participant T as Transaction executor
     participant U as EditorUndoRedoManager
     participant S as Edited scene
 
-    M->>T: add_rectangular_collision_shape(parent_path, 32, 48)
-    T->>I: Resolve scene identity, revision, parent, ownership
-    I-->>T: Scene context + parent facts
-    T->>T: Validate class, ownership, conflict, dimensions, name
-    alt Invalid or stale
-        T-->>M: Error; no mutation
+    M->>R: recipe name + typed parameters
+    R->>P: validate(parameters, scene context)
+    alt Invalid
+        P-->>R: error (class, property, dimensions, stale)
+        R-->>M: error; no mutation
     else Valid
-        T->>T: Create CollisionShape2D + RectangleShape2D (not yet in scene)
+        P->>P: build typed operations
+        P-->>T: create_node / create_resource / add_child / set_owner / set_property
+        T->>T: Validate classes, properties, ownership, targets
         T->>U: create_action(scene history)
-        T->>U: do add_child, set_owner, set shape; do_reference(node)
-        T->>U: undo remove_child, clear shape
+        T->>U: do/undo methods and properties; reference lifetimes
         T->>U: commit_action()
-        U->>S: Apply do methods
-        T->>S: Verify node, owner, shape, size, one history entry
+        U->>S: Apply do operations
+        T->>S: Verify postconditions and one history entry
         alt Postcondition fails
-            T->>U: Undo the action
-            T-->>M: undo_failed or outcome_unknown
+            T->>U: Undo action
+            T-->>M: undo_failed / outcome_unknown
         else Verified
-            T-->>M: Structured result + undo_group + dirty scene
+            T-->>M: Structured result + affected + undo_group
         end
     end
 ```
 
-## Validation gate
+The executor has no branch for `CollisionShape2D`. It only understands operation types and generic validation. Class-specific knowledge lives in the recipe.
 
-```mermaid
-flowchart TD
-    A[Macro request] --> B{Saved edited scene?}
-    B -- No --> X[no_scene / scene_not_saved]
-    B -- Yes --> C{Scene revision matches turn?}
-    C -- No --> Y[stale_scene]
-    C -- Yes --> D{Parent exists under root?}
-    D -- No --> Z[target_missing / outside_scene]
-    D -- Yes --> E{Parent is CollisionObject2D?}
-    E -- No --> W[invalid_parent]
-    E -- Yes --> F{Parent root-owned?}
-    F -- No --> V[read_only_instance]
-    F -- Yes --> G{Existing direct CollisionShape2D?}
-    G -- Yes --> U[target_conflict]
-    G -- No --> H{Dimensions finite and in range?}
-    H -- No --> T[invalid_dimensions]
-    H -- Yes --> I{Node name valid and unique?}
-    I -- No --> S[invalid_node_name / name_conflict]
-    I -- Yes --> J[Create action and commit]
+## Recipe declaration
+
+```text
+recipe add_rectangular_collision_shape(parent_path, width, height, node_name?)
+  validate:
+    saved scene + matching revision
+    parent exists, is CollisionObject2D, root-owned
+    no existing direct CollisionShape2D
+    width/height finite, > 0, bounded
+    node name valid and unique (or auto-generated)
+  build:
+    create_node(CollisionShape2D, name)
+    create_resource(RectangleShape2D, {size: (width, height)})
+    add_child(parent, node)
+    set_owner(node, root)
+    set_property(node, "shape", resource)
 ```
 
-Everything before the final step creates nothing. Validation failure leaves node count, resource count, property values, and undo history unchanged.
+A second recipe can create a `Marker2D`, a `CapsuleShape2D`, or another built-in class without touching the executor.
 
-## Undo action structure
+## Operation and undo mapping
 
 ```mermaid
 flowchart LR
-    subgraph Do["Do / redo"]
-        A1[parent.add_child node]
-        A2[node.set_owner root]
-        A3[node.shape = RectangleShape2D]
-        A4[add_do_reference node]
+    subgraph Ops["Typed operations"]
+        N[create_node class, name]
+        R[create_resource class, properties]
+        A[add_child parent, node]
+        W[set_owner node, owner]
+        P[set_property target, property, value]
     end
-    subgraph Undo["Undo"]
-        B1[parent.remove_child node]
-        B2[node.shape = null]
+    subgraph DoUndo["UndoRedo mapping"]
+        N --> N1[do_reference node]
+        R --> R1[action keeps resource ref]
+        A --> A1[do add_child / undo remove_child]
+        W --> W1[do set_owner / undo old owner]
+        P --> P1[do_property / undo old value]
     end
-    Do --> C[One editor history entry]
-    Undo --> C
-    C --> D[Undo removes node; redo restores node, owner, shape, size]
+    DoUndo --> C[One editor history entry]
+    C --> D[Undo removes node/resources; redo restores]
 ```
 
-The action is assigned to the edited scene's history via the root context. The node is not freed after commit; the undo reference owns its lifetime. The shape resource is kept by the do/undo property pair.
+Targets are scene paths or operation IDs. Values are literals or resource operation IDs. The model never supplies operation types, class names, or arbitrary property names.
 
-## Undo/redo state
+## Validation pipeline
+
+```mermaid
+flowchart TD
+    A[Recipe parameters] --> B[Recipe validation]
+    B -- Fail --> X[Recipe error; no mutation]
+    B --> B2[Scene saved at least once and clean?]
+    B2 -- No --> X2[scene_not_saved / scene_dirty]
+    B2 -- Yes --> B3[Base and session revisions match?]
+    B3 -- No --> X3[stale_scene]
+    B3 -- Yes --> C[Normalized request]
+    C --> D[Recipe build]
+    D --> E[Typed operations]
+    E --> F{Generic operation validation}
+    F -- Fail --> Y[invalid_operation; no mutation]
+    F -- Pass --> G{Scene revision still matches?}
+    G -- No --> Z[stale_scene]
+    G -- Yes --> H[Create action and commit]
+    H --> I{Postconditions?}
+    I -- No --> J[Undo; undo_failed / outcome_unknown]
+    I -- Yes --> K[Structured result]
+```
+
+Generic checks: class exists and is instantiable and inherits Node/Resource; property exists, is writable, accepts the value; resource class is compatible; parent/owner relationships are valid; names are valid and unique; no cycles.
+
+## Genericity test
+
+```mermaid
+flowchart LR
+    A[add_rectangular_collision_shape] --> E[Transaction executor]
+    B[test-only add_marker_2d] --> E
+    C[test-only add_capsule_collision_shape] --> E
+    E --> U[Same undo/result implementation]
+```
+
+The test recipes are not exposed to the model. They prove the executor is class-agnostic and that the collision-shape acceptance case is recipe data, not a special code path.
+
+## Validation and no-partial evidence
+
+| Surface | Before | After a failed recipe/operation |
+| --- | --- | --- |
+| Scene file hash | `sha256:A` | `sha256:A` |
+| Node count | N | N |
+| Parent child count | C | C |
+| Resource objects | none created | none created |
+| Undo history count | H | H |
+| Scene dirty state | unchanged | unchanged |
+| Selection | unchanged | unchanged |
+
+A successful recipe changes exactly the planned nodes/resources, adds one history entry, and marks the scene dirty. Read-only tools remain available against the dirty session revision; further recipes require saving (`scene_dirty`).
+
+## Undo state
 
 ```mermaid
 stateDiagram-v2
@@ -94,34 +146,4 @@ stateDiagram-v2
     Saved --> [*]: close/reopen starts a new history
 ```
 
-The macro reports `dirty: true`; it never saves automatically. Reopening the scene loads the saved result but starts a new undo history.
-
-## Ownership and parent rules
-
-```mermaid
-flowchart TD
-    A[Parent candidate] --> B{Is edited root?}
-    B -- Yes --> OK[Allowed]
-    B -- No --> C{owner == edited root?}
-    C -- Yes --> OK
-    C -- No --> D{Inside an instanced scene?}
-    D -- Yes --> E[read_only_instance in v1]
-    D -- No --> F[outside_scene / target_missing]
-```
-
-V1 accepts the edited root or nodes owned by the edited root. Editable-children support for instanced scenes is deferred.
-
-## No-partial-change evidence
-
-| Surface | Before | After a failed call |
-| --- | --- | --- |
-| Scene file hash | `sha256:A` | `sha256:A` |
-| Node count | N | N |
-| Parent child count | C | C |
-| Direct CollisionShape2D count | 0 (or conflict) | unchanged |
-| Resource objects | none created | none created |
-| Undo history count | H | H |
-| Scene dirty state | unchanged | unchanged |
-| Selection | unchanged | unchanged |
-
-The successful call changes exactly one parent's children by one node, creates one in-memory resource, adds one history entry, and marks the scene dirty.
+The executor does not save and does not change selection. The readable action name identifies the recipe; the ledger token identifies the call. After a recipe, dirty inspection is allowed; mutation requires a save.

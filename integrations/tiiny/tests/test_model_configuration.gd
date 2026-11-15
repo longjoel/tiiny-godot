@@ -32,6 +32,20 @@ func _initialize() -> void:
 	var storage := {"total_bytes": 200 * 1073741824, "remaining_bytes": 100 * 1073741824}
 	var state: Dictionary = planner.normalize(raw, npu, storage)
 	var config := {"roles": {"coding_model": {"model": "code", "context": 8192, "warm": true}, "image_model": {"model": "image", "context": 0, "warm": true}}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+	var saved := config.duplicate(true)
+	for role in script.ROLES:
+		if not saved.roles.has(role): saved.roles[role] = {"model": "", "context": 0, "warm": false}
+	var approved := {"draft": saved, "actions": [{"verb": "load", "id": "code"}], "connection": "a".repeat(64), "active_coding": "code"}
+	assert(script._valid_approved_configuration(approved))
+	var invalid_approved := approved.duplicate(true)
+	invalid_approved.actions = [{"verb": "delete", "id": "code"}]
+	assert(not script._valid_approved_configuration(invalid_approved))
+	invalid_approved = approved.duplicate(true)
+	invalid_approved.actions = [null]
+	assert(not script._valid_approved_configuration(invalid_approved))
+	invalid_approved = approved.duplicate(true)
+	invalid_approved.connection = "wrong"
+	assert(not script._valid_approved_configuration(invalid_approved))
 	var result: Dictionary = planner.check(state, config, "code")
 	assert(result.ok and result.actions.is_empty())
 	assert(result.npu_projected == 70 and result.npu_remaining == 30)

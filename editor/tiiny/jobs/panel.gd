@@ -45,6 +45,7 @@ var device_token := ""
 var device_purpose := ""
 var device_process_lock: RefCounted
 var device_lock_path := ""
+var inspecting_model_job := ""
 
 class ChatWorker extends RefCounted:
 	var chat: WeakRef
@@ -77,7 +78,11 @@ class ChatWorker extends RefCounted:
 				return {"state": "cancelled" if preflight_cancelled else "failed", "result": ready.get("result", {"error": "Coding-model restoration cancelled"})}
 		preflight_done = true
 		polled = true
-		return owner.poll_queued_chat(job)
+		var result: Dictionary = owner.poll_queued_chat(job)
+		if result.get("state") == "completed" and not owner.confirm_device_success(job.id):
+			owner._set_status("Could not clear the shared device recovery record.")
+			return {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
+		return result
 	func cancel() -> void:
 		var owner: Object = chat.get_ref()
 		if not preflight_done and is_instance_valid(owner):
@@ -125,7 +130,10 @@ class ResourceWorker extends RefCounted:
 				return owner._resource_job_error("cancelled" if preflight_cancelled else "failed", str(ready.get("result", {}).get("error", "Coding-model restoration cancelled")))
 		preflight_done = true
 		polled = true
-		return owner.poll_resource_job(job)
+		var result: Dictionary = owner.poll_resource_job(job)
+		if result.get("state") == "completed" and not owner.confirm_device_success(job.id):
+			return owner._resource_job_error("failed", "Could not clear the shared device recovery record.")
+		return result
 	func cancel() -> void:
 		var owner: Object = chat.get_ref()
 		if not preflight_done and is_instance_valid(owner):
@@ -410,6 +418,110 @@ func get_job_status(id: String) -> Dictionary:
 			return job
 	return {"error": "Job not found"}
 
+# This record lives beside the cross-process device lock, not in a project.
+# It survives an editor crash even though the OS correctly releases the lock.
+func _device_marker() -> Dictionary:
+	if not FileAccess.file_exists(device_lock_path): return {"state": "idle"}
+	var file := FileAccess.open(device_lock_path, FileAccess.READ)
+	if file == null or file.get_length() > 8192: return {"state": "invalid"}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not parsed is Dictionary or parsed.get("schema") != 1 or parsed.get("state") not in ["idle", "uncertain"]:
+		return {"state": "invalid"}
+	if parsed.state == "uncertain" and (not parsed.get("project") is String or parsed.project.is_empty() or not parsed.get("job") is String or parsed.job.is_empty()):
+		return {"state": "invalid"}
+	if parsed.state == "uncertain" and (parsed.get("verb") not in ["download", "load", "unload", "inference"] or not parsed.get("model") is String or parsed.model.is_empty() or parsed.model.length() > 512 or not parsed.get("connection") is String or parsed.connection.length() != 64 or not parsed.connection.is_valid_hex_number(false)):
+		return {"state": "invalid"}
+	return parsed
+
+func device_recovery_pending() -> bool:
+	return _device_marker().get("state") != "idle"
+
+func device_uncertainty_blocks_readiness() -> bool:
+	var marker := _device_marker()
+	if marker.get("state") == "idle": return false
+	# A known, live local request owns the lease; this is not a recovered crash.
+	if marker.get("state") == "uncertain" and marker.get("project") == root_path and not device_token.is_empty() and get_job_status(str(marker.get("job", ""))).get("state") == "running":
+		return false
+	return true
+
+func _owns_device(owner: Object, token: String) -> bool:
+	return device_holder != null and device_holder.get_ref() == owner and not token.is_empty() and token == device_token and device_process_lock != null
+
+# Both journals are committed before starting a model command. A crash between
+# them cannot launch the command; a crash afterward leaves the shared marker.
+func begin_model_operation(owner: Object, token: String, id: String, verb: String, model: String, connection: String) -> bool:
+	if not _owns_device(owner, token) or device_purpose == "inspect interrupted model": return false
+	var marker := _device_marker()
+	if marker.get("state") != "idle" and not (marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id): return false
+	if not queue.begin_device_operation(id, verb, model, connection): return false
+	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "uncertain", "project": root_path, "job": id, "verb": verb, "model": model, "connection": connection}))
+
+func begin_device_request(owner: Object, token: String, id: String, model: String, connection: String) -> bool:
+	if not _owns_device(owner, token) or device_purpose == "inspect interrupted model" or model.is_empty() or model.length() > 512 or connection.length() != 64 or not connection.is_valid_hex_number(false): return false
+	if device_recovery_pending() or not queue.device_started(id): return false
+	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "uncertain", "project": root_path, "job": id, "verb": "inference", "model": model, "connection": connection}))
+
+func confirm_device_request(owner: Object, token: String, id: String) -> bool:
+	if not _owns_device(owner, token): return false
+	var marker := _device_marker()
+	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id or marker.get("verb") != "inference": return false
+	var job := get_job_status(id)
+	if job.get("state") != "running" or job.get("attempts", []).is_empty() or not job.attempts.back().get("device_started", false): return false
+	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"}))
+
+# Clear only after all commands in the running attempt were verified. This is
+# done before the worker releases its lease or reports successful completion.
+func confirm_model_operations(owner: Object, token: String, id: String) -> bool:
+	if not _owns_device(owner, token): return false
+	var marker := _device_marker()
+	if marker.get("state") == "idle": return true
+	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id: return false
+	var job := get_job_status(id)
+	if job.get("state") != "running" or job.get("attempts", []).is_empty(): return false
+	var operations: Array = job.attempts.back().get("device_operations", [])
+	if operations.is_empty() or operations.back().get("state") != "verified": return false
+	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"}))
+
+# The user has explicitly acknowledged an uncertain outcome. The marker must
+# match this project and job; a different project's uncertainty is untouched.
+func acknowledge_model_uncertainty(id: String) -> bool:
+	var marker := _device_marker()
+	if marker.get("state") == "idle": return true # Legacy jobs may predate the shared marker.
+	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id: return false
+	var lock: RefCounted = device_process_lock
+	var temporary := false
+	if lock == null:
+		lock = ClassDB.instantiate("TiinyJobStorage")
+		if lock == null or not lock.acquire(device_lock_path): return false
+		temporary = true
+	# Re-read while locked in case another process resolved or changed it.
+	marker = _device_marker()
+	var ok: bool = marker.get("state") == "idle" or (marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id and lock.commit(JSON.stringify({"schema": 1, "state": "idle"})))
+	if temporary: lock.release()
+	return ok
+
+# Recovery may read the matching device while the ordinary lease is blocked.
+# This restricted lease cannot begin a model command or clear the marker.
+func acquire_device_for_inspection(owner: Object, id: String) -> String:
+	if not available or not is_instance_valid(owner): return ""
+	var job := get_job_status(id)
+	if job.get("state") != "interrupted" or job.get("attempts", []).is_empty() or job.attempts.back().get("device_operations", []).is_empty(): return ""
+	var marker := _device_marker()
+	if marker.get("state") != "idle" and not (marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id): return ""
+	if not device_token.is_empty():
+		return device_token if device_holder != null and device_holder.get_ref() == owner else ""
+	var lock: RefCounted = ClassDB.instantiate("TiinyJobStorage")
+	if lock == null or not lock.acquire(device_lock_path): return ""
+	marker = _device_marker()
+	if marker.get("state") != "idle" and not (marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id):
+		lock.release()
+		return ""
+	device_process_lock = lock
+	device_holder = weakref(owner)
+	device_token = Crypto.new().generate_random_bytes(16).hex_encode()
+	device_purpose = "inspect interrupted model"
+	return device_token
+
 # All editor-owned device clients use this shared, nonblocking lease. It is
 # intentionally separate from job dispatch: queued inference still needs to
 # enter the FIFO, and a lease is not an alternative queue.
@@ -428,6 +540,9 @@ func acquire_device(owner: Object, purpose: String) -> String:
 	var process_lock: RefCounted = ClassDB.instantiate("TiinyJobStorage")
 	if process_lock == null or not process_lock.acquire(device_lock_path):
 		return ""
+	if device_recovery_pending():
+		process_lock.release()
+		return ""
 	device_process_lock = process_lock
 	device_holder = weakref(owner)
 	device_token = Crypto.new().generate_random_bytes(16).hex_encode()
@@ -436,6 +551,8 @@ func acquire_device(owner: Object, purpose: String) -> String:
 
 func release_device(owner: Object, token: String) -> bool:
 	if device_holder == null or device_holder.get_ref() != owner or token.is_empty() or token != device_token:
+		return false
+	if device_recovery_pending() and device_purpose != "inspect interrupted model":
 		return false
 	device_holder = null
 	device_token = ""
@@ -617,7 +734,7 @@ func _make_card(job: Dictionary) -> PanelContainer:
 		buttons.add_child(_card_button("Retry", func(): _on_retry_job(str(job.id))))
 		buttons.add_child(_card_button("Clear", func(): _on_clear_job(str(job.id))))
 	elif job.state == "interrupted":
-		if job.operation == "attach_tree_to_scene":
+		if job.operation == "attach_tree_to_scene" or (not job.attempts.is_empty() and job.attempts.back().has("device_operations")):
 			buttons.add_child(_card_button("Check", func(): _on_check_job(str(job.id))))
 		if _is_abandonable(job):
 			buttons.add_child(_card_button("Skip", func(): _on_skip_job(str(job.id))))
@@ -693,7 +810,7 @@ func _on_clear_failed() -> void:
 
 func _on_skip_job(id: String) -> void:
 	var job := get_job_status(id)
-	if job.has("error") or not _is_abandonable(job):
+	if job.has("error") or not _is_abandonable(job) or not inspecting_model_job.is_empty():
 		return
 	abandon_id = id
 	if job.operation in ["model_apply", "model_restore"]:
@@ -703,10 +820,19 @@ func _on_skip_job(id: String) -> void:
 	abandon_dialog.popup_centered()
 
 func _on_abandon_confirmed() -> void:
-	if not available or abandon_id.is_empty():
+	if not available or abandon_id.is_empty() or not inspecting_model_job.is_empty():
 		return
 	var id := abandon_id
 	abandon_id = ""
+	var job := get_job_status(id)
+	if job.has("error") or not _is_abandonable(job):
+		summary.text = "The interrupted job changed before acknowledgement."
+		_refresh()
+		return
+	if not job.get("attempts", []).is_empty() and job.attempts.back().get("device_started", false) and not acknowledge_model_uncertainty(id):
+		summary.text = "Could not acknowledge the shared device recovery record."
+		_refresh()
+		return
 	if not queue.abandon(id):
 		summary.text = "Could not abandon the interrupted job."
 		_refresh()
@@ -720,11 +846,27 @@ func _on_abandon_confirmed() -> void:
 	_refresh()
 
 func _on_check_job(id: String) -> void:
-	if not available:
+	if not available or not inspecting_model_job.is_empty():
 		return
 	var job := get_job_status(id)
-	if job.has("error") or job.state != "interrupted" or job.operation != "attach_tree_to_scene":
+	if job.has("error") or job.state != "interrupted":
 		return
+	if not job.attempts.is_empty() and job.attempts.back().has("device_operations"):
+		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		if manager == null or not manager.has_method("inspect_interrupted_model_job"):
+			recovery_dialog.dialog_text = "Tiiny model manager is unavailable."
+			recovery_dialog.popup_centered()
+			return
+		inspecting_model_job = id
+		var observation: Dictionary = await manager.inspect_interrupted_model_job(id)
+		inspecting_model_job = ""
+		var description := str(observation.get("message", observation.get("error", "Device inspection failed.")))
+		recovery_dialog.dialog_text = description
+		recovery_dialog.popup_centered()
+		log_message.emit("Job recovery: " + description, 0)
+		_refresh()
+		return
+	if job.operation != "attach_tree_to_scene": return
 	var verifier: RefCounted = attach_script.new(queue, root_path)
 	var result: Dictionary = verifier.reconcile(job)
 	var message := str(result.get("message", result.get("error", "Recovery could not be verified.")))
@@ -740,6 +882,11 @@ func _refresh() -> void:
 	var stopped: bool = not state.stop_reason.is_empty()
 	var running: bool = not executor.current.is_empty()
 	summary.text = "Stopped: " + state.stop_reason if stopped else ("Paused" if state.paused else ("Running: " + executor.stage if running else "Ready"))
+	var marker := _device_marker()
+	if not stopped and not running and marker.get("state") == "uncertain":
+		summary.text = "Tiiny requires review in %s (job %s)." % [marker.project, marker.job]
+	elif not stopped and not running and marker.get("state") == "invalid":
+		summary.text = "Tiiny recovery record is unreadable; device access is stopped."
 	pause_button.text = "Resume" if state.paused else "Pause"
 	pause_button.disabled = stopped
 	cancel_button.disabled = not running
@@ -785,6 +932,10 @@ func _job_details_text(id: String) -> String:
 	if not job.result.is_empty():
 		lines.append("Result: " + JSON.stringify(job.result, "  "))
 	for attempt in job.attempts:
+		if attempt.has("device_operations"):
+			lines.append("Device operations: " + JSON.stringify(attempt.device_operations, "  "))
+		if attempt.has("device_observation"):
+			lines.append("Last device check: " + JSON.stringify(attempt.device_observation, "  "))
 		if attempt.has("result") and not attempt.result.is_empty():
 			lines.append("Attempt %s: %s" % [attempt.number, JSON.stringify(attempt.result)])
 	return "\n".join(lines)

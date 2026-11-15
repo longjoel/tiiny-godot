@@ -43,7 +43,7 @@ func _run() -> void:
 			_fail("Model manager could not acquire released device lease")
 			return
 		model_manager._release_device()
-	if mode in ["model_apply", "model_failed", "model_wait_cancel"]:
+	if mode in ["model_apply", "model_failed", "model_wait_cancel", "model_apply_restore"]:
 		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		actual.remove_from_group("tiiny_setup_manager")
 		var fake = load("res://fake_model_manager.gd").new()
@@ -56,6 +56,11 @@ func _run() -> void:
 		for role in fake.ROLES:
 			fake.draft.roles[role] = {"model": "code" if role == "coding_model" else "image" if role == "image_model" else "", "context": 8192 if role == "coding_model" else 0, "warm": role == "coding_model"}
 		fake.omit_effect = mode == "model_failed"
+		if mode == "model_apply_restore":
+			fake.fixture_state.loaded.erase("code")
+			fake.fixture_state.npu_used = 23
+			settings.set_setting("_tiiny_ai/applied_configuration", fake.draft.duplicate(true))
+			fake.next_restore_check_msec = Time.get_ticks_msec() + 60000
 		await fake.check_config()
 		if not fake.plan.get("ok", false):
 			_fail("Could not check fake model configuration")
@@ -91,14 +96,19 @@ func _run() -> void:
 			get_tree().quit(0)
 			return
 		var expected := "interrupted" if mode == "model_failed" else "completed"
-		if result.get("state") != expected or fake.calls != [["unload", "image"]] or not fake.fixture_state.loaded.has("code"):
+		var expected_calls := [["load", "code"], ["unload", "image"]] if mode == "model_apply_restore" else [["unload", "image"]]
+		if result.get("state") != expected or fake.calls != expected_calls or not fake.fixture_state.loaded.has("code"):
 			_fail("Queued model Apply outcome incorrect: " + str(result) + " calls=" + str(fake.calls))
 			return
 		var operation: Dictionary = result.attempts.back().device_operations.back()
 		if operation.verb != "unload" or operation.model != "image" or operation.connection != "a".repeat(64) or operation.state != ("started" if mode == "model_failed" else "verified"):
 			_fail("Model operation journal incorrect: " + str(operation))
 			return
-		if mode == "model_apply":
+		if mode == "model_apply_restore":
+			if result.attempts.back().device_operations.size() != 2 or result.attempts.back().device_operations[0].verb != "load" or result.attempts.back().device_operations[0].state != "verified":
+				_fail("Apply did not verify coding-model restoration before changing other models")
+				return
+		if mode in ["model_apply", "model_apply_restore"]:
 			var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
 			if not saved is Dictionary or saved.get("roles", {}).get("coding_model", {}).get("model") != "code":
 				_fail("Verified coding model configuration was not persisted")
@@ -109,6 +119,13 @@ func _run() -> void:
 		if mode == "model_failed" and not jobs.acquire_device(self, "competing fixture").is_empty():
 			_fail("Uncertain model operation released the device lease")
 			return
+		if mode == "model_failed":
+			var before: Array = fake.calls.duplicate(true)
+			var inspection: Dictionary = await fake.inspect_interrupted_model_job(id)
+			var inspected: Dictionary = jobs.get_job_status(id)
+			if inspection.has("error") or inspected.state != "interrupted" or not inspected.attempts.back().has("device_observation") or fake.calls != before or not jobs.device_recovery_pending():
+				_fail("Device inspection did not preserve the stopped job: " + str(inspection))
+				return
 	elif mode == "model_failed_restore":
 		var entries: Array = jobs.queue.snapshot().jobs
 		if entries.size() != 1 or entries[0].state != "interrupted" or entries[0].attempts.back().device_operations.back().state != "started":
@@ -117,6 +134,29 @@ func _run() -> void:
 		if not jobs.acquire_device(self, "competing fixture").is_empty() or jobs.queue.resolve(entries[0].id, "retry"):
 			_fail("Interrupted model operation allowed blind retry or device access")
 			return
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var fake = load("res://fake_model_manager.gd").new()
+		get_tree().root.add_child(fake)
+		fake.fixture_state = {"models": {"image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0, "state": "running"}}, "loaded": {"image": 23}, "npu_total": 100, "npu_used": 23, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "a".repeat(64)}
+		fake.fixture_state.connection = "c".repeat(64)
+		var wrong: Dictionary = await fake.inspect_interrupted_model_job(entries[0].id)
+		if not wrong.has("error") or not fake.calls.is_empty() or not jobs.device_recovery_pending():
+			_fail("Device inspection accepted a different device")
+			return
+		fake.fixture_state.connection = "a".repeat(64)
+		var inspection: Dictionary = await fake.inspect_interrupted_model_job(entries[0].id)
+		var recovered: Dictionary = jobs.get_job_status(entries[0].id)
+		if inspection.has("error") or recovered.state != "interrupted" or not recovered.attempts.back().device_observation.loaded or not fake.calls.is_empty() or not jobs.device_recovery_pending():
+			_fail("Read-only device inspection after restart failed: " + str(inspection))
+			return
+		jobs.abandon_id = entries[0].id
+		jobs._on_abandon_confirmed()
+		var recovered_lease: String = jobs.acquire_device(self, "after explicit acknowledgement")
+		if jobs.get_job_status(entries[0].id).state != "skipped" or jobs.device_recovery_pending() or recovered_lease.is_empty():
+			_fail("Explicit acknowledgement did not resolve shared uncertainty: job=" + str(jobs.get_job_status(entries[0].id)) + " marker=" + str(jobs._device_marker()) + " lease=" + str(not recovered_lease.is_empty()) + " holder=" + str(jobs.device_purpose))
+			return
+		jobs.release_device(self, recovered_lease)
 	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight"]:
 		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		actual.remove_from_group("tiiny_setup_manager")
@@ -229,7 +269,7 @@ func _run() -> void:
 				_fail("Coding restoration outcome incorrect: " + str(result) + " calls=" + str(fake.calls))
 				return
 			if mode == "model_restore_capacity":
-				if not fake.calls.is_empty() or fake.is_ready() or not fake.message.contains("capacity"):
+				if not fake.calls.is_empty() or fake.is_ready() or fake.last_error_type != "capacity" or not fake.message.contains("capacity"):
 					_fail("Insufficient capacity caused mutation or readiness")
 					return
 			elif mode == "model_restore_stale":
@@ -629,11 +669,10 @@ func _run() -> void:
 		if not jobs.acquire_device(self, "before abandon").is_empty():
 			_fail("Interrupted device job did not hold the lease")
 			return
-		if not store.abandon(id) or not store.snapshot().stop_reason.is_empty() or not store.snapshot().paused:
+		jobs.abandon_id = id
+		jobs._on_abandon_confirmed()
+		if jobs.get_job_status(id).state != "skipped" or not store.snapshot().stop_reason.is_empty() or not store.snapshot().paused:
 			_fail("Interrupted device job could not be abandoned")
-			return
-		if not fake.release_uncertain_device(id):
-			_fail("Abandon did not release the recorded uncertainty")
 			return
 		var token: String = jobs.acquire_device(self, "after abandon")
 		if token.is_empty():

@@ -219,6 +219,16 @@ static func _valid_saved_draft(saved: Variant) -> bool:
 		if not id is String: return false
 	return (saved.get("npu_reserve") is int or saved.get("npu_reserve") is float) and (saved.get("disk_reserve_gib") is int or saved.get("disk_reserve_gib") is float)
 
+static func _valid_approved_configuration(value: Variant) -> bool:
+	if not value is Dictionary or not _valid_saved_draft(value.get("draft")) or not value.get("actions") is Array or value.actions.size() > 128:
+		return false
+	if not value.get("active_coding") is String or not value.get("connection") is String or value.connection.length() != 64 or not value.connection.is_valid_hex_number(false):
+		return false
+	for action in value.actions:
+		if not action is Dictionary or action.size() != 2 or action.get("verb") not in ["download", "load", "unload"] or not action.get("id") is String or action.id.is_empty() or action.id.length() > 512:
+			return false
+	return true
+
 # Verify the saved coding model catalog stability without triggering device mutations.
 # If the coding model is no longer in the catalog or incompatible, warn without unloading.
 # This preserves user configuration while preventing silent degradation.
@@ -256,6 +266,7 @@ func is_model_loaded(id: String) -> bool:
 	if not model_job_id.is_empty(): return false
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 	if service != null and service.get("queue") != null:
+		if service.has_method("device_uncertainty_blocks_readiness") and service.device_uncertainty_blocks_readiness(): return false
 		for job in service.queue.snapshot().jobs:
 			if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false):
 				return false
@@ -327,7 +338,7 @@ func _acquire_device(purpose: String) -> bool:
 
 func _release_device() -> void:
 	if not device_lease.is_empty() and is_instance_valid(device_lease_owner):
-		device_lease_owner.release_device(self, device_lease)
+		if not device_lease_owner.release_device(self, device_lease): return
 	device_lease = ""
 	device_lease_owner = null
 
@@ -532,6 +543,10 @@ func poll_model_job(job: Dictionary) -> Dictionary:
 		return {"state": "running", "stage": "Waiting for model manager"}
 	if model_job_result.get("state") == "running":
 		return {"state": "running", "stage": message}
+	if model_job_result.get("state") == "completed":
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if service == null or not service.confirm_model_operations(self, device_lease, model_job_id):
+			model_job_result = {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
 	return model_job_result
 
 func cancel_model_job(id: String) -> bool:
@@ -557,6 +572,47 @@ func release_uncertain_model_job(id: String) -> void:
 		model_job_id = ""
 		model_job_result = {}
 
+# A read-only inventory check helps the user review an interrupted command. It
+# cannot prove that the remote operation has stopped, so it never retries or
+# resolves the job automatically.
+func inspect_interrupted_model_job(id: String) -> Dictionary:
+	if busy or applying: return {"error": "Tiiny is busy; try the device check again."}
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.has_method("acquire_device_for_inspection"):
+		return {"error": "Jobs service is unavailable."}
+	var job: Dictionary = service.get_job_status(id)
+	if job.get("state") != "interrupted" or job.get("attempts", []).is_empty():
+		return {"error": "This job no longer needs device review."}
+	var operations: Array = job.attempts.back().get("device_operations", [])
+	if operations.is_empty(): return {"error": "No model operation was recorded for this job."}
+	var operation: Dictionary = operations.back()
+	var connection := _connection()
+	if connection.has("error") or connection.get("identity", "") != operation.connection:
+		return {"error": "Reconnect to the device and account used for this operation before checking it."}
+	var already_held := not device_lease.is_empty() and model_job_id == id
+	if not already_held:
+		var token: String = service.acquire_device_for_inspection(self, id)
+		if token.is_empty(): return {"error": "The device is busy or this job does not own the recovery record."}
+		device_lease_owner = service
+		device_lease = token
+	busy = true
+	var observed := await _fetch_snapshot()
+	busy = false
+	if not already_held: _release_device()
+	if observed.has("error"):
+		return {"error": _error_description(str(observed.error))}
+	connection = _connection()
+	if connection.has("error") or observed.get("connection", "") != operation.connection or connection.get("identity", "") != operation.connection:
+		return {"error": "The configured device changed during the check; no observation was recorded."}
+	var models: Dictionary = observed.get("models", {})
+	var model: Dictionary = models.get(operation.model, {})
+	var loaded: Dictionary = observed.get("loaded", {})
+	var observation := {"connection": operation.connection, "model": operation.model, "verb": operation.verb, "catalog_present": models.has(operation.model), "installed": bool(model.get("installed", false)), "loaded": loaded.has(operation.model), "model_state": str(model.get("state", "unknown")).left(100), "npu": float(loaded.get(operation.model, -1)), "checked_at": Time.get_unix_time_from_system()}
+	if not service.queue.observe_device_operation(id, observation):
+		return {"error": "Could not save the device observation; the job remains stopped."}
+	var description := "%s: catalog %s, installed %s, loaded %s (device state: %s)." % [operation.model, "present" if observation.catalog_present else "missing", "yes" if observation.installed else "no", "yes" if observation.loaded else "no", observation.model_state]
+	return {"message": description + " The remote operation may still be changing. The job remains stopped; after reviewing the device, use Skip to acknowledge the uncertain outcome and check the configuration again."}
+
 # A running inference job cannot wait for a restore appended behind itself.
 # Restore as a recorded preflight of that same job, then let it continue.
 func poll_model_preflight(job: Dictionary) -> Dictionary:
@@ -579,6 +635,10 @@ func poll_model_preflight(job: Dictionary) -> Dictionary:
 	if model_job_result.get("state") == "running": return {"state": "running", "stage": message}
 	var result := model_job_result.duplicate(true)
 	if result.get("state") == "completed":
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if service == null or not service.confirm_model_operations(self, device_lease, model_job_id):
+			model_job_result = {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
+			return model_job_result
 		_release_device()
 		model_job_id = ""
 		model_job_result = {}
@@ -654,7 +714,7 @@ func _restore_model_command(verb: String, id: String, identity: String) -> Dicti
 	if connection.has("error") or connection.get("identity", "") != identity or _saved_coding_model() != id:
 		return {"error": "The saved coding model or device changed before restoration."}
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
-	if service == null or not service.queue.begin_device_operation(model_job_id, verb, id, identity):
+	if service == null or not service.begin_model_operation(self, device_lease, model_job_id, verb, id, identity):
 		return {"error": "Could not record coding-model restoration before starting it."}
 	_report("%s coding model %s…" % [verb.capitalize(), id])
 	operation_log.append("%s %s" % [verb, id])
@@ -677,6 +737,9 @@ func _restore_model_command(verb: String, id: String, identity: String) -> Dicti
 func _execute_model_configuration(approved: Dictionary) -> void:
 	busy = true
 	applying = true
+	if not _valid_approved_configuration(approved):
+		await _apply_failed("The queued model configuration is invalid. Check Config again.")
+		return
 	_report("Revalidating the approved plan…")
 	var fresh := await _fetch_snapshot()
 	if model_job_cancelled:
@@ -694,11 +757,34 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 	if old_coding != str(approved.get("active_coding", "")) or not _valid_saved_draft(approved.get("draft")):
 		await _apply_failed("The saved coding model or configuration changed. Check Config again.")
 		return
+	var restored_verbs := PackedStringArray()
+	if _saved_coding_model() == old_coding and not fresh.loaded.has(old_coding):
+		# Restore the currently selected coordinator inside this same FIFO job,
+		# before changing any other model. Never wait for a later restore job.
+		await _execute_model_restoration({"model": old_coding, "connection": approved.connection, "preflight": true})
+		if model_job_result.get("state") != "completed": return
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if service == null:
+			await _apply_failed("Jobs service became unavailable after restoring the coding model.")
+			return
+		var current_job: Dictionary = service.get_job_status(model_job_id)
+		for operation in current_job.get("attempts", []).back().get("device_operations", []):
+			if operation.model == old_coding and operation.state == "verified":
+				restored_verbs.append(str(operation.verb))
+		fresh = snapshot
+		busy = true
+		applying = true
+		model_job_result = {"state": "running", "stage": "Rechecking model configuration"}
 	var rechecked := Planner.check(fresh, approved.draft, old_coding)
-	if not rechecked.ok or rechecked.actions != approved.actions:
+	var remaining_actions: Array = []
+	for action in approved.actions:
+		if action.id == old_coding and restored_verbs.has(action.verb):
+			continue
+		remaining_actions.append(action)
+	if not rechecked.ok or rechecked.actions != remaining_actions:
 		await _apply_failed("The plan changed since Check Config. Review a new check before applying.")
 		return
-	operation_log.clear()
+	if restored_verbs.is_empty(): operation_log.clear()
 	for action in rechecked.actions:
 		if model_job_cancelled:
 			await _apply_failed("Model configuration cancelled. Check the device before retrying.")
@@ -710,7 +796,7 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 		_report("%s %s…" % [str(action.verb).capitalize(), action.id])
 		operation_log.append("%s %s" % [action.verb, action.id])
 		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
-		if not model_job_id.is_empty() and (service == null or not service.queue.begin_device_operation(model_job_id, action.verb, action.id, approved.connection)):
+		if not model_job_id.is_empty() and (service == null or not service.begin_model_operation(self, device_lease, model_job_id, action.verb, action.id, approved.connection)):
 			await _apply_failed("Could not record the model operation. Stopped before starting it.")
 			return
 		var exit_code := await _run_cli([action.verb, action.id])
@@ -771,7 +857,7 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 func _apply_failed(reason: String) -> void:
 	var current := await _fetch_snapshot()
 	if not current.has("error") and _accept_snapshot(current):
-		pass
+		last_error_type = _classify_error(reason)
 	else:
 		connected = false
 		connection_identity = ""

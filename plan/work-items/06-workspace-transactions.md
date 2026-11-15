@@ -16,6 +16,8 @@ Implementation: [plan](../implementation/06-workspace-transactions.md). Visuals:
 
 Implement the first native workspace macro: create a CollisionShape2D under a compatible parent, create and assign a RectangleShape2D, and set dimensions.
 
+Design constraint: the collision shape is the first **recipe** of a class-agnostic transaction executor, not a special case in the executor or undo code. Class-specific validation and operation construction live in the recipe. A second test-only recipe must run through the same executor without changes.
+
 ## Acceptance criteria
 
 - [ ] Validate target scene, parent, classes, ownership, writable properties, and value/resource compatibility before committing.

@@ -48,4 +48,69 @@ with tempfile.TemporaryDirectory(prefix="tiiny-device-lease-") as directory:
         if owner.poll() is None:
             owner.kill()
             owner.wait(timeout=10)
+    # A model command may keep running remotely after its editor crashes. The
+    # OS lock disappears, but the durable shared marker must block another
+    # project until the original project's user acknowledges the outcome.
+    model_ready = base / "model-ready"
+    model_env = dict(env, TIINY_LOCK_TEST_READY=str(model_ready))
+    owner = subprocess.Popen(command(projects[0]), env=dict(model_env, TIINY_LOCK_TEST_MODE="model_owner"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        deadline = time.monotonic() + 20
+        while not model_ready.exists():
+            if owner.poll() is not None:
+                raise RuntimeError("model owner exited early: " + owner.stdout.read().decode(errors="replace"))
+            if time.monotonic() >= deadline:
+                raise TimeoutError("model owner did not record its operation")
+            time.sleep(0.05)
+        owner.kill()
+        owner.wait(timeout=10)
+        for project, mode in ((projects[1], "model_blocked"), (projects[0], "model_recover"), (projects[1], "free")):
+            result = subprocess.run(command(project), env=dict(model_env, TIINY_LOCK_TEST_MODE=mode), capture_output=True, text=True, timeout=30)
+            if result.returncode or f"Device lock {mode} passed" not in result.stdout or "SCRIPT ERROR" in result.stdout + result.stderr:
+                raise RuntimeError(result.stdout + result.stderr)
+    finally:
+        if owner.poll() is None:
+            owner.kill()
+            owner.wait(timeout=10)
+    inference_ready = base / "inference-ready"
+    inference_env = dict(env, TIINY_LOCK_TEST_READY=str(inference_ready))
+    owner = subprocess.Popen(command(projects[0]), env=dict(inference_env, TIINY_LOCK_TEST_MODE="inference_owner"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        deadline = time.monotonic() + 20
+        while not inference_ready.exists():
+            if owner.poll() is not None:
+                raise RuntimeError("inference owner exited early: " + owner.stdout.read().decode(errors="replace"))
+            if time.monotonic() >= deadline:
+                raise TimeoutError("inference owner did not record its request")
+            time.sleep(0.05)
+        owner.kill()
+        owner.wait(timeout=10)
+        for project, mode in ((projects[1], "model_blocked"), (projects[0], "model_recover"), (projects[1], "free")):
+            result = subprocess.run(command(project), env=dict(inference_env, TIINY_LOCK_TEST_MODE=mode), capture_output=True, text=True, timeout=30)
+            if result.returncode or f"Device lock {mode} passed" not in result.stdout or "SCRIPT ERROR" in result.stdout + result.stderr:
+                raise RuntimeError(result.stdout + result.stderr)
+    finally:
+        if owner.poll() is None:
+            owner.kill()
+            owner.wait(timeout=10)
+    corrupt_ready = base / "corrupt-ready"
+    corrupt_env = dict(env, TIINY_LOCK_TEST_READY=str(corrupt_ready))
+    owner = subprocess.Popen(command(projects[0]), env=dict(corrupt_env, TIINY_LOCK_TEST_MODE="corrupt_owner"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        deadline = time.monotonic() + 20
+        while not corrupt_ready.exists():
+            if owner.poll() is not None:
+                raise RuntimeError("corrupt fixture exited early: " + owner.stdout.read().decode(errors="replace"))
+            if time.monotonic() >= deadline:
+                raise TimeoutError("corrupt fixture did not write its marker")
+            time.sleep(0.05)
+        owner.kill()
+        owner.wait(timeout=10)
+        result = subprocess.run(command(projects[1]), env=dict(corrupt_env, TIINY_LOCK_TEST_MODE="model_blocked"), capture_output=True, text=True, timeout=30)
+        if result.returncode or "Device lock model_blocked passed" not in result.stdout or "SCRIPT ERROR" in result.stdout + result.stderr:
+            raise RuntimeError(result.stdout + result.stderr)
+    finally:
+        if owner.poll() is None:
+            owner.kill()
+            owner.wait(timeout=10)
 print("Cross-process device lease passed")

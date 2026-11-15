@@ -8,7 +8,7 @@ Parent: [05 — Read-only Godot workspace tools](../work-items/05-workspace-insp
 
 The workspace inspector is a read-only tool provider. It exposes the edited scene, selection, tree, node properties, resources, ownership, and signals as structured data. It never mutates the scene, resources, undo history, project files, or editor state.
 
-The edited scene must be saved. A scene with no `scene_file_path` or a path in `EditorInterface.get_unsaved_scenes()` returns `scene_not_saved` with "Save the scene before using workspace tools." Revision identity is a file hash, not a session guess.
+The edited scene must have been saved at least once. A scene with no `scene_file_path` returns `scene_not_saved` ("Save the scene once before using workspace tools"). Dirty scenes are allowed for read-only inspection: results include `dirty: true` and a session revision derived from the scene's undo history. Revision identity is the saved file hash plus that session revision, not a guess.
 
 Every result is bound to a scene identity and revision captured at call time. A path is resolved against the edited scene root, not the running remote scene and not an arbitrary open scene. Stale, missing, or out-of-scene targets produce explicit errors or empty states.
 
@@ -64,7 +64,7 @@ Each tool follows the story 07 definition shape:
   "ok": true,
   "summary": "Inspected Player [CharacterBody2D] with 34 editor properties.",
   "data": {
-    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "root": "."},
+    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "session_revision": "history:42", "dirty": false, "root": "."},
     "node": {"path": "Player", "class": "CharacterBody2D", "owner": ".", "scene_file_path": "", "instance_placeholder": false, "script": "res://player.gd", "child_count": 2, "groups": ["player"]},
     "properties": [{"name": "position", "type": "Vector2", "value": "(0, 0)", "usage": ["storage", "editor"], "writable": true}],
     "truncated": {"properties": false}
@@ -82,7 +82,8 @@ Read-only results never include `undo_group`. The provider echoes `call_id` when
 | Code | Condition | Result |
 | --- | --- | --- |
 | `no_scene` | No edited scene | Error with a clear message |
-| `scene_not_saved` | No `scene_file_path` or the scene is unsaved | Error; save the scene first |
+| `scene_not_saved` | No `scene_file_path` (never saved) | Error; save the scene once first |
+| `stale_scene` | File revision or session revision changed | Error; re-inspect |
 | `no_selection` | Selection tool with nothing selected | `ok: true`, empty `nodes`, summary "No nodes selected" |
 | `target_missing` | Node path no longer exists | Error; no substitution |
 | `outside_scene` | Node is not under the edited scene root | Error |
@@ -99,15 +100,17 @@ Empty selection is not an error. A missing scene is not an empty scene. A delete
 
 `get_workspace_context` and every result include:
 
-- `scene_path`: `root.scene_file_path` (required; unsaved scenes are rejected).
-- `revision`: SHA-256 of the saved scene file.
+- `scene_path`: `root.scene_file_path` (required; a never-saved scene is rejected).
+- `revision`: SHA-256 of the saved scene file (the base revision).
+- `session_revision`: the edited scene's undo-history version, for example `"history:42"`. It changes after edits, undo, and redo, including Tiiny recipes.
+- `dirty`: whether the path is in `EditorInterface.get_unsaved_scenes()`.
 - `root_instance_id`: session-local identity.
 - `playing`: `EditorInterface.is_playing_scene()`.
 - `edited_scene_only`: always true, with a note that runtime/debugger values require story 12.
 
-Tools accept an optional `turn_context` containing the expected scene path, revision, and root instance ID. If the current edited root differs, or the saved file hash changed, the tool returns `stale_scene` before resolving paths. This is what lets 06/07 reject a plan after a scene switch or external edit (WS-13).
+Tools accept an optional `turn_context` containing the expected scene path, file revision, session revision, and root instance ID. If the current edited root differs, the saved file hash changed, or the undo-history version changed, the tool returns `stale_scene` before resolving paths. This is what lets 06/07 reject a plan after a scene switch, an unsaved edit, or an external file change (WS-13).
 
-An unsaved scene returns `scene_not_saved`. Once the scene is saved, a changed on-disk revision returns `stale_scene` when it differs from the turn context.
+The file hash catches on-disk changes; the session revision catches in-memory edits, undo, and redo. Manual changes that bypass the undo history are the residual gap; file saves still update the base revision.
 
 ### Node identity and ownership
 
@@ -172,7 +175,7 @@ Deliverables: inspector script, embedded source wiring, result/error helpers.
 
 ### Slice B — scene, selection, and tree
 
-Implement `get_workspace_context`, `get_selection`, and `get_scene_tree`, including edited-scene-only labeling, saved-scene revision checks, selection filtering, ownership, instanced-node metadata, and truncation.
+Implement `get_workspace_context`, `get_selection`, and `get_scene_tree`, including edited-scene-only labeling, base/session revision checks, dirty state, selection filtering, ownership, instanced-node metadata, and truncation.
 
 Gate: a fixture scene returns correct paths/classes/owners; depth/node limits truncate; no scene and no selection produce distinct states; a scene switch produces `stale_scene`.
 
@@ -214,7 +217,7 @@ Deliverables: provider interface, build wiring, work-item/STATUS handoff.
 
 | Scenario | Slice | Check |
 | --- | --- | --- |
-| WS-01 inspection half | B, C | Inspect CharacterBody2D, selection, and tree before the macro |
+| WS-01 inspection half | B, C | Inspect CharacterBody2D, selection, and tree before the recipe |
 | WS-02 incompatible/deleted target | B, C | `target_missing`, `outside_scene`, no substitution |
 | WS-11 runtime vs edited scene | E | Running scene is labeled; edited-scene values are not replaced by runtime values |
 | WS-13 scene switch | A, B | `stale_scene` on identity/revision change |
@@ -225,9 +228,9 @@ Deliverables: provider interface, build wiring, work-item/STATUS handoff.
 
 1. **Bounded results.** Use explicit truncation flags; no pagination in v1.
 2. **Writability is a hint.** Report usage and a setter hint where available; story 06 revalidates before writing.
-3. **Saved scenes are required.** A scene with no `scene_file_path` or with unsaved changes returns `scene_not_saved`; there is no session-only revision.
+3. **Saved at least once; dirty inspection allowed.** A never-saved scene returns `scene_not_saved`. A dirty scene is inspectable and reports `dirty: true` plus a `session_revision` from the undo history. Mutations still require a clean scene (story 06).
 4. **Provider location (explained).** This only concerns where the code lives: a separate embedded GDScript file (`editor/tiiny/tools/inspector.gd`) injected into the dock like the Jobs scripts, or functions inside the large chat-dock script. The separate file is easier to test and keeps the dock as UI only; it adds a small build-generation step. Recommendation: separate file. This is an implementation detail and does not affect the tool contract.
-5. **Search tools.** Defer `find_nodes`; the scene tree and inspection tools cover the first macro.
+5. **Search tools.** Defer `find_nodes`; the scene tree and inspection tools cover the first recipe.
 
 ## Remaining recommendations
 
@@ -239,13 +242,13 @@ Deliverables: provider interface, build wiring, work-item/STATUS handoff.
 ## Dependencies and risks
 
 - **Story 01 only:** 05 can start now. 06 consumes the inspector; 07 composes the registry.
-- **Saved scenes:** 05/06/07 all assume a saved scene with a file hash revision. Tests must cover the `scene_not_saved` path.
+- **Saved-at-least-once scenes:** 05/06/07 assume a `scene_file_path` and a base file hash. Tests must cover `scene_not_saved` for never-saved scenes, dirty inspection, and `scene_dirty` for mutations.
 - **Editor API stability:** verify the exact signatures in this build (`get_property_list`, `get_signal_connection_list`, `is_editable_instance`, `get_scene_instance_load_placeholder`, `get_editor_undo_redo`).
 - **Property getters:** editor-visible getters are generally safe, but expensive or side-effectful properties must be bounded and filtered. Record any exceptions.
 - **Large scenes:** depth/node/property/connection caps and result-size caps are mandatory.
 - **Instanced/inherited scenes:** ownership semantics are the main correctness risk; test both explicitly.
 - **Running scene confusion:** never use `get_tree().current_scene` or debugger APIs for edited-scene inspection.
-- **Saved-scene requirement:** unsaved scenes cannot be inspected or planned against. This removes session-only revisions but adds a save step before workspace work.
+- **Dirty-session revisions:** the undo-history version is editor-session-local. File hashes catch on-disk changes; manual edits that bypass undo are the residual gap. Mutations require a clean scene, so recipes never mix with untracked dirty changes.
 - **Model exposure:** 05 does not change chat behavior. 07 owns availability, prompt, and ledger.
 
 ## Handoff

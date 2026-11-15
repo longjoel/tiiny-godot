@@ -201,7 +201,17 @@ func _initialize() -> void:
 	var checkpoint: Dictionary = recovered.attempts.back().device_operations.back()
 	check(checkpoint.verb == "download" and checkpoint.model == "model" and checkpoint.connection == identity and checkpoint.progress == 42.5 and checkpoint.state == "started", "operation identity and progress survive restart")
 	check(model_reload.start_next().is_empty() and not model_reload.resolve(model_job.id, "retry"), "unknown model operation cannot blindly replay")
+	var observation := {"connection": identity, "model": "model", "verb": "download", "catalog_present": true, "installed": false, "loaded": false, "model_state": "downloading", "npu": -1.0, "checked_at": 1000}
+	var wrong_observation := observation.duplicate(true)
+	wrong_observation.connection = "b".repeat(64)
+	check(not model_reload.observe_device_operation(model_job.id, wrong_observation), "observation from a different device is rejected")
+	check(model_reload.observe_device_operation(model_job.id, observation), "record read-only device observation")
+	check(model_reload.snapshot().jobs[0].state == "interrupted" and not model_reload.resolve(model_job.id, "retry"), "observation alone cannot resume uncertain work")
 	model_reload.close()
+	var inspected_reload = Queue.new()
+	check(inspected_reload.open(model_path, "model-device-project"), "device observation survives restart")
+	check(inspected_reload.snapshot().jobs[0].attempts.back().device_observation.model_state == "downloading", "device observation retained")
+	inspected_reload.close()
 	var verified_path := root.path_join("model-verified.json")
 	if FileAccess.file_exists(verified_path):
 		DirAccess.remove_absolute(verified_path)

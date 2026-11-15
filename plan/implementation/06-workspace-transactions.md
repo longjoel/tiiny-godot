@@ -6,100 +6,126 @@ Parent: [06 — Typed scene edits with grouped undo/redo](../work-items/06-works
 
 ## Execution contract
 
-Story 06 implements exactly one native workspace macro:
+Story 06 builds a **class-agnostic transaction executor** plus a **recipe layer**. A recipe is an editor-owned, typed definition that turns validated model parameters into a small list of scene operations. The executor validates those operations generically, commits them as one editor undo action, and verifies the result.
 
-> Add one `CollisionShape2D` under a compatible physics body, create an owned `RectangleShape2D`, assign it, and set its dimensions.
+`CollisionShape2D` + `RectangleShape2D` is the **first recipe**, not a special case in the executor. There must be no `if class == "CollisionShape2D"` branch in the transaction or undo code. A second test recipe must run through the same executor without changes.
 
-The macro is a typed tool call. It validates the entire change before touching the scene, commits one editor undo action, and reports the affected node and resource. Invalid input, a stale target, an unsupported parent, or a resource/name conflict produces no partial node, resource, or undo entry.
+The model supplies recipe parameters only. It never supplies operation types, class names, property names, or raw values for arbitrary properties. Recipes are reviewed editor code; this is what keeps generic property assignment safe in 06.
 
-The edited scene must be saved (story 05's `scene_not_saved` rule). The macro never saves the scene automatically; it marks the scene dirty and the user saves normally. Consequence: after a successful macro, further workspace tool calls return `scene_not_saved` until the user saves. The macro verifies its own postcondition, so WS-01 does not need a follow-up inspection to establish success.
+The edited scene must have been saved at least once and must be clean for a mutation. Story 05 allows dirty inspection; story 06 rejects a dirty scene for recipes with `scene_dirty` ("Save the scene before applying an edit"). The executor never saves the scene automatically; it marks it dirty. After a successful recipe, read-only inspection remains available against the dirty session revision, but further mutations require saving. The recipe's postcondition is the verification for the turn.
 
-No generic property writes, node deletion, reparenting, script generation, or asset import are part of 06. Those belong to later stories.
+No delete, reparent, generic property-write, script, or asset-import recipe is part of 06.
 
 ## Baseline
 
-Story 05 provides the read-only inspector: scene identity/revision, scene-relative paths, selection, ownership, `scene_file_path`, editor-visible properties, and structured results. The macro reuses those helpers and revalidates every fact before executing.
+Story 05 provides scene identity/revision, scene-relative paths, selection, ownership, `scene_file_path`, and editor-visible properties. The executor reuses those helpers and revalidates every fact at execution.
 
-The editor already provides the undo API:
+The editor provides the undo API:
 
-- `EditorInterface.get_editor_undo_redo()` and `get_object_history_id(root)`.
+- `EditorInterface.get_editor_undo_redo()`, `get_object_history_id(root)`.
 - `create_action(name, MERGE_DISABLE, root)`, `add_do_method`, `add_undo_method`, `add_do_property`, `add_undo_property`, `add_do_reference`, `commit_action`.
-- `get_history_undo_redo(history_id).undo()/redo()` and `get_history_count()` for tests.
+- `get_history_undo_redo(history_id).undo()/redo()`, `get_history_count()`.
 - `Node.add_child(node, true)`, `set_owner(root)`, `remove_child(node)`.
-- `RectangleShape2D.size` and `CollisionShape2D.shape`.
+- `ClassDB.class_exists`, `ClassDB.can_instantiate`, `ClassDB.is_parent_class`, `ClassDB.instantiate`.
+- `Object.get_property_list`, property usage flags, `PropertyInfo.type`/`class_name`.
 
-The standard editor pattern is `add_child` + `set_owner` + `add_do_reference(new_node)` with an undo `remove_child`. Follow it rather than inventing a custom history.
+## Architecture
 
-## Macro contract
-
-### Tool
-
-`add_rectangular_collision_shape`
-
-| Argument | Type | Rules |
-| --- | --- | --- |
-| `parent_path` | string | Scene-relative path; `"."` for the root; required |
-| `width` | number | Finite, > 0, ≤ 100000; required |
-| `height` | number | Finite, > 0, ≤ 100000; required |
-| `node_name` | string | Optional; valid node name, ≤ 64 chars, unique under the parent |
-
-The schema uses `additionalProperties: false`. Domain validation repeats every rule at execution time; the schema is not the safety boundary.
-
-### Validation (all before creating anything)
-
-1. **Scene:** edited scene exists, is saved, has a file hash revision, and matches the turn's expected scene path/revision/root ID. Otherwise `no_scene`, `scene_not_saved`, or `stale_scene`.
-2. **Parent:** `parent_path` resolves to a node under the edited root. Missing → `target_missing`; outside the scene → `outside_scene`.
-3. **Class:** the parent is a `CollisionObject2D` (`CharacterBody2D`, `StaticBody2D`, `RigidBody2D`, `Area2D`). Anything else → `invalid_parent`.
-4. **Ownership:** the parent is the edited root or is owned by the edited root. A parent inside a non-editable instance → `read_only_instance`. V1 does not edit instanced children even with editable-children enabled; that is a later scope.
-5. **Conflict:** the parent has no existing direct `CollisionShape2D` child. If one exists → `target_conflict` ("A collision shape already exists; select it or remove it first"). This keeps "exactly one" for the acceptance case and avoids accidental compound shapes.
-6. **Dimensions:** finite width/height within bounds → otherwise `invalid_dimensions`.
-7. **Name:** optional name is valid and unique; otherwise auto-generate `CollisionShape2D`, `CollisionShape2D2`, … → `invalid_node_name` / `name_conflict` if an explicit name cannot be used.
-8. **Scene revision:** re-read the scene identity immediately before committing; if it changed, abort with `stale_scene` and no mutation.
-
-All checks happen before `CollisionShape2D.new()`, `RectangleShape2D.new()`, or `create_action()`.
-
-### Execution
-
-```gdscript
-var root := EditorInterface.get_edited_scene_root()
-var undo := EditorInterface.get_editor_undo_redo()
-var node := CollisionShape2D.new()
-var shape := RectangleShape2D.new()
-shape.size = Vector2(width, height)
-node.name = unique_name
-node.shape = shape
-
-undo.create_action("Add CollisionShape2D (%sx%s)" % [width, height], UndoRedo.MERGE_DISABLE, root)
-undo.add_do_method(parent, "add_child", node, true)
-undo.add_do_method(node, "set_owner", root)
-undo.add_do_property(node, "shape", shape)
-undo.add_do_reference(node)
-undo.add_undo_method(parent, "remove_child", node)
-undo.add_undo_property(node, "shape", null)
-undo.commit_action()
+```text
+Model / fixture
+   │  recipe name + parameters
+   ▼
+Recipe registry ──► Recipe.validate(params, context) ──► normalized request
+   │                                            │
+   │                                            ▼
+   │                                     Recipe.build(normalized) ──► typed operations
+   ▼
+Transaction executor ──► generic operation validation ──► one UndoRedo action
+   │
+   ├─ create_node(class, name, parent)
+   ├─ create_resource(class, properties)
+   ├─ add_child(parent, node)
+   ├─ set_owner(node, owner)
+   └─ set_property(target, property, value)
 ```
 
-Notes:
+### Recipe
 
-- `add_do_reference(node)` keeps the node alive across undo/redo; do not `queue_free` after commit.
-- The `do_property`/`undo_property` pair restores the shape on redo and clears it on undo. The action keeps the resource reference.
-- The action is assigned to the edited scene's history via the `root` context, so the normal editor undo (Ctrl+Z) affects it.
-- No selection change in v1. The chat reports the path; selecting the new node would require preserving/restoring the previous selection in the action and is not part of the acceptance.
-- Do not save the scene. `EditorUndoRedoManager` marks it unsaved by default.
-- If the game is running, the macro still edits the edited scene, not the running remote scene; the result includes `playing: true`. No live-edit sync.
+```gdscript
+{
+  "name": "add_rectangular_collision_shape",
+  "title": "Add rectangular collision shape",
+  "description": "...",
+  "parameters": { /* JSON schema for model parameters */ },
+  "risk": "mutating",
+  "validate": Callable,   # (params, scene_context) -> {ok, error, request}
+  "build": Callable       # (request) -> {ops: Array, summary, affected_hint}
+}
+```
 
-### Postcondition and rollback
+Recipes own domain knowledge: which parent classes are compatible, which properties are set, which conflicts matter, and which resource class to create. They return **data**, not executable model input. They cannot perform arbitrary editor calls.
 
-After `commit_action()` verify:
+### Operations
 
-- the node is inside the tree under the parent;
-- `node.owner == root`;
-- `node.shape is RectangleShape2D` with the requested size;
-- exactly one new history entry exists.
+| Operation | Fields | Undo |
+| --- | --- | --- |
+| `create_node` | `id`, `class`, `name` | `add_do_reference(node)`; node is added by `add_child` |
+| `create_resource` | `id`, `class`, `properties` | action keeps the resource reference |
+| `add_child` | `parent`, `node` | do `add_child(node, true)`; undo `remove_child(node)` |
+| `set_owner` | `node`, `owner` | do `set_owner(owner)`; undo `set_owner(old)` |
+| `set_property` | `target`, `property`, `value` | do/undo property pair with the old value |
 
-If a postcondition fails, undo the action through the scene history. If the undo also fails, report `outcome_unknown` with the visible state; do not claim success. Never leave a half-created node without reporting it.
+Targets are scene paths or operation IDs. Values are literals or operation IDs. No property name or class is accepted from the model unless a recipe declared it.
 
-### Result
+### Generic validation
+
+Before any object is created:
+
+- `create_node`: class exists, can instantiate, inherits `Node`, name is valid and unique under the target parent.
+- `create_resource`: class exists, can instantiate, inherits `Resource`; each declared property exists and accepts the value type.
+- `add_child`: parent exists, no cycles, node not already parented, parent is not the node.
+- `set_owner`: owner is an ancestor of the node in the resulting scene.
+- `set_property`: target exists (scene or operation), property exists, is writable (not `READ_ONLY`), and accepts the value; resource-valued properties require a compatible `Resource` class; category/group/internal properties are rejected.
+- All operations are declared by a registered recipe; the executor does not accept arbitrary plans from the model.
+- Scene path/revision/root match the turn context; the saved-scene rule applies.
+
+## First recipe — rectangular collision shape
+
+`add_rectangular_collision_shape(parent_path, width, height, node_name?)`
+
+Recipe validation:
+
+- parent exists under the edited root;
+- parent is a `CollisionObject2D` (CharacterBody2D, StaticBody2D, RigidBody2D, Area2D);
+- parent is the edited root or owned by it (instanced children deferred);
+- no existing direct `CollisionShape2D` (`target_conflict`);
+- finite width/height > 0, ≤ 100000;
+- optional node name valid/unique; otherwise auto-generate `CollisionShape2D`, `CollisionShape2D2`, …;
+- scene revision matches the turn.
+
+Recipe operations:
+
+```text
+create_node(CollisionShape2D, name)
+create_resource(RectangleShape2D, {size: Vector2(width, height)})
+add_child(parent, node)
+set_owner(node, root)
+set_property(node, "shape", resource)
+```
+
+The executor turns these into one undo action with a readable name such as "Add CollisionShape2D (32×48)". The recipe remains the only place that knows those classes and properties.
+
+## Undo and lifetime
+
+- One recipe expands to one action on the edited scene's history (root context).
+- `create_node` + `add_child`: do `add_child`, undo `remove_child`, `add_do_reference(node)` to keep the orphaned node alive for redo and free it when the redo stack is discarded.
+- `create_resource`: the action's property operation holds the resource reference; do not free it manually.
+- `set_property`: capture the old value; do/undo property pair; redo restores the new value and resource.
+- `set_owner`: undo restores the previous owner (root for new nodes; null when removed).
+- Postcondition: every created node is in the tree with the expected owner/class; every property equals the planned value; exactly one history entry was added.
+- If a postcondition fails, undo the action. If the undo cannot be verified, report `outcome_unknown` with the visible state.
+
+## Result and errors
 
 ```json
 {
@@ -108,10 +134,9 @@ If a postcondition fails, undo the action through the scene history. If the undo
   "ok": true,
   "summary": "Added CollisionShape2D under Player with an owned 32x48 RectangleShape2D.",
   "data": {
-    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "playing": false},
-    "node_path": "Player/CollisionShape2D",
-    "owner": ".",
-    "shape": {"class": "RectangleShape2D", "size": [32, 48]},
+    "recipe": "add_rectangular_collision_shape",
+    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "session_revision": "history:43", "dirty": true, "playing": false},
+    "created": {"nodes": ["Player/CollisionShape2D"], "resources": ["Player/CollisionShape2D:shape"]},
     "dirty": true
   },
   "affected": [
@@ -124,109 +149,90 @@ If a postcondition fails, undo the action through the scene history. If the undo
 }
 ```
 
-`undo_group` is the ledger token. The editor history entry uses a readable action name. Story 07 records the token; story 08 can surface undo/redo history.
+`undo_group` is the ledger token. The editor history entry uses a readable action name. The result's `session_revision` is read after commit, so a follow-up read-only inspection matches the new dirty version. Story 07 records the token; story 08 can surface undo/redo history.
 
-### Error codes
+Generic codes: `unknown_recipe`, `invalid_arguments`, `no_scene`, `scene_not_saved`, `scene_dirty`, `stale_scene`, `class_not_found`, `class_not_instantiable`, `invalid_operation`, `invalid_parent`, `target_missing`, `outside_scene`, `read_only_instance`, `target_conflict`, `invalid_name`, `name_conflict`, `property_missing`, `property_not_writable`, `type_mismatch`, `resource_incompatible`, `undo_failed`, `outcome_unknown`.
 
-| Code | Condition |
-| --- | --- |
-| `no_scene` | No edited scene |
-| `scene_not_saved` | Scene has no path or is unsaved |
-| `stale_scene` | Scene path/revision/root changed since inspection |
-| `target_missing` | Parent path no longer exists |
-| `outside_scene` | Parent is outside the edited scene |
-| `invalid_parent` | Parent is not a `CollisionObject2D` |
-| `read_only_instance` | Parent is inside a non-editable instance |
-| `target_conflict` | A direct `CollisionShape2D` already exists |
-| `invalid_dimensions` | Non-finite, non-positive, or out-of-range size |
-| `invalid_node_name` | Invalid explicit name |
-| `name_conflict` | Explicit name already used and not auto-resolvable |
-| `undo_failed` | The action could not be committed or undone |
-| `outcome_unknown` | Postcondition failed and rollback could not be verified |
+Recipe-specific validation returns its own codes (for example `invalid_parent`, `target_conflict`, `invalid_dimensions`) through the same error envelope. A failure before commit creates no node, resource, or undo entry. `outcome_unknown` is the only code that may leave a visible partial state.
 
-All errors return no scene change and no undo entry, except `outcome_unknown`, which explicitly reports that the visible state may have changed.
+## Genericity test
 
-## Undo and redo behavior
+Register two **test-only** recipes in the fixture, not exposed to the model:
 
-- One action creates the node, sets ownership, assigns the shape, and sets its size. One undo removes the node; one redo restores it with the same resource.
-- The resource is embedded in the scene on save; no separate `.tres` is written.
-- The action must belong to the edited scene's history, not the global history, so the correct scene undoes it.
-- Undo/redo does not require reselecting the node. Tests use the scene history and normal editor controls.
-- Saving the scene does not break undo/redo within the session. Reopening loads the saved result but starts a new history; this is expected.
+1. `add_marker_2d(parent_path)` — create a `Marker2D` under a `Node2D`; one node, no resource, one undo action.
+2. `add_capsule_collision_shape(parent_path, radius, height)` — create a `CollisionShape2D` with a `CapsuleShape2D`; same executor, different recipe data.
+
+Both must run without editing the transaction executor or undo code. This proves the framework is recipe-driven and that the collision-shape acceptance case is not special-cased. Test recipes live only in test fixtures; product scope remains the first recipe.
 
 ## Slices
 
-### Slice A — macro schema and validation
+### Slice A — transaction model and generic executor
 
-Define the tool schema and the pre-commit validation pipeline using story 05's scene identity, path resolution, and ownership helpers. Include parent class, ownership, conflict, dimension, name, and revision checks.
+Define the operation types, object/target resolution, generic validation, undo action construction, reference lifetimes, commit, postcondition checks, and rollback. No recipes yet; test with synthetic operation lists.
 
-Gate: deterministic validation fixtures cover every error code; no node, resource, or undo entry is created for any failure.
+Gate: synthetic transactions create nodes/resources, validate class/property/ownership rules, commit one undo action, undo/redo cleanly, and reject invalid operations without partial state.
 
-Deliverables: macro provider definition, validation helpers, error results.
+Deliverables: transaction executor, operation validators, undo tests.
 
-### Slice B — undoable commit
+### Slice B — recipe interface and first recipe
 
-Implement node/resource creation, the `EditorUndoRedoManager` action, do/undo methods and properties, object reference lifetime, commit, and postcondition verification. Add rollback for postcondition failure.
+Add the recipe definition/registry and implement `add_rectangular_collision_shape` as a recipe. The recipe owns parent compatibility, conflict, dimensions, name, and operation construction.
 
-Gate: one node and one owned `RectangleShape2D` are created; exactly one history entry exists; undo removes and redo restores node, owner, shape, and size. No leaked node after undo/redo cycles.
+Gate: the recipe produces the expected operation list; model-facing parameters are validated; no class-specific logic appears in the executor.
 
-Deliverables: commit implementation, undo/redo tests.
+Deliverables: recipe registry, first recipe, recipe fixtures.
 
-### Slice C — ownership, instancing, and conflicts
+### Slice C — no-partial, undo/redo, and persistence
 
-Implement root-owned parent enforcement, instanced-parent rejection, existing-shape conflict handling, explicit/auto node names, and scene revision recheck immediately before commit. Include running-scene reporting.
+Add before/after snapshots for every failure path, save/reopen checks, and the displayed scene-tree check. Verify one undo removes and one redo restores the node, owner, shape, and size.
 
-Gate: instanced/read-only parents and existing shapes are rejected with no mutation; auto names are unique; a scene switch between inspection and execution returns `stale_scene`.
+Gate: WS-01/02/13 pass through fixed recipe calls; every failure leaves node count, child count, resource count, selection, and history unchanged; the saved/reopened scene is correct.
 
-Deliverables: ownership/conflict handlers and fixtures.
+Deliverables: no-partial tests, undo/redo cycles, save/reopen fixture.
 
-### Slice D — no-partial-change and persistence
+### Slice D — genericity fixture and integration
 
-Add before/after snapshots (node count, child count, resource count, property values, undo history count) for every failure path. Verify the successful macro persists through save/reopen and appears correctly in the editor scene tree.
+Add the test-only Marker2D and CapsuleShape2D recipes and run them through the same executor. Expose recipe definitions/handlers to story 07 (`definitions()`/`execute()`) with `risk: "mutating"` and the structured result/undo group. Story 07 remains the only model-facing registry.
 
-Gate: every failure leaves no partial node/resource/undo entry; a saved and reopened scene contains exactly one correct CollisionShape2D; the scene is marked dirty until saved.
+Gate: the second and third recipes require no executor changes; 07 can consume the provider unchanged; fixed calls pass without a model.
 
-Deliverables: no-partial tests, save/reopen fixture, displayed scene-tree check.
+Deliverables: genericity fixtures, provider interface, integration notes.
 
-### Slice E — integration and handoff
+### Slice E — handoff
 
-Expose the macro through the same provider interface as 05 (`definitions()`/`execute()`), with `risk: "mutating"`, availability (saved scene), and the structured result/undo group. Story 07 composes it into the registry and sends one macro call. Do not add generic scene-edit tools.
-
-Gate: 07's registry can consume the definition unchanged; fixed tool calls pass without a model; WS-01/02/13 are satisfied at the executor level.
-
-Deliverables: provider interface, integration notes, work-item/STATUS handoff.
+Record the operation contract, recipe examples, error matrix, undo/redo evidence, save/reopen result, and remaining recipe gaps. Update the work item and STATUS.
 
 ## Scenario mapping
 
 | Scenario | Slice | Check |
 | --- | --- | --- |
-| WS-01 rectangular collision shape | B, D, E | One node + owned RectangleShape2D; size 32×48; save/reopen; one undo/redo; no script |
-| WS-02 incompatible parent or deleted target | A, C, D | Explicit error; no node/resource/undo entry; no selection substitution |
-| WS-13 scene switch between planning and execution | C | `stale_scene`; no mutation in the wrong scene |
-| Instanced/inherited ownership | C | Root-owned parent accepted; non-editable instance rejected |
-| Read-only inspection unaffected | D | 05 hash/node/undo assertions still pass |
+| WS-01 rectangular collision shape | B, C | One node + owned RectangleShape2D; 32×48; save/reopen; one undo/redo; no script |
+| WS-02 incompatible parent or deleted target | B, C | Explicit error; no node/resource/undo entry; no selection substitution |
+| WS-13 scene switch between planning and execution | B, C | `stale_scene`; no mutation in the wrong scene |
+| Generic executor (new recipe) | D | Test-only Marker2D/Capsule recipes run without executor edits |
+| Read-only inspection unaffected | C | 05 hash/node/undo assertions still pass |
 
 ## Open questions and recommended decisions
 
-1. **Existing CollisionShape2D.** Recommend rejecting with `target_conflict` for v1; the user can select or remove the existing shape. Adding a second shape is valid in Godot but is a different request.
-2. **Instanced parents.** Recommend allowing only the edited root or root-owned nodes. Editable-children support is a later scope; silently editing an instance is a risk.
-3. **Auto-save.** Recommend never saving automatically. The macro marks the scene dirty; the user saves, matching normal editor behavior.
-4. **Selection.** Recommend not changing the selection in v1. The chat reports the new node path; selecting would require saving/restoring the previous selection inside the action.
-5. **Undo token vs action name.** Recommend a Tiiny ledger token plus a readable editor action name (for example "Add CollisionShape2D (32×48)").
-6. **Node name.** Recommend an optional explicit name with an auto-generated unique fallback; invalid explicit names are errors, not silently rewritten.
-7. **Editing while playing.** Recommend allowing edits to the edited scene and reporting `playing: true`; do not sync to the running scene. Runtime editing is a later debugger feature.
-8. **Unsupported shapes.** Recommend `RectangleShape2D` only in 06. Capsule/circle/polygon recipes belong to later resource stories.
+1. **Generic transaction tool for the model.** Recommend no in 06. The model calls named recipes; arbitrary operation lists are a later, separately validated capability.
+2. **Product recipe count.** Recommend only the collision-shape recipe in 06; use test-only recipes to prove genericity. New product recipes belong to later stories (animation, physics, resources).
+3. **Existing CollisionShape2D.** Recipe-level conflict: reject and ask the user to select or remove the existing shape. Not an executor rule.
+4. **Root-owned parents only.** Recommended for v1; editable instanced children are a later recipe/validation extension.
+5. **Auto-save and selection.** No automatic save; no selection change. Dirty scenes are inspectable, but recipes require a clean scene (`scene_dirty`). The result reports the new node path.
+6. **Editing while playing.** Allow edits to the edited scene, report `playing`, never sync to the running scene.
+7. **Recipe location.** Editor-owned scripts under `editor/tiiny/tools/recipes/`, registered by a recipe registry. Test recipes live in fixtures.
+8. **Future operations.** Delete, reparent, and generic property writes need their own validation and undo semantics; do not add them by widening `set_property` casually.
 
 ## Dependencies and risks
 
-- **Story 05:** saved-scene identity, path/ownership helpers, and structured results. The macro reuses them and repeats all domain checks at execution.
-- **Undo API:** verify `create_action` history assignment, `add_do_reference` lifetime, and postcondition behavior in this build; tests must cover undo/redo cycles without leaks.
-- **Instanced/inherited scenes:** the main correctness risk. Root-owned parents only in v1.
-- **Resource lifetime:** the do/undo property pair must keep the `RectangleShape2D` alive for redo; do not free it manually.
-- **Scene dirty state:** the macro changes the scene but not the file. Reports must distinguish "applied" from "saved".
-- **Model orchestration:** 07 owns tool availability, prompt, ledger, and macro-first selection. 06 does not send tools to the model.
-- **Scope control:** no generic property writes, deletion, reparenting, scripts, or asset imports. Those are later stories.
+- **Story 05:** saved-scene identity, path/ownership helpers. The executor repeats all domain checks at execution.
+- **Undo API:** verify history assignment, reference lifetimes, and postcondition behavior; test undo/redo cycles.
+- **Generic property safety:** only recipes declare properties. If a generic transaction tool is added later, it needs an explicit allowlist/type system; do not expose raw `set_property` to the model.
+- **Resource compatibility:** check `PropertyInfo.class_name` and actual value classes; do not trust the recipe alone.
+- **Instanced/inherited scenes:** root-owned parents only in v1.
+- **Scene dirty state:** the executor changes the scene but not the file. Dirty inspection is allowed after the edit; further mutations require saving (`scene_dirty`). Reports distinguish applied from saved.
+- **Scope:** one product recipe in 06; the transaction executor is the reusable part.
 
 ## Handoff
 
-Planning only. No build, test, or device operation was performed. Implementation starts after 05's provider foundation, with slice A (validation) and slice B (undoable commit). Record the tool contract, error matrix, no-partial evidence, undo/redo cycles, save/reopen result, and any API limitations in the work item and STATUS.
+Planning only. No build, test, or device operation was performed. Implementation starts with the generic executor (slice A), then the recipe interface and first recipe (B), followed by no-partial/undo/persistence (C) and the genericity fixture/integration (D). Record the operation contract, recipe examples, error matrix, undo/redo cycles, save/reopen result, and remaining recipe gaps in the work item and STATUS.

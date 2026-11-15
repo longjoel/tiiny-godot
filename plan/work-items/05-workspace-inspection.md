@@ -16,6 +16,8 @@ Implementation: [plan](../implementation/05-workspace-inspection.md). Visuals: [
 
 Expose the actual edited scene, selection, classes, properties, resources, ownership, and signals as structured context.
 
+Scenes must be saved at least once. Dirty scenes are inspectable and report a dirty flag plus a session revision from the editor undo history; never-saved scenes return `scene_not_saved`. Mutations require a clean scene.
+
 ## Acceptance criteria
 
 - [ ] Tools return scene identity, scene-relative node identifiers, classes, and relevant ownership for a test scene.

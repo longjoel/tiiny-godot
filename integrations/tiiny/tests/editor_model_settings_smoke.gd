@@ -56,6 +56,21 @@ func _test_inventory_failures() -> bool:
 	fake.responses["/api/v1/models/online_models"] = {"data": [null]}
 	await fake.refresh_device()
 	if fake.connected or fake.busy: return false
+	# Verify distinct failure states and a later read-only recovery through the
+	# real manager path; the fake refuses any SDK mutation.
+	for failure in ["Device request failed (connection 0, HTTP 401).", "Device request failed (connection 1, HTTP 0)."]:
+		fake.responses["/api/v1/models/online_models"] = {"error": failure}
+		await fake.refresh_device()
+		if fake.connected or fake.is_ready() or not fake.snapshot.is_empty() or not fake.plan.is_empty(): return false
+		if fake.last_error_type != ("auth" if "401" in failure else "disconnect"): return false
+		if "401" in failure and not fake.message.contains("authentication failed"): return false
+	fake.responses["/api/v1/models/online_models"] = {"data": []}
+	fake.responses["/api/v1/models/npu/status"] = {"data": {"npu_total": 0, "npu_used": 0, "models": []}}
+	await fake.refresh_device()
+	if fake.connected or fake.is_ready() or fake.last_error_type != "capacity" or not fake.snapshot.is_empty(): return false
+	fake.responses["/api/v1/models/npu/status"] = {"data": {"npu_total": 100, "npu_used": 0, "models": []}}
+	await fake.refresh_device()
+	if not fake.connected or fake.busy or fake.is_ready() or fake.last_error_type != "": return false
 	fake.queue_free()
 	await get_tree().process_frame
 	print("Offline inventory failures terminate without readiness or SDK execution.")
@@ -71,7 +86,7 @@ func _test_apply_contract() -> bool:
 	if fake.operation_log.size() != progress_count: return false
 	var settings := EditorInterface.get_editor_settings()
 	settings.set_setting("tiiny_ai/models/coding_model", "code")
-	var fixture := {"models": {"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"], "npu": 47, "bytes": 100, "installed": true, "max_context": 32768}, "image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0}}, "loaded": {"code": 47, "image": 23}, "npu_total": 100, "npu_used": 70, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "fixture"}
+	var fixture := {"models": {"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"], "npu": 47, "bytes": 100, "installed": true, "max_context": 32768}, "image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0}}, "loaded": {"code": 47, "image": 23}, "npu_total": 100, "npu_used": 70, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "f".repeat(64)}
 	fake.fixture_state = fixture.duplicate(true)
 	fake.draft_initialized = true
 	fake.draft = {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
@@ -172,6 +187,12 @@ func _run() -> void:
 		if not manager.connected:
 			_fail("Live read-only refresh failed: " + manager.message)
 			return
+		var find_model := OS.get_environment("TIINY_TEST_FIND_MODEL").strip_edges().to_lower()
+		if not find_model.is_empty():
+			for id in manager.snapshot.models:
+				var model: Dictionary = manager.snapshot.models[id]
+				if find_model in str(id).to_lower() or find_model in str(model.get("name", "")).to_lower():
+					print("Matching device model: ", {"id": id, "type": model.get("type"), "supported": model.get("supported"), "installed": model.get("installed"), "loaded": manager.snapshot.loaded.has(id), "npu": model.get("npu"), "max_context": model.get("max_context")})
 		if OS.get_environment("TIINY_TEST_LIVE_INFERENCE") == "1":
 			var checks = load("res://test_stabilization.gd").new()
 			var original_warm: Array = manager.snapshot.loaded.keys()
@@ -190,9 +211,17 @@ func _run() -> void:
 		else:
 			await manager.check_config()
 			if not manager.plan.get("ok", false):
-				_fail("Live read-only Check Config did not pass: " + str(manager.plan.get("errors", [])))
-				return
-			print("Live read-only inventory and Check Config passed; no Apply was invoked.")
+				var errors: Array = Array(manager.plan.get("errors", []))
+				var capacity_only := not errors.is_empty()
+				for error in errors:
+					if not ("NPU" in str(error) or "SSD" in str(error)):
+						capacity_only = false
+				if not capacity_only or manager.is_ready():
+					_fail("Live read-only Check Config did not pass: " + str(errors))
+					return
+				print("Live read-only inventory passed; Check Config correctly rejected insufficient capacity: ", errors, "; no Apply was invoked.")
+			else:
+				print("Live read-only inventory and Check Config passed; no Apply was invoked.")
 	else:
 		if get_tree().get_nodes_in_group("tiiny_ai_editor_dock").size() != 1 or get_tree().get_nodes_in_group("tiiny_setup_manager").size() != 1:
 			_fail("Expected one built-in chat dock and one manager at startup.")
