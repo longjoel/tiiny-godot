@@ -29,6 +29,9 @@
 /**************************************************************************/
 
 #include "editor_node.h"
+#include "tiiny_ai_dock_source.h"
+#include "tiiny_ai_manager_source.h"
+#include "core/object/script_language.h"
 
 #include "core/config/engine.h"
 #include "core/config/project_settings.h"
@@ -9395,6 +9398,7 @@ EditorNode::EditorNode() {
 
 	// Instantiate and place editor docks.
 
+
 	memnew(SceneTreeDock(scene_root, editor_selection, editor_data));
 	editor_dock_manager->add_dock(SceneTreeDock::get_singleton());
 
@@ -9435,6 +9439,49 @@ EditorNode::EditorNode() {
 
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
+
+	// Tiiny AI is built into the editor and does not depend on project files.
+	if (ClassDB::class_exists("GDScript")) {
+		Ref<Script> tiiny_script = Ref<Script>(Object::cast_to<Script>(ClassDB::instantiate("GDScript")));
+		if (tiiny_script.is_valid()) {
+			tiiny_script->set_source_code(String::utf8(TIINY_AI_DOCK_SOURCE));
+			if (tiiny_script->reload() == OK) {
+				VBoxContainer *tiiny_content = memnew(VBoxContainer);
+				tiiny_content->set_name("Tiiny Assistant");
+				tiiny_content->set_script(tiiny_script);
+				tiiny_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
+				EditorDock *tiiny_dock = memnew(EditorDock);
+				tiiny_dock->set_title("Tiiny Chat");
+				tiiny_dock->set_default_slot(EditorDock::DOCK_SLOT_RIGHT_UL);
+				tiiny_dock->add_child(tiiny_content);
+				editor_dock_manager->add_dock(tiiny_dock);
+			} else {
+				ERR_PRINT("Could not load the built-in Tiiny AI dock script.");
+			}
+		}
+	}
+
+
+
+	// Only the Models screen anchor is visible; the inspector supplies its custom UI.
+	EDITOR_DEF_BASIC("tiiny_ai/models/configuration", "");
+	// The setup manager owns the Tiiny model configuration across projects.
+	if (ClassDB::class_exists("GDScript")) {
+		Ref<Script> manager_script = Ref<Script>(Object::cast_to<Script>(ClassDB::instantiate("GDScript")));
+		if (manager_script.is_valid()) {
+			manager_script->set_source_code(String::utf8(TIINY_AI_MANAGER_SOURCE));
+			if (manager_script->reload() == OK) {
+				VBoxContainer *manager_content = memnew(VBoxContainer);
+				manager_content->set_name("Tiiny Models");
+				manager_content->set_script(manager_script);
+				manager_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
+				manager_content->hide();
+				add_child(manager_content);
+			} else {
+				ERR_PRINT("Could not load the Tiiny setup manager.");
+			}
+		}
+	}
 
 	center_split->connect(SceneStringName(resized), callable_mp(this, &EditorNode::_vp_resized));
 

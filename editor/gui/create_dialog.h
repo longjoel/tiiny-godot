@@ -36,6 +36,8 @@ class Button;
 class EditorHelpBit;
 class FilterLineEdit;
 class ItemList;
+class TextEdit;
+class Label;
 class Tree;
 class TreeItem;
 
@@ -81,6 +83,12 @@ class CreateDialog : public ConfirmationDialog {
 	MenuButton *filters_button = nullptr;
 	ItemList *recent = nullptr;
 	EditorHelpBit *help_bit = nullptr;
+	TextEdit *ai_prompt = nullptr;
+	Label *ai_status = nullptr;
+	bool ai_busy = false;
+	uint64_t ai_generation = 0;
+	Ref<Resource> ai_resource;
+	void _ai_completed(const Variant &p_resource, const String &p_error, uint64_t p_generation);
 
 	HashMap<String, TreeItem *> search_options_types;
 	HashMap<String, String> custom_type_parents;

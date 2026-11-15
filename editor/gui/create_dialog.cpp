@@ -46,8 +46,15 @@
 #include "scene/gui/item_list.h"
 #include "scene/gui/menu_button.h"
 #include "scene/gui/tree.h"
+#include "scene/gui/text_edit.h"
+#include "scene/main/scene_tree.h"
 
 void CreateDialog::popup_create(bool p_dont_clear, bool p_replace_mode, const String &p_current_type, const String &p_current_name) {
+	ai_generation++;
+	ai_prompt->clear();
+	ai_status->set_text("");
+	ai_busy = false;
+	ai_resource.unref();
 	_fill_type_list();
 
 	types_enabled[TYPE_BUILT_IN] = EditorSettings::get_singleton()->get_project_metadata("create_dialog", "built_in_enabled", true);
@@ -548,6 +555,21 @@ void CreateDialog::_cleanup() {
 }
 
 void CreateDialog::_confirmed() {
+	if (ai_busy) {
+		return;
+	}
+	if (ai_resource.is_null() && ai_prompt->is_editable() && !ai_prompt->get_text().strip_edges().is_empty()) {
+		Node *dock = get_tree()->get_first_node_in_group("tiiny_ai_editor_dock");
+		if (!dock) {
+			ai_status->set_text(TTR("Tiiny AI dock is unavailable."));
+			return;
+		}
+		ai_busy = true;
+		get_ok_button()->set_disabled(true);
+		ai_status->set_text(TTR("Generating resource with Tiiny AI…"));
+		dock->call("generate_shape_for_dialog", ai_prompt->get_text(), callable_mp(this, &CreateDialog::_ai_completed).bind(ai_generation));
+		return;
+	}
 	String selected_item = get_selected_type_name();
 	if (selected_item.is_empty()) {
 		return;
@@ -684,6 +706,9 @@ void CreateDialog::select_type(const String &p_type, bool p_center_on_item) {
 	search_options->scroll_to_item(to_select, p_center_on_item);
 
 	help_bit->parse_symbol("class|" + p_type + "|");
+	bool can_generate = ClassDB::is_parent_class(base_type, "Resource") && get_selected_type() == "ConvexPolygonShape2D";
+	ai_prompt->set_editable(can_generate);
+	ai_prompt->set_placeholder(can_generate ? TTR("Describe the resource to generate, or leave blank for normal creation.") : TTR("AI generation is not available for this resource type."));
 
 	favorite->set_disabled(false);
 	favorite->set_pressed(favorite_list.has(p_type));
@@ -737,7 +762,31 @@ void CreateDialog::set_base_type(const String &p_base) {
 	is_base_type_node = ClassDB::is_parent_class(p_base, "Node");
 }
 
+void CreateDialog::_ai_completed(const Variant &p_resource, const String &p_error, uint64_t p_generation) {
+	if (!ai_busy || !is_visible() || p_generation != ai_generation) {
+		return;
+	}
+	ai_busy = false;
+	get_ok_button()->set_disabled(false);
+	if (get_selected_type() != "ConvexPolygonShape2D") {
+		ai_status->set_text(TTR("Selection changed while generating; please try again."));
+		return;
+	}
+	Ref<Resource> result = p_resource;
+	if (result.is_null()) {
+		ai_status->set_text(p_error);
+		return;
+	}
+	ai_resource = result;
+	_confirmed();
+}
+
 Variant CreateDialog::instantiate_selected() {
+	if (ai_resource.is_valid()) {
+		Ref<Resource> result = ai_resource;
+		ai_resource.unref();
+		return result;
+	}
 	TreeItem *selected = search_options->get_selected();
 
 	if (!selected) {
@@ -777,6 +826,8 @@ void CreateDialog::_hide_requested() {
 }
 
 void CreateDialog::cancel_pressed() {
+	ai_busy = false;
+	ai_generation++;
 	_cleanup();
 }
 
@@ -1102,6 +1153,13 @@ CreateDialog::CreateDialog() {
 	VBoxContainer *vbc_desc = memnew(VBoxContainer);
 	vbc_desc->set_custom_minimum_size(Size2(300, 0) * EDSCALE);
 	vbc_desc->add_margin_child(TTR("Description:"), help_bit, true);
+	ai_prompt = memnew(TextEdit);
+	ai_prompt->set_custom_minimum_size(Size2(0, 70) * EDSCALE);
+	ai_prompt->set_editable(false);
+	vbc_desc->add_margin_child(TTR("Create with Tiiny AI (optional):"), ai_prompt);
+	ai_status = memnew(Label);
+	ai_status->set_autowrap_mode(TextServer::AUTOWRAP_WORD_SMART);
+	vbc_desc->add_child(ai_status);
 
 	vsc_right->add_child(vbc_desc);
 

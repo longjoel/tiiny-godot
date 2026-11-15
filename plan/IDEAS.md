@@ -1,0 +1,11 @@
+# Parked ideas
+
+Capture promising ideas here without interrupting the active item. Each entry should say what it enables, which existing item it relates to, and what evidence would justify moving it into the sequence. An entry is not authorization to implement it.
+
+The sequenced backlog already includes animation, debugging, and multi-model assets. Additional integration ideas below remain parked until their related item is active:
+
+- **Workspace recipe memory** (06, 08): persist successful operation recipes and resource provenance so the assistant can adapt a known Godot workflow. Promote after typed execution and repeatable acceptance tests exist; distinguish cached recipes from stale scene state.
+- **Project retrieval on Tiiny** (04, 06): use embeddings/reranking to find relevant scenes, resources, and documentation. Promote after a baseline demonstrates missed context; compare retrieval accuracy and latency against simple project search. Index updates must follow edits/imports.
+- **Device-aware job telemetry** (02, 09): incorporate SDK task status and measured load/inference time into scheduling and visible progress. The installed CLI exposes `tasks ls` and `bench`; verify their actual behavior before relying on them. Promote when the basic queue is reliable.
+- **Asset feedback loop** (08, 12): render generated resources in a controlled Godot scene and let a vision model propose bounded changes. Promote after asset import and workspace edits are validated. Judge both scene correctness and user-visible quality.
+- **Context and prompt-cache budgeting** (06, 09): reuse stable project context where the runtime supports it and measure latency across context sizes. Promote only after measuring actual SDK/runtime support; avoid assuming a cache exists.

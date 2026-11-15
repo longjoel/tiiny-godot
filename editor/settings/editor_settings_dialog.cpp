@@ -58,6 +58,7 @@
 #include "scene/gui/texture_rect.h"
 #include "scene/gui/tree.h"
 #include "scene/main/timer.h"
+#include "scene/main/scene_tree.h"
 
 void EditorSettingsDialog::ok_pressed() {
 	if (!EditorSettings::get_singleton()) {
@@ -1255,6 +1256,23 @@ bool EditorSettingsInspectorPlugin::parse_property(Object *p_object, const Varia
 	}
 
 	const String property = inspector->get_full_item_path(p_path);
+	// Models is an interactive, staged configuration screen rather than raw settings.
+	if (property.begins_with("tiiny_ai/models/")) {
+		if (property == "tiiny_ai/models/configuration") {
+			EditorNode *editor_node = EditorNode::get_singleton();
+			Node *manager = editor_node ? editor_node->get_tree()->get_first_node_in_group("tiiny_setup_manager") : nullptr;
+			if (manager && manager->has_method("create_configuration_panel")) {
+				Variant panel = manager->call("create_configuration_panel");
+				Control *control = Object::cast_to<Control>(panel.get_validated_object());
+				if (control) {
+					add_custom_control(control);
+				}
+			} else {
+				add_custom_control(memnew(Label(TTR("Tiiny model management is unavailable in this session."))));
+			}
+		}
+		return true;
+	}
 	if (!EditorSettings::get_singleton()->has_setting(property)) {
 		return false;
 	}
