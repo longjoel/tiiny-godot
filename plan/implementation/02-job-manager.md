@@ -1,6 +1,6 @@
 # Story 02 implementation plan — persistent FIFO queue
 
-Status: Planned; gated by story 01 acceptance.
+Status: Planned and eligible; story 01 is accepted. Implementation has not started.
 
 Parent: [story 02](../work-items/02-integration-job-manager.md). Visuals: [Jobs mockup](../mockups/02-jobs-panel.html), [diagrams](../mockups/02-job-manager-diagrams.md).
 
@@ -58,4 +58,4 @@ Gate: JOB-01 through JOB-06 pass, including controlled restarts around publicati
 
 ## Handoff
 
-Record checks against every parent acceptance criterion, exact binary/configuration, storage decisions, supported operations, restrictions, and remaining blockers. Keep story 01 active until accepted. This planning change starts no build and implements no queue.
+Record checks against every parent acceptance criterion, exact binary/configuration, storage decisions, supported operations, restrictions, and remaining blockers. Story 01 is accepted; this document remains a plan and implements no queue.

@@ -1,4 +1,6 @@
-# Godot Engine
+# Godot Engine — Tiiny fork
+
+This fork adds an editor-native Tiiny AI assistant. See the [Tiiny setup and verified capabilities](integrations/tiiny/README.md), [workspace assistant design](integrations/tiiny/WORKSPACE_ASSISTANT.md), and [implementation roadmap](plan/README.md).
 
 <p align="center">
   <a href="https://godotengine.org">

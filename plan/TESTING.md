@@ -22,7 +22,7 @@ For visual/audio quality, use structural checks first (valid imports, dimensions
 
 During active item 01, extract the embedded scripts for parsing, establish a small project fixture, and add fake responses for a successful chat/tool result and a malformed/failed request. Run the real-device chat/resource smoke checks separately. During items 05–06, add deterministic scene-operation and undo/redo tests before connecting those operations to model planning. Expand the fake service and scenario coverage with the corresponding implementation items; do not build the entire future harness ahead of the active milestone.
 
-The test harness described here is planned; this document does not claim it has been implemented or run.
+A focused harness exists at `integrations/tiiny/tests/check_model_configuration.py`: exact-source parsing, planner/panel checks, and optional editor settings/fake Apply/CLI smoke. Story 01 completion adds protocol/resource/process, real loopback HTTP, displayed UI and real chat/polygon evidence. FIFO, live image generation and real mutating Apply remain separate; consult the test README and completion report rather than treating this strategy as a passing test report.
 
 ## Early job-manager tests
 

@@ -8536,6 +8536,19 @@ HashMap<String, Variant> EditorNode::get_initial_settings() {
 	return settings;
 }
 
+static void _make_tiiny_settings_visible() {
+	// Embedded scripts register/migrate these settings during child _ready().
+	// Keep the connection section available without Godot's global advanced toggle.
+	EditorSettings *settings = EditorSettings::get_singleton();
+	for (const char *name : { "api_url", "api_key", "cli_path", "device_address", "system_prompt_extra", "request_timeout_seconds", "max_script_context_characters" }) {
+		String path = String("tiiny_ai/advanced/") + name;
+		if (settings->has_setting(path)) {
+			settings->set_basic(path, true);
+		}
+	}
+	settings->notify_property_list_changed();
+}
+
 EditorNode::EditorNode() {
 	DEV_ASSERT(!singleton);
 	singleton = this;
@@ -9482,6 +9495,8 @@ EditorNode::EditorNode() {
 			}
 		}
 	}
+
+	callable_mp_static(&_make_tiiny_settings_visible).call_deferred();
 
 	center_split->connect(SceneStringName(resized), callable_mp(this, &EditorNode::_vp_resized));
 

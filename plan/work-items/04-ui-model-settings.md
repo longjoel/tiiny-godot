@@ -1,6 +1,6 @@
 # 04 — Model roles, installed inventory, and warm selections
 
-Status: Active by explicit user redirection; staged configuration implementation under verification
+Status: Queued for broader UI/device acceptance; existing prototype UI is included in the accepted story 01 baseline.
 
 Feature: Model roles, installed inventory, and warm selections
 

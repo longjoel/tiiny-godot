@@ -48,6 +48,7 @@
 #include "scene/gui/tree.h"
 #include "scene/gui/text_edit.h"
 #include "scene/main/scene_tree.h"
+#include "scene/resources/2d/convex_polygon_shape_2d.h"
 
 void CreateDialog::popup_create(bool p_dont_clear, bool p_replace_mode, const String &p_current_type, const String &p_current_name) {
 	ai_generation++;
@@ -701,6 +702,14 @@ void CreateDialog::select_type(const String &p_type, bool p_center_on_item) {
 		return;
 	}
 
+	if (ai_selected_type != p_type) {
+		ai_selected_type = p_type;
+		ai_generation++;
+		ai_busy = false;
+		ai_resource.unref();
+		ai_prompt->clear();
+		ai_status->set_text("");
+	}
 	TreeItem *to_select = search_options_types[p_type];
 	to_select->select(0);
 	search_options->scroll_to_item(to_select, p_center_on_item);
@@ -772,9 +781,9 @@ void CreateDialog::_ai_completed(const Variant &p_resource, const String &p_erro
 		ai_status->set_text(TTR("Selection changed while generating; please try again."));
 		return;
 	}
-	Ref<Resource> result = p_resource;
-	if (result.is_null()) {
-		ai_status->set_text(p_error);
+	Ref<ConvexPolygonShape2D> result = p_resource;
+	if (result.is_null() || result->get_points().size() < 3) {
+		ai_status->set_text(p_error.is_empty() ? TTR("Tiiny returned an invalid polygon resource.") : p_error);
 		return;
 	}
 	ai_resource = result;
@@ -1133,6 +1142,7 @@ CreateDialog::CreateDialog() {
 	filter_popup->connect(SceneStringName(id_pressed), callable_mp(this, &CreateDialog::_type_filter_toggled).bind(true));
 
 	search_options = memnew(Tree);
+	search_options->set_name("TypeOptions");
 	search_box->set_forward_control(search_options);
 	search_options->set_scroll_hint_mode(Tree::SCROLL_HINT_MODE_TOP);
 	search_options->set_accessibility_name(TTRC("Matches:"));
@@ -1154,6 +1164,7 @@ CreateDialog::CreateDialog() {
 	vbc_desc->set_custom_minimum_size(Size2(300, 0) * EDSCALE);
 	vbc_desc->add_margin_child(TTR("Description:"), help_bit, true);
 	ai_prompt = memnew(TextEdit);
+	ai_prompt->set_name("TiinyResourcePrompt");
 	ai_prompt->set_custom_minimum_size(Size2(0, 70) * EDSCALE);
 	ai_prompt->set_editable(false);
 	vbc_desc->add_margin_child(TTR("Create with Tiiny AI (optional):"), ai_prompt);

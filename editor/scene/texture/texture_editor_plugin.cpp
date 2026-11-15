@@ -414,6 +414,10 @@ void EditorInspectorPluginTexture::parse_begin(Object *p_object) {
 	} else {
 		// Not a texture, try to load as an image.
 		Ref<Image> image(Object::cast_to<Image>(p_object));
+		// A newly created Image has no pixels yet and cannot have a preview.
+		if (image.is_null() || image->is_empty()) {
+			return;
+		}
 		texture = ImageTexture::create_from_image(image);
 
 		ERR_FAIL_COND_MSG(texture.is_null(), "Failed to create the texture from an invalid image.");

@@ -9,12 +9,12 @@ func _descendants(node: Node) -> Array[Node]:
 	for child in node.get_children(true): result.append_array(_descendants(child))
 	return result
 
-func _find_section(item: TreeItem) -> TreeItem:
+func _find_section(item: TreeItem, section := "tiiny_ai/models") -> TreeItem:
 	if item == null: return null
-	if item.get_metadata(0) == "tiiny_ai/models": return item
+	if item.get_metadata(0) == section: return item
 	var child := item.get_first_child()
 	while child:
-		var found := _find_section(child)
+		var found := _find_section(child, section)
 		if found: return found
 		child = child.get_next()
 	return null
@@ -22,6 +22,44 @@ func _find_section(item: TreeItem) -> TreeItem:
 func _fail(reason: String) -> void:
 	push_error(reason)
 	get_tree().quit(1)
+
+func _test_inventory_failures() -> bool:
+	var fake = load("res://fake_inventory_manager.gd").new()
+	get_tree().root.add_child(fake)
+	await fake.refresh_device()
+	if fake.busy or fake.connected or fake.is_ready() or not fake.plan.is_empty() or fake.requests.size() != 1: return false
+	await fake.check_config()
+	if fake.busy or fake.connected or not fake.plan.is_empty() or fake.requests.size() != 2: return false
+	# A valid empty catalog is available but cannot satisfy the required coding model.
+	fake.responses = {
+		"/api/v1/models/online_models": {"data": []},
+		"/api/v1/models/npu/status": {"data": {"npu_total": 100, "npu_used": 0, "models": []}},
+		"/api/v1/sys/storage": {"data": {"total_bytes": 100 * 1073741824, "remaining_bytes": 80 * 1073741824}}
+	}
+	await fake.refresh_device()
+	if not fake.connected or fake.is_ready() or fake.busy: return false
+	await fake.check_config()
+	if fake.plan.get("ok", true) or fake.busy: return false
+	# Invalid catalog envelopes and later capacity errors terminate; no fallback loop.
+	fake.responses["/api/v1/models/online_models"] = {"data": {}}
+	await fake.refresh_device()
+	if fake.connected or fake.busy or not fake.plan.is_empty(): return false
+	fake.responses["/api/v1/models/online_models"] = {"data": []}
+	fake.responses["/api/v1/models/npu/status"] = {"error": "Fixture capacity unavailable."}
+	var before: int = fake.requests.size()
+	await fake.check_config()
+	if fake.connected or fake.busy or fake.requests.size() - before != 2: return false
+	if not fake.message.contains("Fixture capacity unavailable"): return false
+	fake.responses["/api/v1/models/npu/status"] = {"data": {"npu_total": 100, "npu_used": 0, "models": "malformed"}}
+	await fake.refresh_device()
+	if fake.connected or fake.busy: return false
+	fake.responses["/api/v1/models/online_models"] = {"data": [null]}
+	await fake.refresh_device()
+	if fake.connected or fake.busy: return false
+	fake.queue_free()
+	await get_tree().process_frame
+	print("Offline inventory failures terminate without readiness or SDK execution.")
+	return true
 
 func _test_apply_contract() -> bool:
 	var fake = load("res://fake_manager.gd").new()
@@ -87,16 +125,67 @@ func _run() -> void:
 		if not manager.connected:
 			_fail("Live read-only refresh failed: " + manager.message)
 			return
-		await manager.check_config()
-		if not manager.plan.get("ok", false):
-			_fail("Live read-only Check Config did not pass: " + str(manager.plan.get("errors", [])))
-			return
-		print("Live read-only inventory and Check Config passed; no Apply was invoked.")
+		if OS.get_environment("TIINY_TEST_LIVE_INFERENCE") == "1":
+			var checks = load("res://test_stabilization.gd").new()
+			var original_warm: Array = manager.snapshot.loaded.keys()
+			original_warm.sort()
+			var live_error: String = await checks.run_live(self, manager, get_tree().get_first_node_in_group("tiiny_ai_editor_dock"))
+			await manager.refresh_device()
+			var final_warm: Array = manager.snapshot.get("loaded", {}).keys()
+			final_warm.sort()
+			print("Live final warm set: ", final_warm, "; unchanged: ", manager.connected and original_warm == final_warm)
+			if not manager.connected or original_warm != final_warm:
+				_fail("Could not verify the original Tiiny warm set after inference.")
+				return
+			if not live_error.is_empty():
+				_fail(live_error)
+				return
+		else:
+			await manager.check_config()
+			if not manager.plan.get("ok", false):
+				_fail("Live read-only Check Config did not pass: " + str(manager.plan.get("errors", [])))
+				return
+			print("Live read-only inventory and Check Config passed; no Apply was invoked.")
 	else:
+		if get_tree().get_nodes_in_group("tiiny_ai_editor_dock").size() != 1 or get_tree().get_nodes_in_group("tiiny_setup_manager").size() != 1:
+			_fail("Expected one built-in chat dock and one manager at startup.")
+			return
+		for property in EditorInterface.get_editor_settings().get_property_list():
+			if str(property.name).begins_with("tiiny_ai/advanced/") and not (int(property.usage) & PROPERTY_USAGE_EDITOR_BASIC_SETTING):
+				_fail("Tiiny configuration is hidden behind the global Advanced Settings switch.")
+				return
+			if str(property.name).begins_with("tiiny_ai/connection/") or str(property.name).begins_with("tiiny_ai/device/"):
+				_fail("Obsolete connection/device settings sections were reintroduced.")
+				return
+		if manager.busy or manager.connected or manager.is_ready() or not manager._connection().has("error"):
+			_fail("Fresh offline startup inherited a configured device or active operation.")
+			return
+		await manager.refresh_device()
+		if manager.busy or manager.connected or manager.is_ready() or not manager.plan.is_empty():
+			_fail("Unconfigured offline refresh did not terminate safely.")
+			return
+		if not await _test_inventory_failures():
+			_fail("Inventory failure contract failed.")
+			return
+		var protocol = load("res://test_chat_protocol.gd").new()
+		var protocol_error: String = await protocol.run(self)
+		if not protocol_error.is_empty():
+			_fail(protocol_error)
+			return
 		if not await _test_apply_contract():
 			_fail("Staged Apply contract failed.")
 			return
 		var assistant := get_tree().get_first_node_in_group("tiiny_ai_editor_dock")
+		# Check the script embedded in the binary as well as the extracted fixture.
+		assistant.request_stage = "answer"
+		assistant.pending_url = ""
+		assistant.send_button.disabled = true
+		assistant.shape_button.disabled = true
+		var invalid_call := {"id": "", "type": "function", "function": {"name": "create_gdscript", "arguments": JSON.stringify({"path": "res://binary_invalid.gd", "source": "extends Node\n"})}}
+		await assistant._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [invalid_call]}}]}).to_utf8_buffer())
+		if FileAccess.file_exists("res://binary_invalid.gd") or assistant.send_button.disabled or assistant.shape_button.disabled:
+			_fail("Built-in chat script did not reject the invalid tool call before mutation.")
+			return
 		var short_request := {"messages": [{"role": "user", "content": "hello"}]}
 		if not assistant._check_context_budget(short_request) or short_request.get("max_tokens") != 1024:
 			_fail("Context budget did not configure the response allowance.")
@@ -115,8 +204,14 @@ func _run() -> void:
 			_fail("CLI progress percentages did not reach the operation log.")
 			return
 		print("Nonblocking CLI runner passed with local stub, no real SDK invocation.")
+		var stabilization = load("res://test_stabilization.gd").new()
+		var stabilization_error: String = await stabilization.run(self, manager, assistant)
+		if not stabilization_error.is_empty():
+			_fail(stabilization_error)
+			return
 		# Opening the fixture panel must not touch the real device.
-		manager.snapshot = {"models": {}, "loaded": {}, "npu_total": 100, "npu_used": 0, "disk_total": 100 * 1073741824, "disk_free": 80 * 1073741824, "time": Time.get_ticks_msec()}
+		if OS.get_environment("TIINY_TEST_HTTP_URL").is_empty():
+			manager.snapshot = {"models": {}, "loaded": {}, "npu_total": 100, "npu_used": 0, "disk_total": 100 * 1073741824, "disk_free": 80 * 1073741824, "time": Time.get_ticks_msec()}
 		manager.connected = true
 	var opened := false
 	for node in _descendants(get_tree().root):
@@ -142,7 +237,11 @@ func _run() -> void:
 		if node is Tree:
 			var item := _find_section(node.get_root())
 			if item:
+				if _find_section(node.get_root(), "tiiny_ai/advanced") == null:
+					_fail("Advanced configuration section missing from normal settings view.")
+					return
 				item.select(0)
+				node.scroll_to_item(item)
 				node.item_selected.emit()
 				selected = true
 				break
@@ -156,6 +255,24 @@ func _run() -> void:
 	if panels != 1:
 		_fail("Expected exactly one custom model configuration panel, found %d." % panels)
 		return
-	print("Editor Models section smoke check passed (fixture data, no device mutation).")
+	var capture := OS.get_environment("TIINY_TEST_CAPTURE_DIR")
+	if not capture.is_empty():
+		dialog.size = Vector2i(1500, 900)
+		for count in range(5): await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		var image := dialog.get_texture().get_image()
+		if image == null or image.save_png(capture.path_join("settings-models.png")) != OK:
+			_fail("Displayed settings capture failed.")
+			return
+		dialog.hide()
+		get_tree().get_first_node_in_group("tiiny_ai_editor_dock").get_parent().make_visible()
+		for count in range(5): await get_tree().process_frame
+		await RenderingServer.frame_post_draw
+		image = get_tree().root.get_texture().get_image()
+		if image == null or image.save_png(capture.path_join("editor-chat.png")) != OK:
+			_fail("Displayed editor capture failed.")
+			return
+		print("Displayed editor/settings captures saved.")
+	print("Editor Models section smoke check passed (device mutations disabled).")
 	dialog.hide()
 	get_tree().quit()

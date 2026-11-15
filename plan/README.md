@@ -24,6 +24,6 @@ Completion requires recorded evidence for every acceptance criterion. If a crite
 
 Use [ACCEPTANCE_SCENARIOS.md](ACCEPTANCE_SCENARIOS.md) for concrete workspace outcomes and [TESTING.md](TESTING.md) for deterministic, editor, device, and model-evaluation layers. These supplement the criteria on each work item.
 
-Story 01 has a concrete [implementation plan](implementation/01-stabilize-prototype.md). Its successful build is recorded; runtime and device acceptance remain the active gate before job-manager work.
+Story 01 is accepted. Its [implementation plan](implementation/01-stabilize-prototype.md) and [completion evidence](evidence/01-completion.md) record the verified prototype, displayed editor checks, and real Tiiny chat/polygon results. Story 04's existing UI is stabilized as part of that baseline; its broader device/Apply acceptance is still separate.
 
-Story 02 has an [implementation plan](implementation/02-job-manager.md), [interactive Jobs mockup](mockups/02-jobs-panel.html), and [diagrams](mockups/02-job-manager-diagrams.md). It remains queued behind story 01 acceptance.
+Story 02 has an [implementation plan](implementation/02-job-manager.md), [interactive Jobs mockup](mockups/02-jobs-panel.html), and [diagrams](mockups/02-job-manager-diagrams.md). Story 01’s gate is satisfied; story 02 is eligible and remains queued.

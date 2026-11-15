@@ -1,0 +1,115 @@
+{
+  "created_utc": "2026-11-15T01:40:29.033458+00:00",
+  "mode": "offline",
+  "stages": [
+    {
+      "name": "binary_version",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.038
+    },
+    {
+      "name": "parse_manager.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.634
+    },
+    {
+      "name": "parse_chat.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.527
+    },
+    {
+      "name": "planner_panel",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.7
+    },
+    {
+      "name": "invalid_generated_script",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 1,
+      "expected_script_errors": 1,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.589
+    },
+    {
+      "name": "parse_test_stabilization.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.527
+    },
+    {
+      "name": "parse_test_chat_protocol.gd",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 0,
+      "elapsed_seconds": 0.507
+    },
+    {
+      "name": "editor_smoke",
+      "status": "passed",
+      "exit_code": 0,
+      "script_errors": 0,
+      "expected_script_errors": 0,
+      "engine_errors": 3,
+      "elapsed_seconds": 12.879
+    }
+  ],
+  "sources": {
+    "tiiny_ai_manager_source.h": "dbc846f61fcb833c3a308174eb87b716463302793230c9cb3a50ed99500e85f2",
+    "tiiny_ai_dock_source.h": "6598af0aef47ef7aa9a4ea9b908f58bb35aa8b0b3fdb0a43e9fd540e156a33c1"
+  },
+  "revision": "f4905e0242852415cf22e8daeed18e4fd960eb85",
+  "worktree": [
+    "M README.md",
+    " M editor/editor_node.cpp",
+    " M editor/gui/create_dialog.cpp",
+    " M editor/gui/create_dialog.h",
+    " M editor/scene/texture/texture_editor_plugin.cpp",
+    " M editor/tiiny_ai_dock_source.h",
+    " M editor/tiiny_ai_manager_source.h",
+    " M integrations/tiiny/README.md",
+    " M integrations/tiiny/tests/README.md",
+    " M integrations/tiiny/tests/check_model_configuration.py",
+    " M integrations/tiiny/tests/editor_model_settings_smoke.gd",
+    " M plan/README.md",
+    " M plan/STATUS.md",
+    " M plan/TESTING.md",
+    " M plan/implementation/01-stabilize-prototype.md",
+    " M plan/work-items/01-integration-stabilize.md",
+    " M plan/work-items/04-ui-model-settings.md",
+    "?? integrations/tiiny/tests/fake_chat.gd",
+    "?? integrations/tiiny/tests/fake_inventory_manager.gd",
+    "?? integrations/tiiny/tests/fake_resource_responder.gd",
+    "?? integrations/tiiny/tests/http_fixture.py",
+    "?? integrations/tiiny/tests/test_chat_protocol.gd",
+    "?? integrations/tiiny/tests/test_invalid_script.gd",
+    "?? integrations/tiiny/tests/test_stabilization.gd",
+    "?? plan/evidence/"
+  ],
+  "binary": {
+    "path": "/var/home/longjoel/Projects/tiiny-godot/bin/godot.linuxbsd.editor.x86_64",
+    "sha256": "44ba0d73bb8d005ecbae5fc83bafccfe014d65a6dedae9be61e5950e9470fc7d",
+    "version": "4.8.beta.custom_build.f4905e024"
+  }
+}

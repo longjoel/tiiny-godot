@@ -1,6 +1,6 @@
 # 02 — Persistent FIFO job queue
 
-Status: Queued; first foundational feature after stabilization
+Status: Queued and eligible; story 01 baseline accepted
 
 Feature: Persistent FIFO jobs and execution visibility
 
@@ -31,7 +31,7 @@ Example: append `create_tree`, then append `attach_tree_to_scene`, with an expli
 
 ## Implementation plan and visuals
 
-Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). These are design artifacts; story 01 remains active.
+Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). These are design artifacts; story 01 is accepted and job-manager implementation has not started.
 
 ## Evidence and handoff
 

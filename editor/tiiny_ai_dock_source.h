@@ -36,11 +36,13 @@ var request_stage := ""
 var pending_prompt := ""
 var pending_key := ""
 var pending_url := ""
+var pending_host := ""
 var pending_model := ""
 var conversation: Array[Dictionary] = []
 var turn_messages: Array[Dictionary] = []
 var turn_system := ""
 var tool_rounds := 0
+var tool_call_ids: Array[String] = []
 var resource_requests := 0
 const CATEGORIES := ["code", "asset", "debug", "general"]
 
@@ -119,6 +121,15 @@ func _ready() -> void:
 		_generate()
 	)
 	add_child(send_button)
+	var new_conversation := Button.new()
+	new_conversation.text = "New conversation"
+	new_conversation.pressed.connect(func():
+		if is_inference_busy(): return
+		conversation.clear()
+		turn_messages.clear()
+		_set_status("New conversation started. Previous results remain in the output.")
+	)
+	add_child(new_conversation)
 	shape_button = Button.new()
 	shape_button.text = "Generate ConvexPolygonShape2D"
 	shape_button.pressed.connect(func():
@@ -144,6 +155,7 @@ func _ready() -> void:
 	save_shape.pressed.connect(_choose_shape_path)
 	add_child(save_shape)
 	request = HTTPRequest.new()
+	request.body_size_limit = 16 * 1024 * 1024
 	request.timeout = _request_timeout()
 	request.request_completed.connect(_request_completed)
 	add_child(request)
@@ -219,18 +231,31 @@ func _check_context_budget(payload: Dictionary) -> bool:
 	_set_status("Request exceeds the selected conservative context budget. Shorten the request/context or increase Context in Tiiny AI > Models. Image token usage is estimated.")
 	return false
 
+func _inference_connection() -> Dictionary:
+	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+	return manager.inference_connection() if manager != null else {"error": "Tiiny device manager is unavailable."}
+
+static func _inference_headers(key: String, host: String) -> PackedStringArray:
+	var headers := PackedStringArray(["Content-Type: application/json", "Authorization: Bearer " + key])
+	if not host.is_empty(): headers.append("Host: " + host)
+	return headers
+
 func _manager_ready() -> bool:
 	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
 	return manager != null and manager.is_ready()
 
 func _generate() -> void:
+	if is_inference_busy(): return
 	if not _manager_ready():
 		_set_status("Refresh Tiiny AI > Models and ensure the configured scripting model is loaded. Use Check Config and Apply to change it.")
 		return
-	pending_key = str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/api_key")).strip_edges()
-	if pending_key.is_empty():
-		pending_key = OS.get_environment("TIINY_API_KEY").strip_edges()
-	pending_url = str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/api_url")).strip_edges().trim_suffix("/")
+	var connection := _inference_connection()
+	if connection.has("error"):
+		_set_status(connection.error)
+		return
+	pending_key = connection.key
+	pending_url = connection.url
+	pending_host = connection.host
 	pending_model = _coding_model()
 	pending_prompt = prompt.text.strip_edges()
 	if not (pending_url.begins_with("http://") or pending_url.begins_with("https://")) or pending_key.is_empty() or pending_model.is_empty() or pending_prompt.is_empty():
@@ -283,6 +308,7 @@ func _send_chat(system: String, user: String, with_image := false) -> void:
 		turn_messages = conversation.duplicate(true)
 		turn_messages.append({"role": "user", "content": content})
 		tool_rounds = 0
+		tool_call_ids.clear()
 		messages.append_array(turn_messages)
 	else:
 		messages.append({"role": "user", "content": content})
@@ -291,8 +317,7 @@ func _send_chat(system: String, user: String, with_image := false) -> void:
 		payload["tools"] = ResourceToolLibrary.definitions()
 		payload["tool_choice"] = "auto"
 	if not _check_context_budget(payload): return
-	var body := JSON.stringify(payload)
-	var error := request.request(pending_url + "/chat/completions", ["Content-Type: application/json", "Authorization: Bearer " + pending_key], HTTPClient.METHOD_POST, body)
+	var error := _submit_chat(payload)
 	if error != OK:
 		send_button.disabled = false
 		shape_button.disabled = false
@@ -340,14 +365,13 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 		shape_button.disabled = false
 		_set_status("Connection failed (result %d). Check the device and URL." % result)
 		return
-	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	var json := JSON.new()
+	var parsed: Variant = json.data if json.parse(body.get_string_from_utf8()) == OK else null
 	if response_code < 200 or response_code >= 300:
 		send_button.disabled = false
 		shape_button.disabled = false
-		var message := "HTTP %d" % response_code
-		if parsed is Dictionary and parsed.get("error") is Dictionary:
-			message += ": " + str(parsed["error"].get("message", "Request failed"))
-		_set_status(message)
+		# Server error bodies can echo credentials or image payloads. Log only status.
+		_set_status("Device request failed (HTTP %d)." % response_code)
 		return
 	if not parsed is Dictionary or not parsed.get("choices") is Array or parsed["choices"].is_empty():
 		send_button.disabled = false
@@ -355,29 +379,45 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 		_set_status("The device returned an unexpected response.")
 		return
 	var choice: Variant = parsed["choices"][0]
+	if not choice is Dictionary or not choice.get("message") is Dictionary or choice.message.get("role") != "assistant":
+		send_button.disabled = false
+		shape_button.disabled = false
+		_set_status("The response did not contain an assistant message.")
+		return
 	if choice is Dictionary and choice.get("message") is Dictionary and request_stage == "answer":
 		var calls: Variant = choice.message.get("tool_calls", [])
-		if calls is Array and not calls.is_empty():
-			if calls.size() != 1 or not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or not calls[0].get("id") is String or tool_rounds >= 4:
+		if calls == null: calls = []
+		if not calls is Array:
+			send_button.disabled = false
+			shape_button.disabled = false
+			_set_status("The response contained malformed tool calls.")
+			return
+		if not calls.is_empty():
+			if calls.size() != 1 or not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128 or calls[0].get("type") != "function" or tool_call_ids.has(calls[0].id) or tool_rounds >= 4:
 				send_button.disabled = false
 				shape_button.disabled = false
-				_set_status("The model requested unsupported tool calls or exceeded the tool limit.")
+				_set_status("The model requested invalid, repeated, or unsupported tool calls, or exceeded the tool limit.")
 				return
 			var function: Dictionary = calls[0].function
-			var arguments: Variant = JSON.parse_string(str(function.get("arguments", "")))
-			if not arguments is Dictionary:
+			var argument_json := JSON.new()
+			if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
 				send_button.disabled = false
 				shape_button.disabled = false
 				_set_status("The tool received invalid arguments.")
 				return
+			var arguments: Dictionary = argument_json.data
+			tool_call_ids.append(calls[0].id)
 			tool_rounds += 1
 			turn_messages.append(choice.message)
-			var tool_result := "Unsupported tool or invalid arguments."
-			if function.get("name") == "generate_image" and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
+			var tool_result := "Error: Unsupported tool or invalid arguments."
+			if function.get("name") == "generate_image" and arguments.size() == 1 and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
 				tool_result = await _generate_image_tool(arguments.prompt)
-			elif function.get("name") == "create_gdscript" and arguments.get("path") is String and arguments.get("source") is String:
+			elif function.get("name") == "create_gdscript" and arguments.size() == 2 and arguments.get("path") is String and arguments.get("source") is String:
 				tool_result = _create_script_tool(arguments.path, arguments.source)
 			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": tool_result})
+			# Preserve actual tool effects even when the continuation fails.
+			conversation = turn_messages.duplicate(true)
+			output.text += "\nTool: " + tool_result + "\n"
 			_set_status("Tool result: " + tool_result)
 			_continue_agent.call_deferred()
 			return
@@ -414,11 +454,15 @@ func _continue_agent() -> void:
 	messages.append_array(turn_messages)
 	var payload := {"model": pending_model, "messages": messages, "tools": ResourceToolLibrary.definitions(), "tool_choice": "auto", "stream": false}
 	if not _check_context_budget(payload): return
-	var error := request.request(pending_url + "/chat/completions", ["Content-Type: application/json", "Authorization: Bearer " + pending_key], HTTPClient.METHOD_POST, JSON.stringify(payload))
+	var error := _submit_chat(payload)
 	if error != OK:
 		send_button.disabled = false
 		shape_button.disabled = false
 		_set_status("Could not continue after tool execution (error %d)." % error)
+
+# Narrow HTTP boundary shared by initial requests and tool continuations.
+func _submit_chat(payload: Dictionary) -> int:
+	return request.request(pending_url + "/chat/completions", _inference_headers(pending_key, pending_host), HTTPClient.METHOD_POST, JSON.stringify(payload))
 
 func _create_script_tool(path: String, source: String) -> String:
 	var normalized := path.simplify_path()
@@ -449,7 +493,8 @@ func _generate_image_tool(description: String) -> String:
 	image_request.timeout = _request_timeout()
 	add_child(image_request)
 	var body := JSON.stringify({"model": image_model, "prompt": description, "n": 1, "size": "512x512", "response_format": "b64_json"})
-	var error := image_request.request(pending_url + "/images/generations", ["Content-Type: application/json", "Authorization: Bearer " + pending_key], HTTPClient.METHOD_POST, body)
+	image_request.body_size_limit = 28 * 1024 * 1024
+	var error := image_request.request(pending_url + "/images/generations", _inference_headers(pending_key, pending_host), HTTPClient.METHOD_POST, body)
 	if error != OK:
 		image_request.queue_free()
 		return "Error: Could not start image generation (error %d)." % error
@@ -457,12 +502,13 @@ func _generate_image_tool(description: String) -> String:
 	image_request.queue_free()
 	if response[0] != HTTPRequest.RESULT_SUCCESS or response[1] < 200 or response[1] >= 300:
 		return "Error: Image generation failed (connection %d, HTTP %d)." % [response[0], response[1]]
-	var data: Variant = JSON.parse_string(response[3].get_string_from_utf8())
+	var parser := JSON.new()
+	var data: Variant = parser.data if parser.parse(response[3].get_string_from_utf8()) == OK else null
 	if not data is Dictionary or not data.get("data") is Array or data.data.is_empty() or not data.data[0] is Dictionary or not data.data[0].get("b64_json") is String:
 		return "Error: Image generation returned an unsupported response."
 	var bytes := Marshalls.base64_to_raw(data.data[0].b64_json)
 	var image := Image.new()
-	if bytes.size() > 20 * 1024 * 1024 or image.load_png_from_buffer(bytes) != OK:
+	if bytes.size() > 20 * 1024 * 1024 or bytes.slice(0, 8) != PackedByteArray([137, 80, 78, 71, 13, 10, 26, 10]) or image.load_png_from_buffer(bytes) != OK:
 		return "Error: Image generation returned invalid PNG data."
 	var folder := "res://tiiny_generated"
 	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(folder)) != OK:
@@ -477,21 +523,21 @@ func generate_shape_for_dialog(description: String, callback: Callable) -> void:
 	if not _manager_ready():
 		callback.call(null, "Refresh Tiiny AI > Models and ensure the configured scripting model is loaded. Use Check Config and Apply to change it.")
 		return
-	var settings := EditorInterface.get_editor_settings()
-	var url := str(settings.get_setting("tiiny_ai/advanced/api_url")).strip_edges().trim_suffix("/")
-	var key := str(settings.get_setting("tiiny_ai/advanced/api_key")).strip_edges()
-	if key.is_empty():
-		key = OS.get_environment("TIINY_API_KEY").strip_edges()
+	if is_inference_busy():
+		callback.call(null, "Wait for the current chat/resource request to finish.")
+		return
+	var connection := _inference_connection()
 	var model_id := _coding_model()
-	if key.is_empty() or model_id.is_empty() or not (url.begins_with("http://") or url.begins_with("https://")):
-		callback.call(null, "Configure the Tiiny API and configure the coding model in Editor Settings > Tiiny AI.")
+	if connection.has("error") or model_id.is_empty():
+		callback.call(null, str(connection.get("error", "Configure the coding model in Tiiny AI > Models.")))
 		return
 	var req := HTTPRequest.new()
 	req.timeout = _request_timeout()
+	req.body_size_limit = 1024 * 1024
 	add_child(req)
-	var body := JSON.stringify({"model": model_id, "messages": [{"role": "system", "content": "Generate a Godot ConvexPolygonShape2D. Return only JSON as an object with a points array of [x,y] number pairs, in local pixels. Use at least three and at most 64 distinct points. No markdown or explanation."}, {"role": "user", "content": description}], "stream": false})
+	var body := JSON.stringify({"model": model_id, "messages": [{"role": "system", "content": "Generate a Godot ConvexPolygonShape2D. Return only JSON as an object with a points array of [x,y] number pairs, in local pixels. Use at least three and at most 64 distinct points. No markdown or explanation."}, {"role": "user", "content": description}], "stream": false, "max_tokens": 1024, "chat_template_kwargs": {"enable_thinking": false}})
 	_set_status("Generating ConvexPolygonShape2D from Create Resource…")
-	var error := req.request(url + "/chat/completions", ["Content-Type: application/json", "Authorization: Bearer " + key], HTTPClient.METHOD_POST, body)
+	var error := req.request(connection.url + "/chat/completions", _inference_headers(connection.key, connection.host), HTTPClient.METHOD_POST, body)
 	if error != OK:
 		req.queue_free()
 		callback.call(null, "Could not start Tiiny request (error %d)." % error)
@@ -500,20 +546,22 @@ func generate_shape_for_dialog(description: String, callback: Callable) -> void:
 	var response: Array = await req.request_completed
 	resource_requests -= 1
 	req.queue_free()
+	if not callback.is_valid(): return
 	if response[0] != HTTPRequest.RESULT_SUCCESS or response[1] < 200 or response[1] >= 300:
 		_set_status("Resource generation failed (connection result %d, HTTP %d)." % [response[0], response[1]])
 		callback.call(null, "Tiiny request failed (connection result %d, HTTP %d)." % [response[0], response[1]])
 		return
-	var data: Variant = JSON.parse_string(response[3].get_string_from_utf8())
+	var parser := JSON.new()
+	var data: Variant = parser.data if parser.parse(response[3].get_string_from_utf8()) == OK else null
 	if not data is Dictionary or not data.get("choices") is Array or data.choices.is_empty() or not data.choices[0] is Dictionary or not data.choices[0].get("message") is Dictionary or not data.choices[0].message.get("content") is String:
 		_set_status("Resource generation returned an unexpected response.")
 		callback.call(null, "Tiiny returned an unexpected response.")
 		return
-	output.text = data.choices[0].message.content
-	var shape := _shape_from_output()
+	var shape := _shape_from_text(data.choices[0].message.content)
 	if shape == null:
 		callback.call(null, "Invalid shape response; see Tiiny dock and Output.")
 		return
+	output.text = data.choices[0].message.content
 	_set_status("Generated ConvexPolygonShape2D.")
 	callback.call(shape, "")
 
@@ -523,7 +571,11 @@ func _choose_shape_path() -> void:
 	shape_dialog.popup_file_dialog()
 
 func _shape_from_output() -> ConvexPolygonShape2D:
-	var data: Variant = JSON.parse_string(output.text)
+	return _shape_from_text(output.text)
+
+func _shape_from_text(text: String) -> ConvexPolygonShape2D:
+	var parser := JSON.new()
+	var data: Variant = parser.data if parser.parse(text) == OK else null
 	if not data is Dictionary or not data.get("points") is Array or data.points.size() < 3 or data.points.size() > 64:
 		_set_status("Shape output must be JSON with 3 to 64 points.")
 		return null

@@ -12,6 +12,7 @@ const CODING_DEFAULT := "Qwen/Qwen3.6-35B-A3B"
 const ROLES := {"coding_model": "Scripting", "image_model": "Image generation", "image_to_3d_model": "Image to 3D", "music_model": "Music", "speech_model": "Text to speech"}
 const ROLE_TYPES := {"coding_model": ["Text Generation", "Image-Text-to-Text"], "image_model": ["Text-to-Image"], "image_to_3d_model": ["Image-to-3D"], "music_model": ["Music Generation"], "speech_model": ["Text-to-Speech"]}
 const PLAN_LIFETIME := 60.0
+const SNAPSHOT_LIFETIME := 60.0
 var snapshot: Dictionary = {}
 var draft: Dictionary = {}
 var plan: Dictionary = {}
@@ -175,10 +176,21 @@ func _ready() -> void:
 		draft.roles[role] = {"model": str(settings.get_setting("tiiny_ai/models/" + role)), "context": int(settings.get_setting("tiiny_ai/models/context_tokens")) if role == "coding_model" else 0, "warm": role == "coding_model"}
 	if settings.has_setting("_tiiny_ai/applied_configuration"):
 		var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
-		if saved is Dictionary and saved.has("roles"):
+		if _valid_saved_draft(saved):
 			draft = saved.duplicate(true)
 			draft_initialized = true
+		else:
+			_report("Saved model configuration is invalid. Review Models and Check Config; no device changes were made.")
 	# No downloads, loads, or unloads at startup. The settings panel requests a read-only refresh.
+
+static func _valid_saved_draft(saved: Variant) -> bool:
+	if not saved is Dictionary or not saved.get("roles") is Dictionary or not saved.get("extra_warm") is Array: return false
+	for role in ROLES:
+		var choice: Variant = saved.roles.get(role)
+		if not choice is Dictionary or not choice.get("model") is String or not choice.get("context") is int or not choice.get("warm") is bool: return false
+	for id in saved.extra_warm:
+		if not id is String: return false
+	return (saved.get("npu_reserve") is int or saved.get("npu_reserve") is float) and (saved.get("disk_reserve_gib") is int or saved.get("disk_reserve_gib") is float)
 
 func create_configuration_panel() -> Control:
 	var panel := ConfigurationPanel.new()
@@ -187,10 +199,10 @@ func create_configuration_panel() -> Control:
 
 func is_ready() -> bool:
 	var coding_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model"))
-	return connected and not applying and snapshot.get("loaded", {}).has(coding_id)
+	return is_model_loaded(coding_id) and Planner.suitable("coding_model", snapshot.get("models", {}).get(coding_id, {}))
 
 func is_model_loaded(id: String) -> bool:
-	return connected and not applying and snapshot.get("loaded", {}).has(id)
+	return connected and not busy and not applying and not id.is_empty() and Time.get_ticks_msec() - int(snapshot.get("time", -100000)) <= SNAPSHOT_LIFETIME * 1000 and snapshot.get("loaded", {}).has(id)
 
 func _initialize_draft_from_snapshot() -> void:
 	if draft_initialized: return
@@ -220,19 +232,30 @@ func _connection() -> Dictionary:
 	var config_path := OS.get_environment("HOME").path_join(".local/tiiny/config.json")
 	var config: Dictionary = {}
 	if FileAccess.file_exists(config_path):
-		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config_path))
+		var parser := JSON.new()
+		var parsed: Variant = parser.data if parser.parse(FileAccess.get_file_as_string(config_path)) == OK else null
 		if parsed is Dictionary: config = parsed
 	var address := str(settings.get_setting("tiiny_ai/advanced/device_address")).strip_edges()
 	if address.is_empty(): address = str(config.get("deviceAddress", "")).strip_edges()
 	var key := str(settings.get_setting("tiiny_ai/advanced/api_key")).strip_edges()
 	if key.is_empty(): key = OS.get_environment("TIINY_API_KEY").strip_edges()
 	if key.is_empty(): key = str(config.get("account", {}).get("authKey", ""))
-	if address.is_empty(): return {"error": "Set Device / Address or connect the Tiiny SDK first."}
+	if address.is_empty(): return {"error": "Set Advanced / Device Address or connect the Tiiny SDK first."}
 	if key.is_empty(): return {"error": "Set the Tiiny API key or authenticate the SDK first."}
 	if address.contains("/") or address.contains(" "):
-		return {"error": "Device / Address must be a hostname or IP address, without a URL scheme or path."}
+		return {"error": "Advanced / Device Address must be a hostname or IP address, without a URL scheme or path."}
 	if address.count(":") > 1 and not address.begins_with("["): address = "[" + address + "]"
 	return {"base": "http://" + address.trim_suffix("/"), "key": key, "identity": (address + "|" + key).sha256_text()}
+
+func inference_connection() -> Dictionary:
+	var connection := _connection()
+	if connection.has("error"): return connection
+	var url := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/api_url")).strip_edges().trim_suffix("/")
+	if url == "http://openai.api.tiiny/v1":
+		return {"url": connection.base + "/v1", "key": connection.key, "host": "openai.api.tiiny"}
+	if not (url.begins_with("http://") or url.begins_with("https://")) or url.get_slice("/", 2) != connection.base.get_slice("/", 2):
+		return {"error": "API URL must address the configured Tiiny device, or use http://openai.api.tiiny/v1."}
+	return {"url": url, "key": connection.key, "host": ""}
 
 func _get_json(connection: Dictionary, path: String) -> Dictionary:
 	var req := HTTPRequest.new()
@@ -246,7 +269,8 @@ func _get_json(connection: Dictionary, path: String) -> Dictionary:
 	var result: Array = await req.request_completed
 	req.queue_free()
 	if result[0] != HTTPRequest.RESULT_SUCCESS or result[1] != 200: return {"error": "Device request failed (connection %d, HTTP %d)." % [result[0], result[1]]}
-	var parsed: Variant = JSON.parse_string(result[3].get_string_from_utf8())
+	var parser := JSON.new()
+	var parsed: Variant = parser.data if parser.parse(result[3].get_string_from_utf8()) == OK else null
 	if not parsed is Array and not parsed is Dictionary: return {"error": "The device returned invalid JSON."}
 	return {"data": parsed}
 
@@ -260,6 +284,16 @@ func _fetch_snapshot() -> Dictionary:
 	var storage := await _get_json(connection, "/api/v1/sys/storage")
 	if storage.has("error"): return storage
 	if not raw.data is Array or not npu.data is Dictionary or not storage.data is Dictionary: return {"error": "Unsupported Tiiny inventory/capacity response."}
+	for record in raw.data:
+		if not record is Dictionary or not record.get("model_id", record.get("fullname")) is String or not record.get("supported", []) is Array:
+			return {"error": "Malformed Tiiny catalog record."}
+	if not npu.data.get("models") is Array: return {"error": "Malformed loaded-model inventory."}
+	for record in npu.data.models:
+		if not record is Dictionary or not record.get("model_id") is String or not (record.get("npu_usage") is int or record.get("npu_usage") is float): return {"error": "Malformed loaded-model record."}
+	for pair in [[npu.data, "npu_total"], [npu.data, "npu_used"], [storage.data, "total_bytes"], [storage.data, "remaining_bytes"]]:
+		var value: Variant = pair[0].get(pair[1])
+		if not (value is int or value is float) or not is_finite(float(value)) or value < 0: return {"error": "Missing or invalid device capacity."}
+	if npu.data.npu_total <= 0 or npu.data.npu_used > npu.data.npu_total or storage.data.remaining_bytes > storage.data.total_bytes: return {"error": "Inconsistent device capacity."}
 	var result := Planner.normalize(raw.data, npu.data, storage.data)
 	result["connection"] = connection.identity
 	result["time"] = Time.get_ticks_msec()
@@ -425,11 +459,12 @@ func _run_cli(arguments: Array) -> int:
 	var process := OS.execute_with_pipe("timeout", PackedStringArray(command), false)
 	if process.is_empty(): return ERR_CANT_FORK
 	process_id = int(process.pid)
+	var running_id := process_id
 	progress_reports.clear()
 	operation_started = Time.get_ticks_msec()
 	var reader := ProgressReader.new()
 	var next_poll := operation_started
-	while OS.is_process_running(process_id):
+	while process_id == running_id and OS.is_process_running(running_id):
 		_drain_progress(process, reader, arguments)
 		if arguments[0] == "download" and Time.get_ticks_msec() >= next_poll:
 			await _poll_download_progress(connection, arguments)
@@ -438,17 +473,40 @@ func _run_cli(arguments: Array) -> int:
 	_drain_progress(process, reader, arguments)
 	for value in reader.feed(PackedByteArray(), true):
 		if arguments[0] != "download": _record_progress(arguments, value, "SDK")
-	var code := OS.get_process_exit_code(process_id)
+	var code := OS.get_process_exit_code(running_id) if process_id == running_id else ERR_SKIP
 	process_id = -1
 	if arguments[0] == "download": await _poll_download_progress(connection, arguments)
 	process.stdio.close()
 	process.stderr.close()
 	return code
 
+func _cli_descendants(pid: int) -> PackedStringArray:
+	var result := PackedStringArray()
+	var path := "/proc/%d/task/%d/children" % [pid, pid]
+	var children_file := FileAccess.open(path, FileAccess.READ)
+	if children_file != null:
+		for child in children_file.get_line().split(" ", false):
+			if child.strip_edges().is_valid_int():
+				result.append_array(_cli_descendants(int(child)))
+				result.append(child.strip_edges())
+	return result
+
+func stop_cli() -> void:
+	if process_id <= 0: return
+	var pid := process_id
+	process_id = -1
+	if OS.is_process_running(pid):
+		var children := _cli_descendants(pid)
+		# PTY workers may create their own session. Kill their PIDs as well as
+		# the owned root process group; never wait for a stubborn SDK at shutdown.
+		var arguments := PackedStringArray(["-KILL", "--"])
+		arguments.append_array(children)
+		arguments.append("-" + str(pid))
+		OS.execute("kill", arguments)
+		if OS.is_process_running(pid): OS.kill(pid) # Reap or finish the owned child.
+
 func _exit_tree() -> void:
-	if process_id > 0:
-		# timeout forwards TERM to its subprocess group; do not block editor shutdown.
-		OS.execute("kill", PackedStringArray(["-TERM", str(process_id)]))
+	stop_cli()
 
 class ConfigurationPanel extends VBoxContainer:
 	var manager: Node

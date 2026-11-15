@@ -87,6 +87,7 @@ class CreateDialog : public ConfirmationDialog {
 	Label *ai_status = nullptr;
 	bool ai_busy = false;
 	uint64_t ai_generation = 0;
+	String ai_selected_type;
 	Ref<Resource> ai_resource;
 	void _ai_completed(const Variant &p_resource, const String &p_error, uint64_t p_generation);
 
