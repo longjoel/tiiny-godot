@@ -79,36 +79,83 @@ func _test_apply_contract() -> bool:
 		fake.draft.roles[role] = {"model": "code" if role == "coding_model" else "image" if role == "image_model" else "", "context": 8192 if role == "coding_model" else 0, "warm": role == "coding_model"}
 	await fake.check_config()
 	if not fake.plan.get("ok", false) or not fake.calls.is_empty(): return false
-	await fake.apply_config()
+	await fake.fixture_apply_config()
 	if fake.calls != [["unload", "image"]] or not fake.fixture_state.loaded.has("code"): return false
 	# A stale device state invalidates the checked operations before any mutation.
 	fake.fixture_state = fixture.duplicate(true)
 	fake.calls.clear()
 	await fake.check_config()
 	fake.fixture_state.loaded.erase("image")
-	await fake.apply_config()
+	await fake.fixture_apply_config()
 	if not fake.calls.is_empty() or not fake.plan.is_empty(): return false
 	# A false-positive CLI success cannot pass post-operation verification.
 	fake.fixture_state = fixture.duplicate(true)
 	fake.calls.clear()
 	fake.omit_effect = true
 	await fake.check_config()
-	await fake.apply_config()
+	await fake.fixture_apply_config()
 	if not fake.plan.is_empty() or fake.applying or fake.busy: return false
 	if not fake.message.contains("did not confirm"): return false
 	# Expired checks never invoke the mutating adapter.
 	fake.calls.clear()
 	await fake.check_config()
 	fake.plan.checked_at = Time.get_ticks_msec() - 61000
-	await fake.apply_config()
+	await fake.fixture_apply_config()
 	if not fake.calls.is_empty() or not fake.plan.is_empty(): return false
 	fake.fail_command = true
 	fake.omit_effect = false
 	fake.fixture_state = fixture.duplicate(true)
 	fake.draft.roles.coding_model.context = 16384
 	await fake.check_config()
-	await fake.apply_config()
+	await fake.fixture_apply_config()
 	if not fake.message.contains("Operation failed") or int(settings.get_setting("tiiny_ai/models/context_tokens")) != 8192: return false
+	# Invalid coding capability and insufficient capacity are rejected before any SDK action.
+	fake.fail_command = false
+	fake.fixture_state = fixture.duplicate(true)
+	fake.calls.clear()
+	fake.fixture_state.models.code.supported = []
+	await fake.check_config()
+	if fake.plan.get("ok", true): return false
+	await fake.fixture_apply_config()
+	if not fake.calls.is_empty(): return false
+	fake.fixture_state = fixture.duplicate(true)
+	fake.fixture_state.npu_total = 40
+	await fake.check_config()
+	if fake.plan.get("ok", true) or not fake.calls.is_empty(): return false
+	# Zero exit status is insufficient for either download or load, including a partial load.
+	for mode in ["download", "load", "partial"]:
+		fake.fixture_state = fixture.duplicate(true)
+		fake.fixture_state.loaded.erase("image")
+		fake.fixture_state.models.image.installed = mode != "download"
+		fake.calls.clear()
+		fake.omit_effect = mode != "partial"
+		fake.partial_load = mode == "partial"
+		fake.draft.roles.image_model.warm = true
+		await fake.check_config()
+		if not fake.plan.get("ok", false): return false
+		await fake.fixture_apply_config()
+		if fake.calls.is_empty() or not fake.plan.is_empty() or fake.applying or fake.busy: return false
+		if mode == "partial" and not fake.message.contains("NPU allocation"): return false
+		if mode != "partial" and not fake.message.contains("did not confirm"): return false
+		if not fake.fixture_state.loaded.has("code"): return false
+	fake.omit_effect = false
+	fake.partial_load = false
+	fake.draft.roles.image_model.warm = false
+	# A post-operation authentication or disconnect failure cannot report readiness.
+	for failure in ["Device request failed (connection 0, HTTP 401).", "Device request failed (connection 1, HTTP 0)."]:
+		fake.fixture_state = fixture.duplicate(true)
+		fake.snapshot_error = ""
+		fake.error_after_command = failure
+		fake.calls.clear()
+		await fake.check_config()
+		if not fake.plan.get("ok", false): return false
+		await fake.fixture_apply_config()
+		if fake.connected or fake.is_ready() or fake.calls.is_empty() or not fake.plan.is_empty(): return false
+		if fake.last_error_type != ("auth" if "401" in failure else "disconnect"): return false
+		if not fake.snapshot.is_empty(): return false
+		if "401" in failure and not fake.message.contains("authentication failed"): return false
+	fake.snapshot_error = ""
+	fake.error_after_command = ""
 	fake.queue_free()
 	await get_tree().process_frame
 	print("Staged Apply contract passed with fake transport; no device mutation.")
@@ -198,6 +245,10 @@ func _run() -> void:
 		settings.set_setting("tiiny_ai/advanced/api_key", "fixture-key")
 		if await manager._run_cli(["load", "fixture-model"]) != 0:
 			_fail("Nonblocking CLI runner failed with the local stub.")
+			return
+		var cli_arguments := FileAccess.get_file_as_string("res://cli-arguments").strip_edges().split("\n")
+		if cli_arguments.size() != 5 or cli_arguments[0] != "--device-address" or cli_arguments[1] != "127.0.0.1" or cli_arguments[2] != "-y" or cli_arguments[3] != "load" or cli_arguments[4] != "fixture-model":
+			_fail("CLI management did not use the configured device address.")
 			return
 		if not Array(manager.operation_log).any(func(line): return "25.0% (SDK)" in line) or not Array(manager.operation_log).any(func(line): return "100.0% (SDK)" in line):
 			_fail("CLI progress percentages did not reach the operation log.")

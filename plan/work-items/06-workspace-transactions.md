@@ -1,6 +1,6 @@
 # 06 — Typed scene edits with grouped undo/redo
 
-Status: Queued
+Status: Planning complete; implementation is gated on story 05 (saved-scene identity, path/ownership inspection).
 
 Feature: Typed scene edits with grouped undo/redo
 
@@ -9,6 +9,8 @@ Sequence: 06
 Stream: `workspace`
 
 Dependencies: 05
+
+Implementation: [plan](../implementation/06-workspace-transactions.md). Visuals: [transaction diagrams](../mockups/06-workspace-transactions-diagrams.md). Tool contract: [story 07 orchestration plan](../implementation/07-orchestrator.md).
 
 ## Scope
 

@@ -14,7 +14,11 @@ def make_project(project):
     (project / "target.tscn").write_text('[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n')
     chat_source = (root / "editor/tiiny_ai_dock_source.h").read_text().split('R"TIINY_GD(\n', 1)[1].split(')TIINY_GD"', 1)[0]
     (project / "chat.gd").write_text(chat_source)
+    manager_source = (root / "editor/tiiny_ai_manager_source.h").read_text().split('R"TIINY_GD(\n', 1)[1].split(')TIINY_GD"', 1)[0]
+    (project / "manager.gd").write_text(manager_source)
+    shutil.copyfile(root / "integrations/tiiny/tests/fake_model_manager.gd", project / "fake_model_manager.gd")
     shutil.copyfile(root / "integrations/tiiny/tests/fake_queued_chat.gd", project / "fake_queued_chat.gd")
+    shutil.copyfile(root / "integrations/tiiny/tests/fake_restore_chat.gd", project / "fake_restore_chat.gd")
     addon = project / "addons/jobs_test"
     addon.mkdir(parents=True)
     shutil.copyfile(root / "integrations/tiiny/tests/editor_builtin_jobs.gd", addon / "plugin.gd")
@@ -42,7 +46,7 @@ def run_modes(project, modes):
         print(f"Built-in Jobs {mode} passed")
 
 with tempfile.TemporaryDirectory(prefix="tiiny-builtin-jobs-") as directory:
-    for name, modes in (("normal", ("create", "restore")), ("stale", ("stale",)), ("missing", ("missing",)), ("scene_recovery", ("scene_recovery",)), ("scene_restart", ("scene_prepare", "scene_restore")), ("chat", ("chat", "chat_restore")), ("resource_cancel", ("resource_cancel",)), ("worker_append", ("worker_append",))):
+    for name, modes in (("normal", ("create", "restore")), ("stale", ("stale",)), ("missing", ("missing",)), ("scene_recovery", ("scene_recovery",)), ("scene_restart", ("scene_prepare", "scene_restore")), ("chat", ("chat", "chat_restore")), ("chat_abandon", ("chat_abandon",)), ("resource_cancel", ("resource_cancel",)), ("worker_append", ("worker_append",)), ("model_apply", ("model_apply",)), ("model_wait_cancel", ("model_wait_cancel",)), ("model_failed", ("model_failed", "model_failed_restore")), ("model_restore", ("model_restore",)), ("model_restore_download", ("model_restore_download",)), ("model_restore_capacity", ("model_restore_capacity",)), ("model_preflight", ("model_preflight",)), ("model_resource_preflight", ("model_resource_preflight",)), ("model_preflight_cancel", ("model_preflight_cancel",)), ("model_restore_stale", ("model_restore_stale",))):
         if os.environ.get("TIINY_JOBS_ONLY_MODE") and name != os.environ["TIINY_JOBS_ONLY_MODE"]:
             continue
         project = Path(directory) / name

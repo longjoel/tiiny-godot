@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -104,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix="tiiny-model-config-") as directory:
         addon.mkdir(parents=True)
         (addon / "plugin.cfg").write_text('[plugin]\nname="Models smoke"\ndescription="Offline UI check"\nauthor="Tests"\nversion="1"\nscript="plugin.gd"\n')
         stub = fixture / "fake-tiiny"
-        stub.write_text("#!/bin/sh\nprintf '\\033[32m25%%\\033[0m\\r100%%\\n'\nexit 0\n")
+        stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shlex.quote(str(fixture / "cli-arguments")) + "\nprintf '\\033[32m25%%\\033[0m\\r100%%\\n'\nexit 0\n")
         stub.chmod(0o755)
         (fixture / "fake_inventory_manager.gd").write_text((Path(__file__).parent / "fake_inventory_manager.gd").read_text())
         (fixture / "fake_manager.gd").write_text((Path(__file__).parent / "fake_model_manager.gd").read_text())

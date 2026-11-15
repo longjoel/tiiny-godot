@@ -1,6 +1,6 @@
 # 03 — Device binding and protected coding-model lifecycle
 
-Status: Planning — [implementation plan](../implementation/03-device-lifecycle.md) drafted. Story 01 accepted; story 02 9 of 10 criteria verified.
+Status: In progress — user prioritized this item while story 02 remains unfinished. The prior source-text smoke test does not establish acceptance. See [implementation plan](../implementation/03-device-lifecycle.md).
 
 Feature: Device binding and protected coding-model lifecycle
 

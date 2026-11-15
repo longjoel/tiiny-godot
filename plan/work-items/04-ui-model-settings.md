@@ -1,6 +1,6 @@
 # 04 — Model roles, installed inventory, and warm selections
 
-Status: Queued for broader UI/device acceptance; existing prototype UI is included in the accepted story 01 baseline.
+Status: Planning complete; implementation is gated on story 03. The existing prototype UI is included in the accepted story 01 baseline.
 
 Feature: Model roles, installed inventory, and warm selections
 
@@ -9,6 +9,8 @@ Sequence: 04
 Stream: `ui`
 
 Dependencies: 03
+
+Implementation: [plan](../implementation/04-model-settings.md). Visuals: [interactive Models mockup](../mockups/04-model-settings.html), [state diagrams](../mockups/04-model-settings-diagrams.md).
 
 ## Scope
 

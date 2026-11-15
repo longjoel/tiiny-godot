@@ -212,6 +212,15 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	settings.set_setting("tiiny_ai/models/image_model", "fixture-image")
 	await manager.refresh_device()
 	if not manager.is_ready(): return "Real HTTP inventory/readiness failed."
+	settings.set_setting("tiiny_ai/advanced/device_address", "wrong-device")
+	if manager.is_ready() or manager.is_model_loaded("fixture-code"): return "Changed device retained readiness from the old snapshot."
+	settings.set_setting("tiiny_ai/advanced/device_address", base.trim_prefix("http://"))
+	settings.set_setting("tiiny_ai/advanced/api_key", "different-key")
+	if manager.is_ready(): return "Changed credentials retained readiness from the old snapshot."
+	settings.set_setting("tiiny_ai/advanced/api_key", "fixture-secret-key")
+	if manager._classify_error("Device request failed (connection 0, HTTP 401).") != "auth": return "Authentication failure was misclassified."
+	if manager._classify_error("Device request failed (connection 1, HTTP 0).") != "disconnect": return "Disconnect was misclassified."
+	if manager._classify_error("Insufficient NPU capacity") != "capacity": return "Capacity failure was misclassified."
 	var draft: Dictionary = manager.draft.duplicate(true)
 	draft.roles.coding_model = {"model": "fixture-code", "context": 8192, "warm": true}
 	draft.roles.image_model = {"model": "fixture-image", "context": 0, "warm": true}

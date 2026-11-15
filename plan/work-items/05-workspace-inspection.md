@@ -1,6 +1,6 @@
 # 05 — Read-only Godot workspace tools
 
-Status: Queued
+Status: Planning complete; implementation can start immediately (depends only on story 01).
 
 Feature: Read-only Godot workspace tools
 
@@ -9,6 +9,8 @@ Sequence: 05
 Stream: `workspace`
 
 Dependencies: 01
+
+Implementation: [plan](../implementation/05-workspace-inspection.md). Visuals: [inspection diagrams](../mockups/05-workspace-inspection-diagrams.md). Tool contract: [story 07 orchestration plan](../implementation/07-orchestrator.md).
 
 ## Scope
 

@@ -26,7 +26,7 @@ func _run() -> void:
 		_fail("Chat is not connected to the shared Jobs service")
 		return
 	var mode := OS.get_environment("TIINY_JOBS_TEST_MODE")
-	if mode != "chat_restore":
+	if mode not in ["chat_restore", "model_failed_restore"]:
 		var lease: String = jobs.acquire_device(self, "fixture")
 		if lease.is_empty() or chat._acquire_device("fixture chat") or jobs.release_device(self, "wrong") or not jobs.release_device(self, lease):
 			_fail("Shared device lease did not exclude competing owners")
@@ -43,7 +43,205 @@ func _run() -> void:
 			_fail("Model manager could not acquire released device lease")
 			return
 		model_manager._release_device()
-	if mode == "create":
+	if mode in ["model_apply", "model_failed", "model_wait_cancel"]:
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var fake = load("res://fake_model_manager.gd").new()
+		get_tree().root.add_child(fake)
+		var settings := EditorInterface.get_editor_settings()
+		settings.set_setting("tiiny_ai/models/coding_model", "code")
+		fake.fixture_state = {"models": {"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"], "npu": 47, "bytes": 100, "installed": true, "max_context": 32768}, "image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0}}, "loaded": {"code": 47, "image": 23}, "npu_total": 100, "npu_used": 70, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "a".repeat(64)}
+		fake.draft_initialized = true
+		fake.draft = {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+		for role in fake.ROLES:
+			fake.draft.roles[role] = {"model": "code" if role == "coding_model" else "image" if role == "image_model" else "", "context": 8192 if role == "coding_model" else 0, "warm": role == "coding_model"}
+		fake.omit_effect = mode == "model_failed"
+		await fake.check_config()
+		if not fake.plan.get("ok", false):
+			_fail("Could not check fake model configuration")
+			return
+		var competing_lease := ""
+		if mode == "model_wait_cancel":
+			competing_lease = jobs.acquire_device(self, "blocking fixture")
+			if competing_lease.is_empty():
+				_fail("Could not acquire competing fixture lease")
+				return
+		fake.apply_config()
+		var entries: Array = jobs.queue.snapshot().jobs
+		if entries.size() != 1 or entries[0].operation != "model_apply" or entries[0].state != "queued" or not fake.calls.is_empty():
+			_fail("Apply did not enter the shared FIFO before device work: " + str(entries) + " message=" + fake.message)
+			return
+		var id: String = entries[0].id
+		var deadline := Time.get_ticks_msec() + 15000
+		if mode == "model_wait_cancel":
+			while jobs.get_job_status(id).get("state") == "queued" and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			await get_tree().create_timer(0.1).timeout
+			if not jobs.executor.cancel_current():
+				_fail("Could not cancel model job waiting for device lease")
+				return
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var result: Dictionary = jobs.get_job_status(id)
+		if mode == "model_wait_cancel":
+			if result.state != "cancelled" or not fake.calls.is_empty() or not jobs.release_device(self, competing_lease):
+				_fail("Waiting model job did not cancel before any device command: " + str(result))
+				return
+			print("Built-in Jobs %s passed" % mode)
+			get_tree().quit(0)
+			return
+		var expected := "interrupted" if mode == "model_failed" else "completed"
+		if result.get("state") != expected or fake.calls != [["unload", "image"]] or not fake.fixture_state.loaded.has("code"):
+			_fail("Queued model Apply outcome incorrect: " + str(result) + " calls=" + str(fake.calls))
+			return
+		var operation: Dictionary = result.attempts.back().device_operations.back()
+		if operation.verb != "unload" or operation.model != "image" or operation.connection != "a".repeat(64) or operation.state != ("started" if mode == "model_failed" else "verified"):
+			_fail("Model operation journal incorrect: " + str(operation))
+			return
+		if mode == "model_apply":
+			var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+			if not saved is Dictionary or saved.get("roles", {}).get("coding_model", {}).get("model") != "code":
+				_fail("Verified coding model configuration was not persisted")
+				return
+			if JSON.stringify(result).contains("fixture-key"):
+				_fail("Device credentials were persisted in the model job")
+				return
+		if mode == "model_failed" and not jobs.acquire_device(self, "competing fixture").is_empty():
+			_fail("Uncertain model operation released the device lease")
+			return
+	elif mode == "model_failed_restore":
+		var entries: Array = jobs.queue.snapshot().jobs
+		if entries.size() != 1 or entries[0].state != "interrupted" or entries[0].attempts.back().device_operations.back().state != "started":
+			_fail("Uncertain model operation was not preserved on restart: " + str(entries))
+			return
+		if not jobs.acquire_device(self, "competing fixture").is_empty() or jobs.queue.resolve(entries[0].id, "retry"):
+			_fail("Interrupted model operation allowed blind retry or device access")
+			return
+	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight"]:
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var fake = load("res://fake_model_manager.gd").new()
+		get_tree().root.add_child(fake)
+		var settings := EditorInterface.get_editor_settings()
+		settings.set_setting("tiiny_ai/models/coding_model", "code")
+		fake.fixture_state = {"models": {"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"], "npu": 47, "bytes": 100, "installed": mode != "model_restore_download", "max_context": 32768}, "image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0}}, "loaded": {"image": 23}, "npu_total": 100, "npu_used": 80 if mode == "model_restore_capacity" else 23, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "b".repeat(64)}
+		var saved := {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+		for role in fake.ROLES:
+			saved.roles[role] = {"model": "code" if role == "coding_model" else "", "context": 8192 if role == "coding_model" else 0, "warm": role == "coding_model"}
+		settings.set_setting("_tiiny_ai/applied_configuration", saved)
+		fake.draft = saved.duplicate(true)
+		fake.draft_initialized = true
+		fake.next_restore_check_msec = Time.get_ticks_msec() + 60000
+		var deadline := Time.get_ticks_msec() + 15000
+		if mode in ["model_preflight", "model_preflight_cancel", "model_resource_preflight"]:
+			fake.wait_for_cancel = mode == "model_preflight_cancel"
+			var fake_chat = load("res://fake_restore_chat.gd").new()
+			add_child(fake_chat)
+			fake_chat.jobs_service = jobs
+			jobs.chat_service = fake_chat
+			var connection: Dictionary = fake_chat._inference_connection()
+			var hash: String = (connection.url + "|" + connection.host + "|" + connection.key).sha256_text()
+			var accepted: Dictionary
+			if mode == "model_resource_preflight":
+				accepted = jobs.append_job("preflight", "resource_shape", {"description": "triangle", "model": "code", "connection_hash": hash, "timeout_ms": 15000})
+			else:
+				accepted = jobs.append_job("preflight", "chat_turn", {"prompt": "hello", "context": "", "custom_prompt": "", "model": "code", "connection_hash": hash, "conversation": [], "timeout_ms": 15000})
+			if mode == "model_resource_preflight":
+				while fake_chat.resource_submissions.is_empty() and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				if fake_chat.resource_submissions.is_empty() or fake.calls != [["load", "code"]]:
+					_fail("Resource preflight did not restore the coding model: " + str(jobs.get_job_status(accepted.id)))
+					return
+				var response := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": '{"points":[[0,0],[32,0],[0,32]]}'}}]}).to_utf8_buffer()
+				fake_chat.resource_submissions[0].request_completed.emit(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), response)
+				while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				if jobs.get_job_status(accepted.id).get("state") != "completed":
+					_fail("Resource generation did not complete after restoration: " + str(jobs.get_job_status(accepted.id)))
+					return
+				print("Built-in Jobs %s passed" % mode)
+				get_tree().quit(0)
+				return
+			if mode == "model_preflight_cancel":
+				while fake.calls.is_empty() and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				if fake.calls.is_empty() or not jobs.executor.cancel_current():
+					_fail("Could not cancel running model preflight")
+					return
+				while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				var cancelled: Dictionary = jobs.get_job_status(accepted.id)
+				if cancelled.state != "interrupted" or not fake_chat.submissions.is_empty() or not jobs.acquire_device(self, "competing fixture").is_empty():
+					_fail("Cancelled preflight did not preserve uncertainty: " + str(cancelled))
+					return
+				print("Built-in Jobs %s passed" % mode)
+				get_tree().quit(0)
+				return
+			while fake_chat.submissions.is_empty() and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake_chat.submissions.is_empty() or fake.calls != [["load", "code"]]:
+				_fail("Running chat did not restore its coding model before inference: " + str(fake.calls) + " / " + str(jobs.get_job_status(accepted.id)))
+				return
+			var attempt: Dictionary = jobs.get_job_status(accepted.id).attempts.back()
+			if not attempt.get("device_started", false) or attempt.device_operations.back().state != "verified":
+				_fail("Chat preflight did not durably verify restoration")
+				return
+			var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+			await fake_chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+			while fake_chat.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			await fake_chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "done"}}]}).to_utf8_buffer())
+			while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(accepted.id).get("state") != "completed":
+				_fail("Chat did not complete after preflight restoration: " + str(jobs.get_job_status(accepted.id)))
+				return
+		else:
+			if mode == "model_restore_stale":
+				jobs.queue.set_paused(true)
+				await fake.refresh_device()
+				settings.set_setting("tiiny_ai/models/coding_model", "different-code")
+				jobs.queue.set_paused(false)
+			elif mode == "model_restore_download":
+				fake.snapshot_error = "Device request failed (connection 1, HTTP 0)."
+				await fake.refresh_device()
+				if fake.connected or not jobs.queue.snapshot().jobs.is_empty():
+					_fail("Disconnected device queued restoration")
+					return
+				fake.snapshot_error = ""
+				# The next monitor cycle detects reconnect without a manual refresh.
+				fake.next_restore_check_msec = 0
+			else:
+				# Exercise the automatic startup monitor rather than a manual refresh.
+				fake.next_restore_check_msec = 0
+			while jobs.queue.snapshot().jobs.is_empty() and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			var entries: Array = jobs.queue.snapshot().jobs
+			if entries.size() != 1 or entries[0].operation != "model_restore":
+				_fail("Coding restoration was not queued: " + str(entries) + " / " + fake.message)
+				return
+			var id: String = entries[0].id
+			while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			var result: Dictionary = jobs.get_job_status(id)
+			var expected := "failed" if mode == "model_restore_capacity" else "completed"
+			if result.state != expected or not fake.fixture_state.loaded.has("image"):
+				_fail("Coding restoration outcome incorrect: " + str(result) + " calls=" + str(fake.calls))
+				return
+			if mode == "model_restore_capacity":
+				if not fake.calls.is_empty() or fake.is_ready() or not fake.message.contains("capacity"):
+					_fail("Insufficient capacity caused mutation or readiness")
+					return
+			elif mode == "model_restore_stale":
+				if not fake.calls.is_empty():
+					_fail("An obsolete restoration mutated the device")
+					return
+			else:
+				var expected_calls := [["download", "code"], ["load", "code"]] if mode == "model_restore_download" else [["load", "code"]]
+				if fake.calls != expected_calls or not fake.is_ready():
+					_fail("Coding restoration did not verify the saved model: " + str(fake.calls) + " / " + fake.message)
+					return
+	elif mode == "create":
 		EditorInterface.open_scene_from_path("res://target.tscn")
 		for i in range(200):
 			if EditorInterface.get_edited_scene_root() != null and EditorInterface.get_edited_scene_root().scene_file_path == "res://target.tscn":
@@ -407,6 +605,41 @@ func _run() -> void:
 		if not jobs.acquire_device(self, "after timeout").is_empty():
 			_fail("Device lease was released despite an uncertain remote outcome")
 			return
+	elif mode == "chat_abandon":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		var store: RefCounted = jobs.get("queue")
+		fake.prompt.text = "Abandon after timeout"
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 10000
+		while fake.submissions.is_empty() and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.is_empty():
+			_fail("Abandon fixture did not dispatch")
+			return
+		var id: String = store.snapshot().jobs.back().id
+		await fake._request_completed(HTTPRequest.RESULT_TIMEOUT, 0, PackedStringArray(), PackedByteArray())
+		while jobs.get_job_status(id).get("state") == "running" and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(id).get("state") != "interrupted":
+			_fail("Timeout did not leave the device job interrupted")
+			return
+		if not jobs.acquire_device(self, "before abandon").is_empty():
+			_fail("Interrupted device job did not hold the lease")
+			return
+		if not store.abandon(id) or not store.snapshot().stop_reason.is_empty() or not store.snapshot().paused:
+			_fail("Interrupted device job could not be abandoned")
+			return
+		if not fake.release_uncertain_device(id):
+			_fail("Abandon did not release the recorded uncertainty")
+			return
+		var token: String = jobs.acquire_device(self, "after abandon")
+		if token.is_empty():
+			_fail("Device lease was not released after abandon")
+			return
+		jobs.release_device(self, token)
 	elif mode in ["stale", "missing"]:
 		EditorInterface.open_scene_from_path("res://target.tscn")
 		for i in range(200):

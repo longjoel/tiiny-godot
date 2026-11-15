@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Models — staged configuration mockup</title>
+<style>
+:root{
+  --bg:#242830; --panel:#2c313b; --panel2:#333945; --line:#4a5363; --text:#edf1f7; --muted:#aeb9c9;
+  --blue:#6fa8ff; --green:#7fd39a; --amber:#f2c26b; --red:#ff8a7a; --chip:#3a4454;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,sans-serif}
+main{max-width:1400px;margin:0 auto;padding:20px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:0 0 8px;color:#dce6f5}
+p{margin:6px 0}
+.note{color:var(--muted);font-size:13px}
+button{font:inherit;padding:6px 11px;background:var(--chip);color:inherit;border:1px solid #6b7a92;border-radius:4px;cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #a8caff;outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.scenarios{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}
+.scenarios button[aria-pressed="true"]{background:#40506a;border-color:#9db9e6}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0 16px}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;background:var(--chip);font-size:12px;border:1px solid var(--line)}
+.pill.ok{color:var(--green)} .pill.warn{color:var(--amber)} .pill.bad{color:var(--red)}
+#age{color:var(--muted);font-size:13px}
+.capacity{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}
+.card.stale{opacity:.62;border-style:dashed}
+.card h3{margin:0 0 6px;font-size:14px;color:#dce6f5}
+.bar{height:10px;background:#1e222a;border-radius:5px;overflow:hidden;margin:6px 0}
+.bar > span{display:block;height:100%;background:var(--blue)}
+.bar.projected > span{background:var(--amber)}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;color:var(--muted)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:8px 0 0}
+.chip{display:inline-block;padding:1px 7px;border-radius:999px;background:var(--chip);font-size:12px;border:1px solid var(--line)}
+.chip.loaded{color:var(--green)} .chip.downloaded{color:var(--blue)} .chip.missing{color:var(--amber)} .chip.bad{color:var(--red)}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel)}
+table{border-collapse:collapse;min-width:1060px;width:100%}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #3b4350;vertical-align:middle;white-space:nowrap}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#b9c6d8;background:#2a303a;position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+td small{display:block;color:var(--muted);font-size:11.5px;white-space:normal}
+select{font:inherit;appearance:none;-webkit-appearance:none;background-color:#232831;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%23aeb9c9'/></svg>");background-repeat:no-repeat;background-position:right 8px center;background-size:10px 6px;color:var(--text);border:1px solid #62708a;border-radius:4px;padding:4px 24px 4px 8px;max-width:250px}
+select option{background:#232831;color:var(--text)}
+select:disabled{opacity:.6}
+input[type=checkbox]{accent-color:#6fa8ff;width:15px;height:15px}
+.warnrow td{background:#332f24}
+.warnrow small{color:var(--amber)}
+.section{margin-top:16px}
+.plan{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}
+.plan ul{margin:6px 0 6px 20px;padding:0}
+.plan li{margin:3px 0}
+.errors{color:var(--red)} .warnings{color:var(--amber)} .oktext{color:var(--green)}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.spacer{flex:1}
+.progress{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px;margin-top:12px}
+.progress .bar > span{background:var(--green)}
+pre{background:#1d2128;border:1px solid #3a4250;border-radius:4px;padding:8px;max-height:130px;overflow:auto;white-space:pre-wrap;font-size:12px;color:#c9d4e4}
+.partial{border-color:#7a5a3a}
+dialog{background:#2b313b;color:var(--text);border:1px solid #6b7a92;border-radius:8px;width:min(720px,92vw);padding:0}
+dialog::backdrop{background:#0009}
+.dialog-body{padding:16px}
+.dialog-head{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);padding:12px 16px}
+.dialog-head h2{margin:0;flex:1}
+.dialog-text{width:100%;height:320px;resize:vertical;background:#20252d;color:var(--text);border:1px solid #4a5363;border-radius:4px;padding:8px;font:13px/1.5 ui-monospace,monospace}
+body.narrow main{max-width:620px}
+body.narrow .capacity{grid-template-columns:1fr}
+footer{color:var(--muted);font-size:12px;margin:22px 0 8px}
+</style>
+<main>
+  <h1>Tiiny AI — Models</h1>
+  <p class="note">Design mockup only. No device calls. Draft → Check Config → Apply; the coding model is always kept loaded.</p>
+  <nav class="scenarios" aria-label="Preview states">
+    <button data-scenario="fresh" aria-pressed="true">Fresh</button>
+    <button data-scenario="stale">Stale</button>
+    <button data-scenario="unavailable">Unavailable</button>
+    <button data-scenario="incompatible">Incompatible catalog</button>
+    <button data-scenario="download">Download plan</button>
+    <button data-scenario="applying">Applying</button>
+    <button data-scenario="partial">Partial failure</button>
+  </nav>
+  <div class="toolbar">
+    <span id="connection" class="pill ok">Connected</span>
+    <span id="age">Updated 12s ago</span>
+    <button id="refresh">Refresh</button>
+    <span class="spacer"></span>
+    <button id="width">Narrow preview</button>
+  </div>
+
+  <section class="capacity" aria-label="Capacity">
+    <div class="card" id="npuCard">
+      <h3>NPU allocation units</h3>
+      <div class="bar"><span id="npuBar"></span></div>
+      <div class="kv"><span id="npuNow">—</span><span id="npuProjected"></span></div>
+      <div class="kv"><span>Units are allocation, not RAM.</span><span id="npuReserve">Reserve 5</span></div>
+    </div>
+    <div class="card" id="ssdCard">
+      <h3>SSD</h3>
+      <div class="bar"><span id="ssdBar"></span></div>
+      <div class="kv"><span id="ssdNow">—</span><span id="ssdProjected"></span></div>
+      <div class="kv"><span>Includes one largest-download staging allowance.</span><span id="ssdReserve">Reserve 2 GiB</span></div>
+    </div>
+    <p class="legend"><span class="chip loaded">Loaded</span><span class="chip downloaded">Downloaded</span><span class="chip missing">Not downloaded</span><span class="chip bad">Unavailable</span></p>
+  </section>
+
+  <section class="section table-wrap" aria-label="Model roles">
+    <table>
+      <thead><tr><th>Task</th><th>Model</th><th>Context</th><th>Tok/s</th><th>SSD size</th><th>NPU units</th><th>Keep loaded</th><th>On device</th><th>Info</th></tr></thead>
+      <tbody id="roleRows"></tbody>
+    </table>
+  </section>
+
+  <section class="section plan" id="planBox" aria-live="polite"></section>
+  <section class="progress" id="progressBox" hidden aria-live="polite"></section>
+  <details class="section card"><summary>Advanced headroom (collapsed by default)</summary><p>Reserve NPU units and SSD GiB. Changes invalidate Check Config.</p></details>
+  <footer>Mockup states are illustrative; real values come from the device catalog and the pure planner.</footer>
+</main>
+
+<dialog id="infoDialog">
+  <div class="dialog-head"><h2 id="infoTitle">Model information</h2><button data-close="infoDialog">Close</button></div>
+  <div class="dialog-body"><textarea class="dialog-text" id="infoText" readonly></textarea></div>
+</dialog>
+<dialog id="planDialog">
+  <div class="dialog-head"><h2>Plan details</h2><button data-close="planDialog">Close</button></div>
+  <div class="dialog-body"><textarea class="dialog-text" id="planText" readonly></textarea></div>
+</dialog>
+
+<script>
+const MODELS = {
+  qwen36:{id:"Qwen/Qwen3.6-35B-A3B",name:"Qwen3.6 35B A3B",type:"Text Generation",supported:["Tool Use"],installed:true,loaded:true,npu:47,bytes:21.4,maxContext:32768,desc:"Coordinator model with tool use. Always kept loaded."},
+  qwen38:{id:"Qwen/Qwen3.8-35B-A3B",name:"Qwen3.8 35B A3B",type:"Text Generation",supported:["Tool Use"],installed:false,loaded:false,npu:47,bytes:24.1,maxContext:65536,desc:"Newer coordinator model. Requires a download and a protected switch."},
+  image:{id:"Qwen/Qwen-Image",name:"Qwen Image",type:"Text-to-Image",supported:[],installed:true,loaded:true,npu:23,bytes:12.8,maxContext:0,desc:"Warm image generator."},
+  image3d:{id:"Tripo/TripoSG",name:"TripoSG",type:"Image-to-3D",supported:[],installed:false,loaded:false,npu:20,bytes:9.6,maxContext:0,desc:"Image-to-3D generator. Not downloaded."},
+  music:{id:"Meta/MusicGen",name:"MusicGen",type:"Music Generation",supported:[],installed:false,loaded:false,npu:18,bytes:4.2,maxContext:0,desc:"Music generation model."},
+  tts:{id:"Kokoro/TTS",name:"Kokoro",type:"Text-to-Speech",supported:[],installed:false,loaded:false,npu:8,bytes:1.1,maxContext:0,desc:"Speech synthesis model."},
+  other:{id:"Meta/Llama-3-8B",name:"Llama 3 8B",type:"Text Generation",supported:["Tool Use"],installed:true,loaded:false,npu:22,bytes:8.0,maxContext:8192,desc:"Installed but not assigned to a role."}
+};
+const ROLE_DEFS = [
+  {key:"coding_model",label:"Scripting",hint:"Text Generation · Tool Use required",types:["Text Generation","Image-Text-to-Text"],toolUse:true,locked:true},
+  {key:"image_model",label:"Image generation",hint:"Text-to-Image",types:["Text-to-Image"]},
+  {key:"image_to_3d_model",label:"Image to 3D",hint:"Image-to-3D",types:["Image-to-3D"]},
+  {key:"music_model",label:"Music",hint:"Music Generation",types:["Music Generation"]},
+  {key:"speech_model",label:"Text to speech",hint:"Text-to-Speech",types:["Text-to-Speech"]}
+];
+let roles = [
+  {key:"coding_model",selected:"qwen36",context:8192,warm:true},
+  {key:"image_model",selected:"image",context:0,warm:true},
+  {key:"image_to_3d_model",selected:"",context:0,warm:false},
+  {key:"music_model",selected:"",context:0,warm:false},
+  {key:"speech_model",selected:"",context:0,warm:false}
+];
+const state={scenario:"fresh",stale:false,disconnected:false,incompatible:false,catalog:"full",plan:null,applying:false,progress:0,failed:false,completed:[],failedOp:"",log:[],age:12};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const model=id=>MODELS[id]||null;
+function catalogIds(){
+  return Object.keys(MODELS).filter(id=>state.catalog==="full"||MODELS[id].type==="Text-to-Image");
+}
+function candidates(role){
+  const def=ROLE_DEFS.find(r=>r.key===role.key); const out=[];
+  for(const id of catalogIds()){const m=MODELS[id];
+    if(!def.types.includes(m.type))continue;
+    if(def.toolUse&&!m.supported.includes("Tool Use"))continue;
+    out.push(id);
+  }
+  return out.sort((a,b)=>MODELS[a].name.localeCompare(MODELS[b].name));
+}
+function warmIds(){const ids=[];for(const r of roles){if(r.selected&&(r.warm||r.key==="coding_model"))ids.push(r.selected);}return [...new Set(ids)];}
+function loadedIds(){return catalogIds().filter(id=>MODELS[id].loaded);}
+function stateChip(m){if(!m)return '<span class="chip">—</span>';if(m.loaded)return '<span class="chip loaded">Loaded</span>';if(m.installed)return '<span class="chip downloaded">Downloaded</span>';return '<span class="chip missing">Not downloaded</span>';}
+function setScenario(name){
+  state.scenario=name; state.stale=false; state.disconnected=false; state.incompatible=false; state.catalog="full";
+  state.plan=null; state.applying=false; state.progress=0; state.failed=false; state.completed=[]; state.failedOp=""; state.log=[]; state.age=12;
+  MODELS.image3d.installed=false; MODELS.image3d.loaded=false;
+  roles=[
+    {key:"coding_model",selected:"qwen36",context:8192,warm:true},
+    {key:"image_model",selected:"image",context:0,warm:true},
+    {key:"image_to_3d_model",selected:"",context:0,warm:false},
+    {key:"music_model",selected:"",context:0,warm:false},
+    {key:"speech_model",selected:"",context:0,warm:false}
+  ];
+  if(name==="stale"){state.stale=true;state.age=78;}
+  if(name==="unavailable"){state.disconnected=true;}
+  if(name==="incompatible"){state.incompatible=true;state.catalog="imageOnly";roles[0].selected="";roles[1].selected="image";roles[1].warm=true;state.plan=makePlan();}
+  if(name==="download"||name==="applying"||name==="partial"){roles[2].selected="image3d";roles[2].warm=true;}
+  if(name==="applying"||name==="partial"){state.plan=makePlan();state.applying=name==="applying";state.progress=42;state.log=["Download Tripo/TripoSG · 42.0% (device) · 18s elapsed"];}
+  if(name==="partial"){MODELS.image3d.installed=true;state.applying=false;state.failed=true;state.completed=["Download Tripo/TripoSG"];state.failedOp="Load Tripo/TripoSG";state.log.push("Load Tripo/TripoSG…","Tiiny did not confirm the requested load. Stopped before the next operation.");}
+  render();
+}
+function makePlan(){
+  if(state.disconnected)return {ok:false,errors:["Device unavailable. Refresh or check Advanced settings."],actions:[],warnings:[]};
+  if(state.incompatible||!roles[0].selected)return {ok:false,errors:["Choose a scripting model with Tool Use; none in this catalog."],actions:[],warnings:[]};
+  const actions=[]; const warm=warmIds(); const loaded=loadedIds();
+  for(const id of loaded){if(!warm.includes(id)&&id!==roles[0].selected)actions.push({verb:"Unload",id});}
+  for(const id of warm){if(!loaded.includes(id)){const m=model(id);if(!m.installed)actions.push({verb:"Download",id});actions.push({verb:"Load",id});}}
+  const downloads=warm.filter(id=>!model(id).installed).reduce((n,id)=>n+model(id).bytes,0);
+  return {ok:true,errors:[],actions,warnings:[
+    "Context is a client-side request budget. It does not reconfigure Tiiny memory.",
+    "NPU figures are allocation units. SSD forecast includes one staging allowance."
+  ],downloads,npuProjected:warm.reduce((n,id)=>n+(model(id)?.npu||0),0),npuTotal:100,ssdFree:84.2};
+}
+function render(){
+  $("connection").className="pill "+(state.disconnected?"bad":state.stale?"warn":"ok");
+  $("connection").textContent=state.disconnected?"Unavailable":state.stale?"Stale":"Connected";
+  $("age").textContent=state.disconnected?"No device snapshot":state.stale?"Stale · "+state.age+"s old":"Updated "+state.age+"s ago";
+  $("npuCard").classList.toggle("stale",state.stale||state.disconnected);
+  $("ssdCard").classList.toggle("stale",state.stale||state.disconnected);
+  if(state.disconnected){
+    $("npuNow").textContent="—"; $("ssdNow").textContent="—"; $("npuProjected").textContent=""; $("ssdProjected").textContent="";
+    $("npuBar").style.width="0%"; $("ssdBar").style.width="0%";
+  }else{
+    const total=100;
+    const used=loadedIds().reduce((n,id)=>n+MODELS[id].npu,0);
+    $("npuNow").textContent=used+" / "+total+" used · "+(total-used)+" free";
+    $("npuBar").style.width=used+"%";
+    const p=state.plan&&state.plan.ok?state.plan.npuProjected:null;
+    $("npuProjected").textContent=p!==null?"After Apply · "+p+" used":"";
+    $("ssdNow").textContent="84.2 GiB free / 200 GiB";
+    $("ssdBar").style.width="58%";
+    const dl=state.plan&&state.plan.ok?state.plan.downloads:0;
+    $("ssdProjected").textContent=dl?"After downloads · "+(84.2-dl).toFixed(1)+" GiB free":"";
+  }
+  const rows=$("roleRows"); rows.innerHTML="";
+  for(const role of roles){
+    const def=ROLE_DEFS.find(r=>r.key===role.key); const m=model(role.selected); const cands=candidates(role);
+    const tr=document.createElement("tr");
+    if(!cands.length)tr.className="warnrow";
+    const options=['<option value="">'+(def.key==="coding_model"?"Choose model":"None")+'</option>']
+      .concat(cands.map(id=>'<option value="'+esc(id)+'"'+(id===role.selected?" selected":"")+'>'+esc(MODELS[id].name)+' · '+(MODELS[id].installed?"installed":"download")+'</option>')).join("");
+    tr.innerHTML='<td>'+esc(def.label)+'<small>'+esc(def.hint)+'</small></td>'+
+      '<td><select aria-label="'+esc(def.label)+' model"'+((state.disconnected||!cands.length)?" disabled":"")+'>'+options+'</select>'+
+        (!cands.length?'<small>No compatible model in this catalog.</small>':'')+'</td>'+
+      '<td>'+(role.key==="coding_model"&&m?'<select aria-label="Scripting context"><option>8K</option><option>16K</option><option>32K</option><option>64K</option></select>':'—')+'</td>'+
+      '<td>Not measured</td>'+
+      '<td>'+(m?m.bytes.toFixed(1)+" GiB":"—")+'</td>'+
+      '<td>'+(m?m.npu:"—")+'</td>'+
+      '<td><input type="checkbox" aria-label="Keep '+esc(def.label)+' loaded"'+(role.warm?" checked":"")+(def.locked||!m||state.disconnected?" disabled":"")+'></td>'+
+      '<td>'+stateChip(m)+'</td>'+
+      '<td><button data-info="'+esc(role.selected)+'"'+(m?"":" disabled")+'>Info</button></td>';
+    rows.appendChild(tr);
+  }
+  const assigned=roles.map(r=>r.selected).filter(Boolean);
+  for(const id of catalogIds()){const m=MODELS[id];if(!m.installed||assigned.includes(id))continue;
+    const tr=document.createElement("tr");
+    tr.innerHTML='<td>Other installed<small>Not assigned to a role</small></td><td>'+esc(m.name)+'</td><td>—</td><td>Not measured</td><td>'+m.bytes.toFixed(1)+' GiB</td><td>'+m.npu+'</td><td><input type="checkbox" aria-label="Keep '+esc(m.name)+' loaded"'+(state.disconnected?" disabled":"")+'></td><td>'+stateChip(m)+'</td><td><button data-info="'+esc(id)+'">Info</button></td>';
+    rows.appendChild(tr);
+  }
+  renderPlan(); renderProgress();
+}
+function renderPlan(){
+  const box=$("planBox");
+  if(state.failed){
+    box.innerHTML='<h2 class="errors">Apply stopped</h2><p>Completed operations are preserved; preferences were not saved.</p><ul class="oktext">'+state.completed.map(x=>'<li>'+esc(x)+'</li>').join("")+'</ul><p class="errors">Failed: '+esc(state.failedOp)+'</p><div class="actions"><button id="refresh2">Refresh</button><button id="check2">Check Config again</button><button id="details2">Details</button></div>';
+    $("refresh2").onclick=()=>doRefresh(); $("check2").onclick=()=>doCheck(); $("details2").onclick=()=>showPlan();
+    return;
+  }
+  if(state.applying){box.innerHTML='<h2>Applying reviewed plan</h2><p class="note">Progress alone does not establish completion; device state is re-read after each operation.</p>';return;}
+  if(!state.plan){const blocked=state.disconnected||state.stale;box.innerHTML='<h2>Configuration plan</h2><p class="note">Change a role or selection, then Check Config. Draft edits invalidate the checked plan.</p><div class="actions"><button id="check"'+(blocked?" disabled":"")+'>Check Config</button><span class="spacer"></span><span class="note">'+(blocked?"Refresh to update device state.":"Apply requires a fresh passing check.")+'</span></div>';$("check").onclick=()=>doCheck();return;}
+  const p=state.plan;
+  let html='<h2>Configuration plan</h2>';
+  if(p.errors.length)html+='<ul class="errors">'+p.errors.map(e=>'<li>'+esc(e)+'</li>').join("")+'</ul>';
+  if(p.ok){
+    html+='<p class="oktext">Check passed · expires in 60s</p>';
+    if(p.actions.length)html+='<ul>'+p.actions.map(a=>'<li><strong>'+esc(a.verb)+'</strong> '+esc(a.id)+'</li>').join("")+'</ul>';
+    else html+='<p>No model operations. Apply saves the checked configuration.</p>';
+    if(p.warnings.length)html+='<ul class="warnings">'+p.warnings.map(w=>'<li>'+esc(w)+'</li>').join("")+'</ul>';
+  }
+  html+='<div class="actions"><button id="check">Check Config</button><button id="details"'+(p.ok?"":" disabled")+'>Details</button><span class="spacer"></span><button id="apply"'+(p.ok?"":" disabled")+'>Apply</button></div>';
+  box.innerHTML=html; $("check").onclick=()=>doCheck(); $("details").onclick=()=>showPlan(); $("apply").onclick=()=>doApply();
+}
+function renderProgress(){
+  const box=$("progressBox");
+  if(!state.applying){box.hidden=true;return;}
+  box.hidden=false;
+  box.innerHTML='<h2>Applying · '+esc(state.log[state.log.length-1]||"starting")+'</h2><div class="bar"><span style="width:'+state.progress+'%"></span></div><div class="kv"><span>'+state.progress+'% · 18s elapsed</span><span>Device-reported percentage</span></div><pre>'+esc(state.log.join("\n"))+'</pre><div class="actions"><button id="fail">Simulate failure</button></div>';
+  $("fail").onclick=()=>{state.applying=false;state.failed=true;state.completed=["Download Tripo/TripoSG"];state.failedOp="Load Tripo/TripoSG";state.log.push("Load Tripo/TripoSG…","Tiiny did not confirm the requested load. Stopped before the next operation.");render();};
+}
+function doRefresh(){state.stale=false;state.disconnected=false;state.age=0;if(state.failed){state.failed=false;state.completed=[];state.failedOp="";}state.plan=null;render();}
+function doCheck(){if(state.disconnected||state.stale)return;state.plan=makePlan();state.failed=false;state.applying=false;render();}
+function doApply(){if(!state.plan||!state.plan.ok)return;state.applying=true;state.progress=8;state.log=["Download Tripo/TripoSG · 8.0% (device) · 2s elapsed"];render();
+  const timer=setInterval(()=>{state.progress=Math.min(100,state.progress+14);state.log[state.log.length-1]="Download Tripo/TripoSG · "+state.progress.toFixed(1)+"% (device) · "+Math.round(state.progress/2)+"s elapsed";if(state.progress>=100){clearInterval(timer);state.applying=false;state.plan=null;MODELS.image3d.installed=true;MODELS.image3d.loaded=true;state.log.push("Load Tripo/TripoSG…","Configuration applied and verified. Chat uses the selected scripting model.");state.age=0;render();}else render();},450);}
+function showInfo(id){const m=model(id);if(!m)return;$("infoTitle").textContent=m.name;$("infoText").value=[m.id,m.type,"Capabilities: "+(m.supported.join(", ")||"None declared"),"Maximum context: "+(m.maxContext?m.maxContext+" tokens":"Not reported"),"SSD size: "+m.bytes.toFixed(1)+" GiB","NPU units: "+m.npu,"State: "+(m.loaded?"Loaded":m.installed?"Downloaded":"Not downloaded"),"",m.desc].join("\n");$("infoDialog").showModal();}
+function showPlan(){const p=state.plan||makePlan();$("planText").value=["NPU after Apply: "+p.npuProjected+" units used / "+(100-p.npuProjected)+" free","Downloads: "+p.downloads.toFixed(1)+" GiB","SSD after downloads: "+(84.2-p.downloads).toFixed(1)+" GiB free","SSD at peak staging: "+(84.2-p.downloads-Math.max(0,p.downloads)).toFixed(1)+" GiB free","SSD reserve: 2.0 GiB","","Warnings:",...(p.warnings||[])].join("\n");$("planDialog").showModal();}
+document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>$(b.dataset.close).close());
+document.querySelectorAll(".scenarios button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".scenarios button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));setScenario(b.dataset.scenario);});
+$("refresh").onclick=()=>doRefresh();
+$("width").onclick=()=>{document.body.classList.toggle("narrow");$("width").textContent=document.body.classList.contains("narrow")?"Wide preview":"Narrow preview";};
+$("roleRows").addEventListener("click",e=>{const b=e.target.closest("[data-info]");if(b)showInfo(b.dataset.info);});
+$("roleRows").addEventListener("change",e=>{if(e.target.tagName!=="SELECT")return;const tr=e.target.closest("tr");const idx=[...$("roleRows").children].indexOf(tr);if(idx<0||idx>=roles.length)return;roles[idx].selected=e.target.value;state.plan=null;state.failed=false;render();});
+setScenario("fresh");
+</script>
+</html>

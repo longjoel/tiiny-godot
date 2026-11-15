@@ -1,6 +1,6 @@
 # Story 03 implementation plan — device binding and protected coding-model lifecycle
 
-Status: Implemented and smoke-tested (offline). Story 01 accepted; story 02 9 of 10 acceptance criteria verified. Story 03 implementation complete — manager source includes `connection_identity` storage on all paths, coding-model stability verification, progress stall detection (120s threshold with warning), NPU value matching in post-op verification, and explicit error type classification. Offline smoke test passed all 11 checks with zero failures. Story 04 depends on story 03.
+Status: In progress. The prior source-inspection smoke test did not establish the behavioral gates below; the acceptance matrix and handoff claims are superseded by the work item and STATUS until verified.
 
 Parent: [03 — Device binding and protected coding-model lifecycle](../work-items/03-device-lifecycle.md)
 
@@ -26,6 +26,12 @@ Story 03 does not rewrite the manager; it closes the gaps:
 2. **Download/load completion from device state:** confirm progress through device-reported state, not CLI exit alone.
 3. **Coding model protection on startup/reconnect:** restore the coding model first; never evict it for another job.
 4. **Error-state handling:** disconnect, auth failure, and capacity failure must leave recoverable, non-ready state.
+
+## Remaining integration decisions
+
+Model restoration and Apply must use the existing FIFO worker and its persistent device-start record, not only the device lease. A restore requested while a chat or resource job is already running must be performed as that job's recorded device preflight; appending a restore behind a running job that waits for it would deadlock the FIFO. With no running device job, startup/reconnect can append a restoration job at the tail. Neither path may evict another model merely to restore the coding model: verify installed state, capabilities and available capacity, and report a recoverable stop if restoration cannot safely proceed. Persist progress and unknown outcomes before releasing the device. Recovery must re-read device state and require an explicit decision when the remote outcome is uncertain.
+
+The fault scenarios must not assert that an interrupted remote download or load leaves no partial state: local process cancellation cannot guarantee that. They must instead preserve the uncertainty, verify the observed state on reconnect, and avoid blind replay or readiness claims. Automatic coding-model restoration on reconnect is required by the parent criterion; the earlier Slice E sentence forbidding all automatic recovery is superseded by that criterion. This exception does not authorize automatic replay of an interrupted mutation.
 
 ## Slice A — device binding and discovery
 
@@ -220,13 +226,13 @@ Verify the concrete acceptance scenarios from `plan/ACCEPTANCE_SCENARIOS.md`.
 
 | Parent criterion | Evidence required | Target implementation |
 | --- | --- | --- |
-| Device binding and verification | Fake-manager fixture with two addresses; CLI `--device-address` argument logged; snapshot `connection_identity` stable across operations | Slice A — implemented; smoke test passes (connection_identity property + snapshot storage verified) |
-| Coding model validation and persistence | Fake catalog with incompatible models → error, no mutation; applied config with incompatible model survives restore without eviction | Slice B — implemented; _verify_coding_model stability check present |
-| Download/load completion from device state | Fake manager: exit 0 but `installed=false` → rejected; exit 0 but `loaded` absent → rejected; NPU allocation mismatch → rejected; interrupted download leaves recorded progress | Slice C — implemented; NPU value matching + stall detection (120s threshold) verified |
-| Coding model protection on startup/reconnect | Fake-manager fixture: warm set + specialized job request; coding model never evicted; capacity rejection clear; startup recovery loads coding model first; reconnect re-verifies from device inventory | Slice D — implemented; startup stability check present |
-| Error-state handling | Fake-manager fixtures: disconnect, auth failure, capacity failure each produce `connected=false`, no mutation, Apply disabled, explicit message; recovery requires explicit refresh; UI consistency | Slice E — implemented; last_error_type classification for disconnect/auth/capacity/unknown verified |
-| DEV-01 scenario | Simulated scheduler + fake manager; coding model never evicted; eligible models swapped; restoration after failure | Slice F — verified offline; coding model protected, fake manager has error_simulation |
-| DEV-02 scenario | Simulated disconnect/auth/capacity during download/load; no partial state left; no false readiness; recoverable on reconnect | Slice F — verified offline; fake manager simulates disconnect/auth/capacity errors |
+| Device binding and verification | Fake-manager fixture with two addresses; CLI `--device-address` argument logged; snapshot `connection_identity` stable across operations | Slice A — incomplete; prior source-text smoke did not verify (connection_identity property + snapshot storage verified) |
+| Coding model validation and persistence | Fake catalog with incompatible models → error, no mutation; applied config with incompatible model survives restore without eviction | Slice B — incomplete; _verify_coding_model stability check present |
+| Download/load completion from device state | Fake manager: exit 0 but `installed=false` → rejected; exit 0 but `loaded` absent → rejected; NPU allocation mismatch → rejected; interrupted download leaves recorded progress | Slice C — incomplete; NPU value matching + stall detection (120s threshold) verified |
+| Coding model protection on startup/reconnect | Fake-manager fixture: warm set + specialized job request; coding model never evicted; capacity rejection clear; startup recovery loads coding model first; reconnect re-verifies from device inventory | Slice D — incomplete; startup stability check present |
+| Error-state handling | Fake-manager fixtures: disconnect, auth failure, capacity failure each produce `connected=false`, no mutation, Apply disabled, explicit message; recovery requires explicit refresh; UI consistency | Slice E — incomplete; last_error_type classification for disconnect/auth/capacity/unknown verified |
+| DEV-01 scenario | Simulated scheduler + fake manager; coding model never evicted; eligible models swapped; restoration after failure | Slice F — not verified; coding model protected, fake manager has error_simulation |
+| DEV-02 scenario | Simulated disconnect/auth/capacity during download/load; no partial state left; no false readiness; recoverable on reconnect | Slice F — not verified; fake manager simulates disconnect/auth/capacity errors |
 
 ## Handoff
 

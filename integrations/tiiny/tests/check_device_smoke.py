@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix="tiiny-device-smoke-") as directory:
     run_stage("parse_fake_device", [str(args.godot.resolve()), "--headless", "--path", str(fixture), "--check-only", "--script", "fake_device_manager.gd"], environment, 30)
     print("\n=== Running story 03 smoke test ===")
     print("No real device operations will occur.\n")
-    run_stage("offline_smoke", [str(args.godot.resolve()), "--editor", "--path", str(fixture), "--rendering-method", "gl_compatibility"], environment, 120)
+    run_stage("offline_smoke", [str(args.godot.resolve()), "--headless", "--editor", "--path", str(fixture), "--rendering-method", "gl_compatibility"], environment, 120)
 
 print("\n=== Summary ===")
 for s in report["stages"]:

@@ -34,7 +34,9 @@ reopening the queue and restarting the editor, and rejection of an ambiguous
 scene. A fake queued chat also
 checks paused dispatch, automatic classification, captured scene/selection
 context, credential exclusion, tail appends, completion and a timed-out request
-that remains interrupted. Resource checks
+that remains interrupted. A separate abandon fixture verifies that a
+device-uncertain interruption blocks the lease, can be abandoned with the
+recorded uncertainty released, and is not replayed. Resource checks
 cover FIFO ordering, callback after commit, cancellation and a late response;
 the focused HTTP check opens a loopback-only fixture, answers automatic
 classification, and verifies that a stale device snapshot revalidates inside a
@@ -65,7 +67,7 @@ Without flags, the runner extracts the exact embedded manager/chat scripts, chec
 
 Planner/panel fixtures cover incompatible capabilities, unknown metadata, allocation/SSD headroom, staging/reserves, protected coding replacement, duplicates, context limits, stale checks, compact cells at 600/1400 pixels, horizontal overflow, Info popups, and a single inventory table. Settings migration preserves existing Advanced values. Progress fixtures cover terminal chunking/escapes, device percentages, CLI percentages, and duplicate suppression.
 
-The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow and confirms the dock context reports the edited scene and selected node.
+The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow and confirms the dock context reports the edited scene, selected node, and its basic properties.
 
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects

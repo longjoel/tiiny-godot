@@ -29,6 +29,11 @@ var device_lease := ""
 var device_lease_owner: Node
 var connection_identity := ""
 var last_error_type := ""
+var model_job_id := ""
+var model_job_result: Dictionary = {}
+var model_job_cancelled := false
+var model_job_checkpoint_failed := false
+var next_restore_check_msec := 0
 
 # The SDK emits a terminal UI. Keep only reported percentages, never terminal
 # escape sequences or arbitrary CLI text, when forwarding progress to Output.
@@ -185,16 +190,31 @@ func _ready() -> void:
 			draft_initialized = true
 		else:
 			_report("Saved model configuration is invalid. Review Models and Check Config; no device changes were made.")
-	# On startup, verify the coding model is configured. Do not trigger automatic
-	# downloads or loads; the settings panel or Apply drives device mutations.
 	_verify_coding_model_stability(settings)
-	# No downloads, loads, or unloads at startup. The settings panel requests a read-only refresh.
+	# A previously applied configuration authorizes restoring its coding model.
+	# The first check runs after the Jobs service has entered the tree.
+	next_restore_check_msec = Time.get_ticks_msec() + 1000
+
+func _process(_delta: float) -> void:
+	if Time.get_ticks_msec() < next_restore_check_msec or busy or applying or not model_job_id.is_empty(): return
+	next_restore_check_msec = Time.get_ticks_msec() + 30000
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting("_tiiny_ai/applied_configuration") or not _valid_saved_draft(settings.get_setting("_tiiny_ai/applied_configuration")): return
+	var connection := _connection()
+	if connection.has("error"): return
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.get("available") or service.get("queue") == null: return
+	for job in service.queue.snapshot().jobs:
+		if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false): return
+	_refresh_snapshot(true)
 
 static func _valid_saved_draft(saved: Variant) -> bool:
 	if not saved is Dictionary or not saved.get("roles") is Dictionary or not saved.get("extra_warm") is Array: return false
 	for role in ROLES:
 		var choice: Variant = saved.roles.get(role)
-		if not choice is Dictionary or not choice.get("model") is String or not choice.get("context") is int or not choice.get("warm") is bool: return false
+		if not choice is Dictionary or not choice.get("model") is String or not choice.get("warm") is bool: return false
+		var context: Variant = choice.get("context")
+		if not (context is int or context is float) or not is_finite(float(context)) or float(context) != floorf(float(context)): return false
 	for id in saved.extra_warm:
 		if not id is String: return false
 	return (saved.get("npu_reserve") is int or saved.get("npu_reserve") is float) and (saved.get("disk_reserve_gib") is int or saved.get("disk_reserve_gib") is float)
@@ -229,12 +249,47 @@ func create_configuration_panel() -> Control:
 
 func is_ready() -> bool:
 	var coding_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model"))
-	if not connection_identity.is_empty() and snapshot.get("connection", "") != connection_identity:
-		return false
 	return is_model_loaded(coding_id) and Planner.suitable("coding_model", snapshot.get("models", {}).get(coding_id, {}))
 
 func is_model_loaded(id: String) -> bool:
-	return connected and not busy and not applying and not id.is_empty() and Time.get_ticks_msec() - int(snapshot.get("time", -100000)) <= SNAPSHOT_LIFETIME * 1000 and snapshot.get("loaded", {}).has(id) and (connection_identity.is_empty() or snapshot.get("connection", "") == connection_identity)
+	if not connected or busy or applying or id.is_empty() or connection_identity.is_empty(): return false
+	if not model_job_id.is_empty(): return false
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service != null and service.get("queue") != null:
+		for job in service.queue.snapshot().jobs:
+			if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false):
+				return false
+	if Time.get_ticks_msec() - int(snapshot.get("time", -100000)) > SNAPSHOT_LIFETIME * 1000: return false
+	var current := _connection()
+	return not current.has("error") and current.identity == connection_identity and snapshot.get("connection", "") == connection_identity and snapshot.get("loaded", {}).has(id)
+
+static func _classify_error(text: String) -> String:
+	var lower := text.to_lower()
+	if "auth" in lower or "http 401" in lower or "http 403" in lower: return "auth"
+	if "capacity" in lower or "insufficient" in lower or "npu" in lower or "ssd" in lower: return "capacity"
+	if "could not start" in lower or "device request failed" in lower or "connection" in lower: return "disconnect"
+	return "unknown"
+
+func _error_description(error: String) -> String:
+	match _classify_error(error):
+		"auth": return "Tiiny authentication failed. Check the API key and refresh."
+		"disconnect": return "Tiiny is unavailable. Check the device connection and refresh."
+		"capacity": return "Tiiny capacity is unavailable or insufficient. " + error
+		_: return error
+
+func _accept_snapshot(value: Dictionary) -> bool:
+	var current := _connection()
+	if current.has("error") or value.get("connection", "") != current.get("identity", ""):
+		connected = false
+		connection_identity = ""
+		last_error_type = "changed"
+		return false
+	snapshot = value
+	connection_identity = str(value.connection)
+	snapshot["connection_identity"] = connection_identity
+	connected = true
+	last_error_type = ""
+	return true
 
 func _initialize_draft_from_snapshot() -> void:
 	if draft_initialized: return
@@ -375,23 +430,38 @@ func _refresh_snapshot(keep_plan: bool) -> void:
 	if result.has("error"):
 		connected = false
 		connection_identity = ""
-		# Track explicit error types for recoverable state handling (Slice E).
-		var err_msg: String = str(result.get("error", ""))
-		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
-			last_error_type = "disconnect"
-		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
-			last_error_type = "auth"
-		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "NPU" in err_msg or "SSD" in err_msg:
-			last_error_type = "capacity"
-		else:
-			last_error_type = "unknown"
-		_report(result.error + " No device changes were made.")
+		last_error_type = _classify_error(str(result.error))
+		snapshot = {}
+		_report(_error_description(str(result.error)) + " No device changes were made.")
 		return
-	snapshot = result
-	snapshot["connection_identity"] = connection_identity
+	if not _accept_snapshot(result):
+		_report("Device connection changed during refresh. Refresh again.")
+		return
 	_initialize_draft_from_snapshot()
-	connected = true
 	_report("Device data refreshed. Choose changes, then Check Config.")
+	_schedule_coding_restore()
+
+func _saved_coding_model() -> String:
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting("_tiiny_ai/applied_configuration"): return ""
+	var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	if not _valid_saved_draft(saved): return ""
+	var id := str(saved.roles.coding_model.model)
+	return id if not id.is_empty() and id == str(settings.get_setting("tiiny_ai/models/coding_model")) else ""
+
+func _schedule_coding_restore() -> void:
+	var id := _saved_coding_model()
+	if id.is_empty() or not connected or snapshot.get("loaded", {}).has(id): return
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.get("available"): return
+	for job in service.queue.snapshot().jobs:
+		if job.operation == "model_restore" and job.state in ["queued", "running", "failed", "cancelled", "interrupted"] and job.parameters.get("model") == id and job.parameters.get("connection") == connection_identity:
+			return
+	var result: Dictionary = service.append_job("model-restore-" + Crypto.new().generate_random_bytes(16).hex_encode(), "model_restore", {"model": id, "connection": connection_identity, "timeout_ms": 7200000})
+	if result.has("error"):
+		_report("Could not queue coding-model restoration: " + str(result.error))
+	else:
+		_report("Coding-model restoration queued at position %d." % result.sequence)
 
 func check_config() -> void:
 	if busy: return
@@ -407,46 +477,212 @@ func check_config() -> void:
 	if result.has("error"):
 		connected = false
 		connection_identity = ""
-		var err_msg: String = str(result.get("error", ""))
-		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
-			last_error_type = "disconnect"
-		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
-			last_error_type = "auth"
-		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "NPU" in err_msg or "SSD" in err_msg:
-			last_error_type = "capacity"
-		else:
-			last_error_type = "unknown"
-		_report(result.error + " Apply is disabled.")
+		last_error_type = _classify_error(str(result.error))
+		snapshot = {}
+		_report(_error_description(str(result.error)) + " Apply is disabled.")
 		return
-	snapshot = result
-	snapshot["connection_identity"] = connection_identity
+	if not _accept_snapshot(result):
+		_report("Device connection changed during Check Config. Check again.")
+		return
 	_initialize_draft_from_snapshot()
-	connected = true
 	plan = Planner.check(snapshot, draft, str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model")))
 	plan["draft"] = draft.duplicate(true)
 	plan["checked_at"] = Time.get_ticks_msec()
 	plan["connection"] = snapshot.connection
+	plan["active_coding"] = str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model"))
 	_report("Check passed — review pending operations before Apply." if plan.ok else "Check failed — resolve the listed issues. No device changes were made.")
 
 func apply_config() -> void:
 	if busy or not plan.get("ok", false): return
-	var assistant := get_tree().get_first_node_in_group("tiiny_ai_editor_dock")
-	if assistant and assistant.has_method("is_inference_busy") and assistant.is_inference_busy():
-		_report("Wait for the current chat/resource request to finish before applying model changes.")
-		return
 	if draft != plan.get("draft", {}) or Time.get_ticks_msec() - int(plan.get("checked_at", 0)) > PLAN_LIFETIME * 1000:
 		plan = {}
 		_report("Configuration check expired or changed. Check Config again.")
 		return
-	if not _acquire_device("apply models"):
-		_report("Tiiny is busy or the Jobs service is unavailable.")
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.has_method("append_job"):
+		_report("Jobs service is unavailable; no model changes were made.")
 		return
+	# Persist only the approved inputs and actions; planner diagnostics use
+	# PackedStringArray and are neither needed for dispatch nor JSON-safe.
+	var approved := {"draft": plan.draft.duplicate(true), "actions": plan.actions.duplicate(true), "connection": plan.connection, "active_coding": plan.active_coding}
+	var submitted: Dictionary = service.append_job("model-apply-" + Crypto.new().generate_random_bytes(16).hex_encode(), "model_apply", {"approved": approved, "timeout_ms": 7200000})
+	if submitted.has("error"):
+		_report("Could not queue model configuration: " + str(submitted.error))
+		return
+	plan = {}
+	_report("Model configuration queued at position %d." % submitted.sequence)
+
+# Called by the FIFO worker. A queued plan is revalidated against the current
+# device and configured coding model before any command is allowed to start.
+func poll_model_job(job: Dictionary) -> Dictionary:
+	if model_job_id.is_empty():
+		if busy or applying:
+			return {"state": "running", "stage": "Waiting for Tiiny"}
+		if not _acquire_device("apply models"):
+			return {"state": "running", "stage": "Waiting for Tiiny"}
+		model_job_id = str(job.id)
+		model_job_result = {"state": "running", "stage": "Checking model configuration"}
+		model_job_cancelled = false
+		model_job_checkpoint_failed = false
+		if job.operation == "model_restore":
+			_execute_model_restoration(job.parameters)
+		else:
+			_execute_model_configuration(job.parameters.approved)
+	if model_job_id != job.id:
+		return {"state": "running", "stage": "Waiting for model manager"}
+	if model_job_result.get("state") == "running":
+		return {"state": "running", "stage": message}
+	return model_job_result
+
+func cancel_model_job(id: String) -> bool:
+	if model_job_id == id:
+		model_job_cancelled = true
+		stop_cli()
+		return true
+	return false
+
+func finalize_model_job(id: String, _state: String) -> void:
+	if model_job_id != id: return
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	var persisted: Dictionary = service.get_job_status(id) if service != null else {}
+	# An unknown remote outcome keeps the lease until the user acknowledges it.
+	if persisted.get("state") != "interrupted":
+		_release_device()
+		model_job_id = ""
+		model_job_result = {}
+
+func release_uncertain_model_job(id: String) -> void:
+	if model_job_id == id:
+		_release_device()
+		model_job_id = ""
+		model_job_result = {}
+
+# A running inference job cannot wait for a restore appended behind itself.
+# Restore as a recorded preflight of that same job, then let it continue.
+func poll_model_preflight(job: Dictionary) -> Dictionary:
+	if model_job_id.is_empty():
+		if is_ready(): return {"state": "completed"}
+		if busy or applying: return {"state": "running", "stage": "Waiting for Tiiny"}
+		var id := _saved_coding_model()
+		if id.is_empty() or id != str(job.parameters.get("model", "")):
+			return {"state": "failed", "result": {"error": "Apply a compatible coding model before running this job."}}
+		var connection := _connection()
+		if connection.has("error"): return {"state": "failed", "result": {"error": str(connection.error)}}
+		if not _acquire_device("restore coding model"):
+			return {"state": "running", "stage": "Waiting for Tiiny"}
+		model_job_id = str(job.id)
+		model_job_result = {"state": "running", "stage": "Checking coding model"}
+		model_job_cancelled = false
+		model_job_checkpoint_failed = false
+		_execute_model_restoration({"model": id, "connection": connection.identity, "preflight": true})
+	if model_job_id != job.id: return {"state": "running", "stage": "Waiting for model manager"}
+	if model_job_result.get("state") == "running": return {"state": "running", "stage": message}
+	var result := model_job_result.duplicate(true)
+	if result.get("state") == "completed":
+		_release_device()
+		model_job_id = ""
+		model_job_result = {}
+	return result
+
+func _execute_model_restoration(parameters: Dictionary) -> void:
 	busy = true
 	applying = true
-	var approved := plan.duplicate(true)
+	operation_log.clear()
+	var id := str(parameters.get("model", ""))
+	var identity := str(parameters.get("connection", ""))
+	var current := _connection()
+	if _saved_coding_model() != id or current.get("identity", "") != identity:
+		if parameters.get("preflight", false):
+			await _apply_failed("The saved coding model or device changed before restoration.")
+		else:
+			busy = false
+			applying = false
+			_report("Queued coding-model restoration is no longer needed.")
+			model_job_result = {"state": "completed", "result": {"message": message}}
+		return
+	_report("Checking the saved coding model…")
+	var fresh := await _fetch_snapshot()
+	if model_job_cancelled:
+		await _apply_failed("Coding-model restoration cancelled.")
+		return
+	if fresh.has("error") or fresh.get("connection", "") != identity or _saved_coding_model() != id:
+		await _apply_failed("The saved coding model or device is unavailable or changed.")
+		return
+	var model: Dictionary = fresh.get("models", {}).get(id, {})
+	if not Planner.suitable("coding_model", model):
+		await _apply_failed("The saved coding model is unavailable or no longer supports tool use. Choose a compatible model in Models.")
+		return
+	if not fresh.loaded.has(id):
+		var settings := EditorInterface.get_editor_settings()
+		var saved: Dictionary = settings.get_setting("_tiiny_ai/applied_configuration")
+		var allocation := float(model.get("npu", -1))
+		var reserve := float(saved.get("npu_reserve", 5))
+		if allocation < 0 or float(fresh.npu_used) + allocation + reserve > float(fresh.npu_total):
+			await _apply_failed("Cannot restore the coding model: NPU capacity is insufficient or unknown. No models were unloaded.")
+			return
+		if not model.get("installed", false):
+			var bytes := float(model.get("bytes", -1))
+			var disk_reserve := float(saved.get("disk_reserve_gib", 2)) * 1073741824.0
+			if bytes <= 0 or bytes * 2 + disk_reserve > float(fresh.disk_free):
+				await _apply_failed("Cannot restore the coding model: SSD capacity or download size is insufficient or unknown.")
+				return
+			var downloaded := await _restore_model_command("download", id, identity)
+			if downloaded.has("error"):
+				await _apply_failed(str(downloaded.error))
+				return
+			fresh = downloaded.snapshot
+			if float(fresh.npu_used) + allocation + reserve > float(fresh.npu_total):
+				await _apply_failed("Cannot load the coding model: NPU capacity changed after download. No models were unloaded.")
+				return
+		var loaded := await _restore_model_command("load", id, identity)
+		if loaded.has("error"):
+			await _apply_failed(str(loaded.error))
+			return
+		fresh = loaded.snapshot
+	if not _accept_snapshot(fresh):
+		await _apply_failed("The device changed while restoring the coding model.")
+		return
+	busy = false
+	applying = false
+	plan = {}
+	_report("Coding model restored and verified.")
+	model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log)}}
+
+func _restore_model_command(verb: String, id: String, identity: String) -> Dictionary:
+	if model_job_cancelled: return {"error": "Coding-model restoration cancelled."}
+	var connection := _connection()
+	if connection.has("error") or connection.get("identity", "") != identity or _saved_coding_model() != id:
+		return {"error": "The saved coding model or device changed before restoration."}
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.queue.begin_device_operation(model_job_id, verb, id, identity):
+		return {"error": "Could not record coding-model restoration before starting it."}
+	_report("%s coding model %s…" % [verb.capitalize(), id])
+	operation_log.append("%s %s" % [verb, id])
+	var code := await _run_cli([verb, id])
+	if code != 0 or model_job_cancelled or model_job_checkpoint_failed:
+		return {"error": "Coding-model %s did not finish; check device state before retrying." % verb}
+	var observed := await _fetch_snapshot()
+	if observed.has("error") or observed.get("connection", "") != identity:
+		return {"error": "Could not verify coding-model %s on the original device." % verb}
+	var model: Dictionary = observed.get("models", {}).get(id, {})
+	var verified: bool = bool(model.get("installed", false)) if verb == "download" else observed.get("loaded", {}).has(id)
+	if verb == "load" and verified and float(model.get("npu", -1)) > 0:
+		verified = float(observed.loaded[id]) == float(model.npu)
+	if not verified or not Planner.suitable("coding_model", model):
+		return {"error": "Tiiny did not confirm the coding-model %s." % verb}
+	if not service.queue.verify_device_operation(model_job_id):
+		return {"error": "Could not record coding-model verification."}
+	return {"snapshot": observed}
+
+func _execute_model_configuration(approved: Dictionary) -> void:
+	busy = true
+	applying = true
 	_report("Revalidating the approved plan…")
 	var fresh := await _fetch_snapshot()
-	if fresh.has("error") or fresh.get("connection") != approved.connection:
+	if model_job_cancelled:
+		await _apply_failed("Model configuration cancelled before device changes.")
+		return
+	if fresh.has("error") or fresh.get("connection") != approved.get("connection"):
 		var error_type := "unavailable" if fresh.has("error") else "changed"
 		connected = false
 		connection_identity = ""
@@ -455,21 +691,35 @@ func apply_config() -> void:
 		return
 	var settings := EditorInterface.get_editor_settings()
 	var old_coding := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	if old_coding != str(approved.get("active_coding", "")) or not _valid_saved_draft(approved.get("draft")):
+		await _apply_failed("The saved coding model or configuration changed. Check Config again.")
+		return
 	var rechecked := Planner.check(fresh, approved.draft, old_coding)
 	if not rechecked.ok or rechecked.actions != approved.actions:
 		await _apply_failed("The plan changed since Check Config. Review a new check before applying.")
 		return
 	operation_log.clear()
 	for action in rechecked.actions:
+		if model_job_cancelled:
+			await _apply_failed("Model configuration cancelled. Check the device before retrying.")
+			return
+		var current_connection := _connection()
+		if current_connection.has("error") or current_connection.get("identity", "") != approved.connection:
+			await _apply_failed("Device connection changed during Apply. Stopped before the next operation.")
+			return
 		_report("%s %s…" % [str(action.verb).capitalize(), action.id])
 		operation_log.append("%s %s" % [action.verb, action.id])
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if not model_job_id.is_empty() and (service == null or not service.queue.begin_device_operation(model_job_id, action.verb, action.id, approved.connection)):
+			await _apply_failed("Could not record the model operation. Stopped before starting it.")
+			return
 		var exit_code := await _run_cli([action.verb, action.id])
-		if exit_code != 0:
+		if exit_code != 0 or model_job_cancelled or model_job_checkpoint_failed:
 			await _apply_failed("Operation failed (%d). Earlier operations may have completed; refresh and check again." % exit_code)
 			return
 		var observed := await _fetch_snapshot()
-		if observed.has("error"):
-			await _apply_failed("Could not verify the device after an operation. Stopped; refresh before retrying.")
+		if observed.has("error") or observed.get("connection", "") != approved.connection:
+			await _apply_failed("Could not verify the original device after an operation. Stopped; refresh before retrying.")
 			return
 		var verified := false
 		if action.verb == "load": verified = observed.loaded.has(action.id)
@@ -490,18 +740,21 @@ func apply_config() -> void:
 		if fresh.loaded.has(old_coding) and not observed.loaded.has(protected_id):
 			await _apply_failed("The scripting model became unavailable. Stopped; check and restore the configuration before continuing.")
 			return
+		if not model_job_id.is_empty() and not service.queue.verify_device_operation(model_job_id):
+			await _apply_failed("Could not record device verification. Stopped before the next operation.")
+			return
 		snapshot = observed
 	var final := await _fetch_snapshot()
-	if final.has("error"):
-		await _apply_failed("Could not verify the completed configuration.")
+	if final.has("error") or final.get("connection", "") != approved.connection:
+		await _apply_failed("Could not verify the completed configuration on the original device.")
 		return
 	for id in rechecked.warm:
 		if not final.loaded.has(id):
 			await _apply_failed("Required model is not loaded: " + id)
 			return
-	snapshot = final
-	snapshot["connection_identity"] = connection_identity
-	connected = true
+	if not _accept_snapshot(final):
+		await _apply_failed("Device connection changed during Apply. Refresh before retrying.")
+		return
 	for role in ROLES: settings.set_setting("tiiny_ai/models/" + role, approved.draft.roles[role].model)
 	var coding_id: String = approved.draft.roles.coding_model.model
 	settings.set_setting("tiiny_ai/models/coding_model_type", final.models[coding_id].type)
@@ -509,34 +762,30 @@ func apply_config() -> void:
 	settings.set_setting("_tiiny_ai/applied_configuration", approved.draft)
 	busy = false
 	applying = false
-	_release_device()
+	if model_job_id.is_empty(): _release_device()
 	plan = {}
 	_report("Configuration applied and verified. Chat uses the selected scripting model and request context budget.")
+	if not model_job_id.is_empty():
+		model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log)}}
 
 func _apply_failed(reason: String) -> void:
 	var current := await _fetch_snapshot()
-	if not current.has("error"):
-		snapshot = current
-		connection_identity = current.get("connection", "")
-		connected = not current.has("error")
+	if not current.has("error") and _accept_snapshot(current):
+		pass
 	else:
 		connected = false
 		connection_identity = ""
-		# Classify error type for explicit error-state handling (Slice E).
-		var err_msg: String = str(current.get("error", ""))
-		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
-			last_error_type = "disconnect"
-		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
-			last_error_type = "auth"
-		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "insufficient" in reason.to_lower() or "NPU" in reason or "SSD" in reason:
-			last_error_type = "capacity"
-		else:
-			last_error_type = "unknown"
+		last_error_type = _classify_error(str(current.get("error", reason)))
+		snapshot = {}
+		if current.has("error"):
+			reason += " " + _error_description(str(current.error))
 	busy = false
 	applying = false
-	_release_device()
+	if model_job_id.is_empty(): _release_device()
 	plan = {}
 	_report(reason)
+	if not model_job_id.is_empty():
+		model_job_result = {"state": "cancelled" if model_job_cancelled else "failed", "result": {"error": reason, "operations": Array(operation_log)}}
 
 static func _shell_quote(value: String) -> String:
 	return "'" + value.replace("'", "'\"'\"'") + "'"
@@ -547,6 +796,11 @@ func _record_progress(arguments: Array, percent: float, source: String) -> void:
 	var previous: Dictionary = progress_reports.get(source, {})
 	if not previous.is_empty() and int(previous.percent) == int(percent) and now - int(previous.time) < 10000: return
 	progress_reports[source] = {"percent": percent, "time": now}
+	if source == "device" and not model_job_id.is_empty():
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if service == null or not service.queue.device_operation_progress(model_job_id, percent):
+			model_job_checkpoint_failed = true
+			stop_cli()
 	var text := "%s %s · %.1f%% (%s) · %ds elapsed" % [str(arguments[0]).capitalize(), arguments[1], percent, source, int((now - operation_started) / 1000)]
 	message = text
 	operation_log.append(text)

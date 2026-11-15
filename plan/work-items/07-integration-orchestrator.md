@@ -1,6 +1,6 @@
 # 07 — Workspace-first prompt and tool orchestration
 
-Status: Queued
+Status: Planning complete; implementation is gated on stories 02, 03, 05, and 06. Slices A–C can be built against fake tools before 05/06 land.
 
 Feature: Workspace-first prompt and tool orchestration
 
@@ -9,6 +9,8 @@ Sequence: 07
 Stream: `integration`
 
 Dependencies: 02, 03, 05, 06
+
+Implementation: [plan](../implementation/07-orchestrator.md). Visuals: [tool orchestration diagrams](../mockups/07-tool-orchestration-diagrams.md).
 
 ## Scope
 

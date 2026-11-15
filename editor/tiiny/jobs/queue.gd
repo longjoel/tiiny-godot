@@ -95,6 +95,8 @@ func _valid_store(value: Variant) -> bool:
 			return false
 		if job.get("state") not in ["queued", "running", "completed", "failed", "cancelled", "interrupted", "skipped"]:
 			return false
+		if job.has("hidden") and job.hidden != true:
+			return false
 		if not _json_safe(job.parameters) or not _json_safe(job.result):
 			return false
 		var attempt_number := 0
@@ -115,6 +117,11 @@ func _valid_store(value: Variant) -> bool:
 					return false
 			if attempt.has("device_started") and (attempt.device_started != true or attempt.state in ["failed", "cancelled"]):
 				return false
+			if attempt.has("device_operations"):
+				if not attempt.get("device_started", false) or not _valid_device_operations(attempt.device_operations):
+					return false
+				if attempt.state == "completed" and not attempt.device_operations.is_empty() and attempt.device_operations.back().state != "verified":
+					return false
 		if job.state in ["running", "completed", "failed", "cancelled", "interrupted"]:
 			if job.attempts.is_empty() or job.attempts.back().state != job.state:
 				return false
@@ -129,6 +136,26 @@ func _valid_store(value: Variant) -> bool:
 		ids[job.id] = true
 		keys[job.submission_key] = true
 	return running <= 1 and stopped <= 1 and not (running > 0 and stopped > 0) and ((stopped > 0) == not value.stop_reason.is_empty())
+
+# A model command is journaled before it is launched. Only the last entry may
+# be unverified; older entries have already been confirmed from device state.
+func _valid_device_operations(operations: Variant) -> bool:
+	if not operations is Array or operations.is_empty() or operations.size() > 128:
+		return false
+	for index in operations.size():
+		var operation: Variant = operations[index]
+		if not operation is Dictionary or operation.get("verb") not in ["download", "load", "unload"]:
+			return false
+		if not operation.get("model") is String or operation.model.is_empty() or operation.model.length() > 512:
+			return false
+		if not operation.get("connection") is String or operation.connection.length() != 64 or not operation.connection.is_valid_hex_number(false):
+			return false
+		if operation.get("state") not in ["started", "verified"] or (index < operations.size() - 1 and operation.state != "verified"):
+			return false
+		var progress: Variant = operation.get("progress")
+		if not (progress is int or progress is float) or not is_finite(float(progress)) or progress < -1 or progress > 100:
+			return false
+	return true
 
 func _valid_publication(journal: Variant) -> bool:
 	if not journal is Dictionary or not journal.get("artifact") is Dictionary or not journal.get("source") is String or journal.source.is_empty() or not journal.get("destination") is String or journal.destination.is_empty() or not journal.get("events") is Array or journal.events.is_empty():
@@ -375,10 +402,69 @@ func device_started(id: String) -> bool:
 	var ok := false
 	if error.is_empty():
 		for job in _data.jobs:
-			if job.id == id and job.state == "running" and not job.attempts.back().has("device_started"):
-				job.attempts.back()["device_started"] = true
-				ok = _save()
+			if job.id == id and job.state == "running":
+				if job.attempts.back().get("device_started", false):
+					ok = true
+				else:
+					job.attempts.back()["device_started"] = true
+					ok = _save()
 				break
+	_mutex.unlock()
+	return ok
+
+# Record the precise model command and its device binding before starting the
+# CLI. The same attempt can contain several commands, but only after the prior
+# one was confirmed from device state. No credentials are stored in the queue.
+func begin_device_operation(id: String, verb: String, model: String, connection: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty() and verb in ["download", "load", "unload"] and not model.is_empty() and model.length() <= 512 and connection.length() == 64 and connection.is_valid_hex_number(false):
+		for job in _data.jobs:
+			if job.id != id or job.state != "running":
+				continue
+			var attempt: Dictionary = job.attempts.back()
+			var operations: Array = attempt.get("device_operations", [])
+			if operations.size() >= 128 or (not operations.is_empty() and operations.back().state != "verified"):
+				break
+			attempt["device_started"] = true
+			operations.append({"verb": verb, "model": model, "connection": connection, "state": "started", "progress": -1.0})
+			attempt["device_operations"] = operations
+			ok = _save()
+			break
+	_mutex.unlock()
+	return ok
+
+# Progress is advisory device-reported information, never evidence of success.
+func device_operation_progress(id: String, percent: float) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty() and is_finite(percent) and percent >= 0 and percent <= 100:
+		for job in _data.jobs:
+			if job.id != id or job.state != "running":
+				continue
+			var operations: Array = job.attempts.back().get("device_operations", [])
+			if operations.is_empty() or operations.back().state != "started":
+				break
+			operations.back().progress = percent
+			ok = _save()
+			break
+	_mutex.unlock()
+	return ok
+
+# The caller must first confirm the effect from fresh bound-device inventory.
+func verify_device_operation(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id != id or job.state != "running":
+				continue
+			var operations: Array = job.attempts.back().get("device_operations", [])
+			if operations.is_empty() or operations.back().state != "started":
+				break
+			operations.back().state = "verified"
+			ok = _save()
+			break
 	_mutex.unlock()
 	return ok
 
@@ -434,12 +520,16 @@ func finish(id: String, state: String, result: Dictionary) -> bool:
 				var journal: Dictionary = job.attempts.back().get("publication", {})
 				var phase: String = journal.get("phase", "")
 				var mutation_phase: String = job.attempts.back().get("mutation", {}).get("phase", "")
+				var device_operations: Array = job.attempts.back().get("device_operations", [])
+				if state == "completed" and not device_operations.is_empty() and device_operations.back().state != "verified":
+					break
 				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (job.attempts.back().get("device_started", false) and state != "completed"):
 					# A failure after a publication boundary cannot safely be retried
 					# until a reconciler establishes what was installed.
 					state = "interrupted"
 					result = result.duplicate(true)
-					result["error"] = "Recorded effect requires reconciliation"
+					var reason := str(result.get("error", "")).strip_edges()
+					result["error"] = "Recorded effect requires reconciliation" if reason.is_empty() else "Recorded effect requires reconciliation: " + reason
 				elif state == "completed" and phase == "aborted":
 					break
 				job.state = state
@@ -475,6 +565,57 @@ func resolve(id: String, decision: String) -> bool:
 				break
 	_mutex.unlock()
 	return ok
+
+# The user explicitly abandons a device-uncertain job after confirming its
+# remote outcome. Only device work without a recorded workspace effect
+# qualifies; publication and scene mutations still need their verifier.
+func abandon(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id == id and job.state == "interrupted" and not job.attempts.is_empty():
+				var attempt: Dictionary = job.attempts.back()
+				if not attempt.get("device_started", false) or attempt.has("mutation") or attempt.has("publication"):
+					break
+				job.state = "skipped"
+				job["resolution"] = {"decision": "abandon", "at": Time.get_unix_time_from_system()}
+				attempt["resolution"] = job.resolution.duplicate(true)
+				_data.stop_reason = ""
+				# Resolving the stopped position and resuming dispatch are separate
+				# explicit user actions.
+				_data.paused = true
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
+# Clearing is a UI concern: keep the history record but hide terminal jobs so
+# sequence numbers and result references stay stable across restarts.
+func hide(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id == id and job.state in ["completed", "skipped"] and not job.get("hidden", false):
+				job["hidden"] = true
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
+func hide_state(state: String) -> int:
+	_mutex.lock()
+	var count := 0
+	if error.is_empty() and state in ["completed", "skipped"]:
+		for job in _data.jobs:
+			if job.state == state and not job.get("hidden", false):
+				job["hidden"] = true
+				count += 1
+		if count > 0 and not _save():
+			count = 0
+	_mutex.unlock()
+	return count
 
 # Call only after a worker-specific reconciler has established the outcome.
 # "failed" means it proved no effect was published; ambiguous outcomes remain
