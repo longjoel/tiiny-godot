@@ -466,7 +466,9 @@ void register_scene_types() {
 	GDREGISTER_VIRTUAL_CLASS(CompositorEffect);
 
 	GDREGISTER_ABSTRACT_CLASS(MultiplayerPeer);
-	GDREGISTER_CLASS(MultiplayerPeerExtension);
+	// Every method is a required virtual implemented by extensions, so this must not be
+	// treated as instantiable (e.g. when generating the class reference defaults).
+	GDREGISTER_VIRTUAL_CLASS(MultiplayerPeerExtension);
 	GDREGISTER_ABSTRACT_CLASS(MultiplayerAPI);
 	GDREGISTER_CLASS(MultiplayerAPIExtension);
 

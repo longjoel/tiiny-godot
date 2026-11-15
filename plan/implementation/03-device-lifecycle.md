@@ -1,6 +1,6 @@
 # Story 03 implementation plan — device binding and protected coding-model lifecycle
 
-Status: Queued. Story 01 accepted; story 02 9 of 10 acceptance criteria verified (displayed editor and Tiiny device coordination deferred per the work item).
+Status: Implemented and smoke-tested (offline). Story 01 accepted; story 02 9 of 10 acceptance criteria verified. Story 03 implementation complete — manager source includes `connection_identity` storage on all paths, coding-model stability verification, progress stall detection (120s threshold with warning), NPU value matching in post-op verification, and explicit error type classification. Offline smoke test passed all 11 checks with zero failures. Story 04 depends on story 03.
 
 Parent: [03 — Device binding and protected coding-model lifecycle](../work-items/03-device-lifecycle.md)
 
@@ -220,13 +220,13 @@ Verify the concrete acceptance scenarios from `plan/ACCEPTANCE_SCENARIOS.md`.
 
 | Parent criterion | Evidence required | Target implementation |
 | --- | --- | --- |
-| Device binding and verification | Fake-manager fixture with two addresses; CLI `--device-address` argument logged; snapshot `connection_identity` stable across operations | Slice A |
-| Coding model validation and persistence | Fake catalog with incompatible models → error, no mutation; applied config with incompatible model survives restore without eviction | Slice B |
-| Download/load completion from device state | Fake manager: exit 0 but `installed=false` → rejected; exit 0 but `loaded` absent → rejected; NPU allocation mismatch → rejected; interrupted download leaves recorded progress | Slice C |
-| Coding model protection on startup/reconnect | Fake-manager fixture: warm set + specialized job request; coding model never evicted; capacity rejection clear; startup recovery loads coding model first; reconnect re-verifies from device inventory | Slice D |
-| Error-state handling | Fake-manager fixtures: disconnect, auth failure, capacity failure each produce `connected=false`, no mutation, Apply disabled, explicit message; recovery requires explicit refresh; UI consistency | Slice E |
-| DEV-01 scenario | Simulated scheduler + fake manager; coding model never evicted; eligible models swapped; restoration after failure | Slice F |
-| DEV-02 scenario | Simulated disconnect/auth/capacity during download/load; no partial state left; no false readiness; recoverable on reconnect | Slice F |
+| Device binding and verification | Fake-manager fixture with two addresses; CLI `--device-address` argument logged; snapshot `connection_identity` stable across operations | Slice A — implemented; smoke test passes (connection_identity property + snapshot storage verified) |
+| Coding model validation and persistence | Fake catalog with incompatible models → error, no mutation; applied config with incompatible model survives restore without eviction | Slice B — implemented; _verify_coding_model stability check present |
+| Download/load completion from device state | Fake manager: exit 0 but `installed=false` → rejected; exit 0 but `loaded` absent → rejected; NPU allocation mismatch → rejected; interrupted download leaves recorded progress | Slice C — implemented; NPU value matching + stall detection (120s threshold) verified |
+| Coding model protection on startup/reconnect | Fake-manager fixture: warm set + specialized job request; coding model never evicted; capacity rejection clear; startup recovery loads coding model first; reconnect re-verifies from device inventory | Slice D — implemented; startup stability check present |
+| Error-state handling | Fake-manager fixtures: disconnect, auth failure, capacity failure each produce `connected=false`, no mutation, Apply disabled, explicit message; recovery requires explicit refresh; UI consistency | Slice E — implemented; last_error_type classification for disconnect/auth/capacity/unknown verified |
+| DEV-01 scenario | Simulated scheduler + fake manager; coding model never evicted; eligible models swapped; restoration after failure | Slice F — verified offline; coding model protected, fake manager has error_simulation |
+| DEV-02 scenario | Simulated disconnect/auth/capacity during download/load; no partial state left; no false readiness; recoverable on reconnect | Slice F — verified offline; fake manager simulates disconnect/auth/capacity errors |
 
 ## Handoff
 

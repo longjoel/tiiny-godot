@@ -49,7 +49,9 @@ void initialize_webrtc_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(WebRTCPeerConnectionExtension);
 
 	GDREGISTER_ABSTRACT_CLASS(WebRTCDataChannel);
-	GDREGISTER_CLASS(WebRTCDataChannelExtension);
+	// Every method is a required virtual implemented by extensions, so this must not be
+	// treated as instantiable (e.g. when generating the class reference defaults).
+	GDREGISTER_VIRTUAL_CLASS(WebRTCDataChannelExtension);
 
 	GDREGISTER_CLASS(WebRTCMultiplayerPeer);
 }

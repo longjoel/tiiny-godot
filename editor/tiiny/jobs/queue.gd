@@ -111,8 +111,10 @@ func _valid_store(value: Variant) -> bool:
 			if attempt.has("mutation"):
 				if not _valid_mutation(attempt.mutation):
 					return false
-				if attempt.state in ["failed", "cancelled"] or (attempt.state == "completed" and attempt.mutation.phase != "saved"):
+				if (attempt.state in ["failed", "cancelled"] and attempt.mutation.phase != "aborted") or (attempt.state == "completed" and attempt.mutation.phase != "saved"):
 					return false
+			if attempt.has("device_started") and (attempt.device_started != true or attempt.state in ["failed", "cancelled"]):
+				return false
 		if job.state in ["running", "completed", "failed", "cancelled", "interrupted"]:
 			if job.attempts.is_empty() or job.attempts.back().state != job.state:
 				return false
@@ -151,7 +153,7 @@ func _valid_mutation(journal: Variant) -> bool:
 		if not event is Dictionary or not event.get("details") is Dictionary:
 			return false
 		var phase: Variant = event.get("phase")
-		if not ((previous == "" and phase == "prepared") or (previous == "prepared" and phase == "applied") or (previous == "applied" and phase == "saved")):
+		if not ((previous == "" and phase == "prepared") or (previous == "prepared" and phase in ["applied", "aborted"]) or (previous == "applied" and phase in ["saved", "aborted"])):
 			return false
 		if phase == "prepared" and not _json_equal(event.details, journal.target):
 			return false
@@ -366,6 +368,63 @@ func mutation(id: String, phase: String, details: Dictionary = {}) -> bool:
 	_mutex.unlock()
 	return ok
 
+# Persist before making any device request. A failed or cancelled request may
+# still be running remotely, so only a verified completion can finish it.
+func device_started(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id == id and job.state == "running" and not job.attempts.back().has("device_started"):
+				job.attempts.back()["device_started"] = true
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
+# Called only by the scene verifier after it has inspected both the saved
+# scene and the current clean editor scene. The decision is durably recorded.
+func reconcile_scene(id: String, outcome: String, evidence: Dictionary) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty() and outcome in ["not_applied", "completed"] and _json_safe(evidence):
+		for job in _data.jobs:
+			if job.id != id or job.state != "interrupted" or job.operation != "attach_tree_to_scene":
+				continue
+			var attempt: Dictionary = job.attempts.back()
+			var journal: Dictionary = attempt.get("mutation", {})
+			var phase: String = journal.get("phase", "")
+			if phase not in ["prepared", "applied", "saved"]:
+				break
+			if outcome == "not_applied":
+				if phase == "saved" or evidence.get("scene_sha256") != journal.target.get("scene_sha256"):
+					break
+				journal.phase = "aborted"
+				journal.events.append({"phase": "aborted", "at": Time.get_unix_time_from_system(), "details": evidence.duplicate(true)})
+				job.state = "failed"
+				job.result = {"error": "Verified scene unchanged; choose retry or skip", "evidence": evidence.duplicate(true)}
+				_data.stop_reason = "Verified scene unchanged; choose retry or skip"
+			else:
+				if evidence.get("mutation_token") != journal.target.get("mutation_token") or not evidence.get("scene_sha256") is String or evidence.scene_sha256.length() != 64:
+					break
+				if phase == "prepared":
+					journal.events.append({"phase": "applied", "at": Time.get_unix_time_from_system(), "details": {"reconciled": true}})
+					phase = "applied"
+				if phase == "applied":
+					journal.events.append({"phase": "saved", "at": Time.get_unix_time_from_system(), "details": evidence.duplicate(true)})
+				journal.phase = "saved"
+				job.state = "completed"
+				job.result = evidence.duplicate(true)
+				_data.stop_reason = ""
+				_data.paused = true
+			attempt.state = job.state
+			attempt["result"] = job.result.duplicate(true)
+			attempt["reconciled_at"] = Time.get_unix_time_from_system()
+			ok = _save()
+			break
+	_mutex.unlock()
+	return ok
+
 func finish(id: String, state: String, result: Dictionary) -> bool:
 	_mutex.lock()
 	var ok := false
@@ -375,7 +434,7 @@ func finish(id: String, state: String, result: Dictionary) -> bool:
 				var journal: Dictionary = job.attempts.back().get("publication", {})
 				var phase: String = journal.get("phase", "")
 				var mutation_phase: String = job.attempts.back().get("mutation", {}).get("phase", "")
-				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")):
+				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (job.attempts.back().get("device_started", false) and state != "completed"):
 					# A failure after a publication boundary cannot safely be retried
 					# until a reconciler establishes what was installed.
 					state = "interrupted"
@@ -427,7 +486,7 @@ func reconcile(id: String, outcome: String, result: Dictionary) -> bool:
 		for job in _data.jobs:
 			if job.id == id and job.state == "interrupted":
 				# Scene-effect reconciliation requires a scene-specific verifier.
-				if job.attempts.back().has("mutation"):
+				if job.attempts.back().has("mutation") or job.attempts.back().has("device_started"):
 					break
 				var journal: Dictionary = job.attempts.back().get("publication", {})
 				var phase: String = journal.get("phase", "")

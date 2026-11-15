@@ -180,10 +180,9 @@ func _run() -> void:
 		assistant.request_stage = "answer"
 		assistant.pending_url = ""
 		assistant.send_button.disabled = true
-		assistant.shape_button.disabled = true
 		var invalid_call := {"id": "", "type": "function", "function": {"name": "create_gdscript", "arguments": JSON.stringify({"path": "res://binary_invalid.gd", "source": "extends Node\n"})}}
 		await assistant._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [invalid_call]}}]}).to_utf8_buffer())
-		if FileAccess.file_exists("res://binary_invalid.gd") or assistant.send_button.disabled or assistant.shape_button.disabled:
+		if FileAccess.file_exists("res://binary_invalid.gd") or assistant.send_button.disabled:
 			_fail("Built-in chat script did not reject the invalid tool call before mutation.")
 			return
 		var short_request := {"messages": [{"role": "user", "content": "hello"}]}

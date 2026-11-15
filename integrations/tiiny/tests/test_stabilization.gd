@@ -155,13 +155,15 @@ func _dialogs(plugin: EditorPlugin, dock: Control) -> String:
 	print("Native resource dialog ordinary/blank creation, selection changes, cancellation and late results passed.")
 	return ""
 
-func _ordinary_node(plugin: EditorPlugin) -> String:
+func _ordinary_node(plugin: EditorPlugin, dock: Control) -> String:
 	EditorInterface.open_scene_from_path("res://fixture.tscn")
 	await _frames(plugin, 8)
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null: return "Fixture scene failed to open."
 	EditorInterface.get_selection().clear()
 	EditorInterface.get_selection().add_node(root)
+	var context: String = dock._editor_context()
+	if not context.contains("res://fixture.tscn") or not context.contains("Selected node: . [Node2D]"): return "Dock context omitted the edited scene or selected node."
 	var opened := false
 	for node in _nodes(plugin.get_tree().root):
 		if node is Button and node.get_tooltip().contains("Add/Create a New Node"):
@@ -223,12 +225,11 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 		dock.request_stage = "answer"
 		dock.request.timeout = 0.1 if user == "http_timeout" else 3.0
 		dock.send_button.disabled = true
-		dock.shape_button.disabled = true
 		if dock._submit_chat({"model": "fixture-code", "messages": [{"role": "user", "content": user}]}) != OK: return "HTTP request failed to start."
 		await dock.request.request_completed
 		await _frames(plugin)
-		if dock.send_button.disabled or dock.shape_button.disabled: return "Real HTTP failure locked controls."
-		if user == "normal" and not dock.output.text.contains("HTTP fixture OK"): return "Real HTTP chat response missing."
+		if dock.send_button.disabled: return "Real HTTP failure locked controls."
+		if user == "normal" and not dock.history_text().contains("HTTP fixture OK"): return "Real HTTP chat response missing."
 	var before: Dictionary = manager.snapshot.duplicate(true)
 	manager.snapshot.time = Time.get_ticks_msec() - 61000
 	if manager.is_ready() or manager.is_model_loaded("fixture-image"): return "Stale inventory reported readiness."
@@ -239,6 +240,18 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	settings.set_setting("tiiny_ai/advanced/api_url", "http://wrong-device/v1")
 	if not manager.inference_connection().has("error"): return "Inference allowed a different device."
 	settings.set_setting("tiiny_ai/advanced/api_url", base + "/v1")
+	# A stale snapshot revalidates automatically instead of requiring a manual Refresh.
+	manager.snapshot.time = Time.get_ticks_msec() - 61000
+	if manager.is_ready(): return "Stale inventory reported readiness before revalidation."
+	var before_len: int = dock.history_text().length()
+	dock.prompt.text = "auto refresh fixture"
+	await dock._generate()
+	var chat_deadline := Time.get_ticks_msec() + 20000
+	while dock.send_button.disabled and Time.get_ticks_msec() < chat_deadline:
+		await plugin.get_tree().create_timer(0.05).timeout
+	if dock.send_button.disabled: return "Chat did not finish after automatic revalidation: " + dock.status.text
+	if dock.history_text().length() <= before_len: return "Chat did not record a response after automatic revalidation."
+	if not manager.is_ready(): return "Automatic revalidation did not restore readiness."
 	for description in ["valid image", "invalid_png", "http_failure", "malformed_response"]:
 		var result: String = await dock._generate_image_tool(description)
 		if description == "valid image":
@@ -254,7 +267,10 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 		else:
 			if not result.begins_with("Error:"): return "Invalid HTTP image accepted."
 	var result: Array = []
-	await dock.generate_shape_for_dialog("HTTP polygon", func(shape, error): result.assign([shape, error]))
+	dock.generate_shape_for_dialog("HTTP polygon", func(shape, error): result.assign([shape, error]))
+	var shape_deadline := Time.get_ticks_msec() + 30000
+	while result.is_empty() and Time.get_ticks_msec() < shape_deadline:
+		await plugin.get_tree().create_timer(0.05).timeout
 	if result.size() != 2 or not result[0] is ConvexPolygonShape2D: return "HTTP polygon request failed."
 	await _frames(plugin, 10)
 	print("Real loopback HTTP chat, timeout/error recovery, image decoding, polygon adapter and device binding passed.")
@@ -267,7 +283,7 @@ func run(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	if not error.is_empty(): return error
 	error = await _dialogs(plugin, dock)
 	if not error.is_empty(): return error
-	error = await _ordinary_node(plugin)
+	error = await _ordinary_node(plugin, dock)
 	if not error.is_empty(): return error
 	error = await _http(plugin, manager, dock)
 	if not error.is_empty(): return error
@@ -289,8 +305,6 @@ func run_live(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	settings.set_setting("tiiny_ai/advanced/request_timeout_seconds", 180)
 	print("Live baseline warm set: ", before, "; coding model: ", selected, "; catalog build: ", manager.snapshot.models[selected].build)
 	dock.prompt.text = "Reply with a single brief sentence confirming you can answer inside Godot. Do not use tools."
-	dock.category.select(4)
-	dock.include_context.button_pressed = false
 	dock._generate()
 	var deadline := Time.get_ticks_msec() + 90000
 	while dock.send_button.disabled and Time.get_ticks_msec() < deadline:
@@ -299,7 +313,10 @@ func run_live(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 	print("Real Tiiny chat passed; final text received.")
 	await manager.refresh_device()
 	var result: Array = []
-	await dock.generate_shape_for_dialog("A rectangle 32 pixels wide and 48 pixels tall, centered at the origin. Return JSON only.", func(shape, error): result.assign([shape, error]))
+	dock.generate_shape_for_dialog("A rectangle 32 pixels wide and 48 pixels tall, centered at the origin. Return JSON only.", func(shape, error): result.assign([shape, error]))
+	var shape_deadline := Time.get_ticks_msec() + 180000
+	while result.is_empty() and Time.get_ticks_msec() < shape_deadline:
+		await plugin.get_tree().create_timer(0.1).timeout
 	if result.size() != 2 or not result[0] is ConvexPolygonShape2D: return "Real polygon generation failed: " + str(result)
 	if ResourceSaver.save(result[0], "res://live_polygon.tres") != OK: return "Could not save real polygon."
 	var reopened = ResourceLoader.load("res://live_polygon.tres", "", ResourceLoader.CACHE_MODE_IGNORE)

@@ -12,6 +12,7 @@ TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --head
 python3 integrations/tiiny/tests/check_job_process.py
 python3 integrations/tiiny/tests/check_editor_tree.py
 python3 integrations/tiiny/tests/check_builtin_jobs.py
+python3 integrations/tiiny/tests/check_resource_http.py
 ```
 
 The process test owns its temporary directory, kills its own fixture processes,
@@ -25,10 +26,22 @@ and symlink outputs. The disposable headless editor fixture connects the tree
 worker to the journaled Unix publisher, validates a `Texture2D` after import,
 checks a destination conflict, and reconciles a published file after reopening
 the queue. Hard links require staging and destination on one filesystem. These
-The built-in Jobs fixture opens the embedded panel in a disposable project,
-submits a tree, verifies import and hidden queue storage, and reopens the
-project to check persisted history and duplicate submissions. Displayed layout,
-assistant tools and device coordination are still separate checks.
+The built-in Jobs fixture opens the embedded panel in disposable projects,
+submits a tree and explicit scene attachment, verifies import, save, undo/redo
+and hidden queue storage, and reopens the project to check persisted history.
+It checks stale-scene and skipped-producer failures, scene reconciliation after
+reopening the queue and restarting the editor, and rejection of an ambiguous
+scene. A fake queued chat also
+checks paused dispatch, automatic classification, captured scene/selection
+context, credential exclusion, tail appends, completion and a timed-out request
+that remains interrupted. Resource checks
+cover FIFO ordering, callback after commit, cancellation and a late response;
+the focused HTTP check opens a loopback-only fixture, answers automatic
+classification, and verifies that a stale device snapshot revalidates inside a
+chat turn instead of requiring a manual Refresh. The reviewed worker append
+fixture checks tail ordering, retained IDs, replay deduplication and invalid
+request rejection. Displayed layout and real device coordination remain separate
+checks.
 
 Build once, then run from the repository root:
 
@@ -52,14 +65,14 @@ Without flags, the runner extracts the exact embedded manager/chat scripts, chec
 
 Planner/panel fixtures cover incompatible capabilities, unknown metadata, allocation/SSD headroom, staging/reserves, protected coding replacement, duplicates, context limits, stale checks, compact cells at 600/1400 pixels, horizontal overflow, Info popups, and a single inventory table. Settings migration preserves existing Advanced values. Progress fixtures cover terminal chunking/escapes, device percentages, CLI percentages, and duplicate suppression.
 
-The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow.
+The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow and confirms the dock context reports the edited scene and selected node.
 
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.
 
-`fake_chat.gd` replaces only the HTTP submission boundary. Protocol fixtures cover text, normal tool/result/final text, malformed/multiple/repeated calls and limits, matched unknown/failed tools, traversal, duplicate create, real temporary script creation, completed-artifact retention, subsequent-turn recovery, context reset and error redaction. The built-in dock also rejects an invalid call to detect stale binaries.
+`fake_chat.gd` replaces only the HTTP submission boundary. Protocol fixtures cover text, normal tool/result/final text, malformed/multiple/repeated calls and limits, matched unknown/failed tools, traversal, duplicate create, real temporary script creation, completed-artifact retention, subsequent-turn recovery, history reset and error redaction. The built-in dock also rejects an invalid call to detect stale binaries. Chat history checks read the dock's message log rather than a text-output widget.
 
 JSON reports contain revision/dirty-file list, binary version/SHA-256, source hashes and bounded per-stage outcomes/diagnostic counts, without environment values, credentials, bodies or raw logs. Timeouts, nonzero exits, missing success markers and unexpected GDScript diagnostics fail the run. The invalid-generated-script stage alone requires exactly one expected parse diagnostic and verifies no file was written. Other engine diagnostics are counted separately.
 
-Known upstream/environment diagnostics: required virtual methods in MultiplayerPeerExtension/WebRTCDataChannelExtension; restricted debug-server sockets and dummy popup positions under sandboxed/headless runs; an expected numeric-overflow warning in the nonfinite polygon fixture. See [completion evidence](../../../plan/evidence/01-completion.md) for actual tested configurations and any additional observations. No broad engine test-enabled rebuild is required.
+Known upstream/environment diagnostics: restricted debug-server sockets and dummy popup positions under sandboxed/headless runs; an expected numeric-overflow warning in the nonfinite polygon fixture. The MultiplayerPeerExtension/WebRTCDataChannelExtension required-virtual diagnostics no longer occur (see the fix note in `plan/STATUS.md`). See [completion evidence](../../../plan/evidence/01-completion.md) for actual tested configurations and any additional observations. No broad engine test-enabled rebuild is required.

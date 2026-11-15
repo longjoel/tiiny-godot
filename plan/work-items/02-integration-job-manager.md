@@ -1,6 +1,6 @@
 # 02 — Persistent FIFO job queue
 
-Status: In progress; story 01 baseline accepted. Acceptance remains pending.
+Status: In progress; story 01 baseline accepted. 9 of 10 acceptance criteria verified; criterion 10 (Tiiny device coordination) deferred per the work item.
 
 Feature: Persistent FIFO jobs and execution visibility
 
@@ -31,7 +31,7 @@ Example: append `create_tree`, then append `attach_tree_to_scene`, with an expli
 
 ## Implementation plan and visuals
 
-Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). The initial standalone queue core is under development; acceptance remains pending.
+Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). 9 of 10 acceptance criteria verified; displayed editor and Tiiny device coordination deferred per the work item.
 
 ## Evidence and handoff
 

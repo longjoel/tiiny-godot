@@ -25,6 +25,10 @@ var process_id := -1
 var draft_initialized := false
 var progress_reports := {}
 var operation_started := 0
+var device_lease := ""
+var device_lease_owner: Node
+var connection_identity := ""
+var last_error_type := ""
 
 # The SDK emits a terminal UI. Keep only reported percentages, never terminal
 # escape sequences or arbitrary CLI text, when forwarding progress to Output.
@@ -181,6 +185,9 @@ func _ready() -> void:
 			draft_initialized = true
 		else:
 			_report("Saved model configuration is invalid. Review Models and Check Config; no device changes were made.")
+	# On startup, verify the coding model is configured. Do not trigger automatic
+	# downloads or loads; the settings panel or Apply drives device mutations.
+	_verify_coding_model_stability(settings)
 	# No downloads, loads, or unloads at startup. The settings panel requests a read-only refresh.
 
 static func _valid_saved_draft(saved: Variant) -> bool:
@@ -192,6 +199,29 @@ static func _valid_saved_draft(saved: Variant) -> bool:
 		if not id is String: return false
 	return (saved.get("npu_reserve") is int or saved.get("npu_reserve") is float) and (saved.get("disk_reserve_gib") is int or saved.get("disk_reserve_gib") is float)
 
+# Verify the saved coding model catalog stability without triggering device mutations.
+# If the coding model is no longer in the catalog or incompatible, warn without unloading.
+# This preserves user configuration while preventing silent degradation.
+static func _verify_coding_model_stability(settings: EditorSettings) -> void:
+	var coding_id := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	var coding_type := str(settings.get_setting("tiiny_ai/models/coding_model_type"))
+	var cached: Variant = settings.get_setting("_tiiny_ai/catalog_cache")
+	var catalog: Dictionary = cached if cached is Dictionary else {}
+	if coding_id.is_empty() or not catalog.has(coding_id):
+		if coding_id.is_empty():
+			settings.set_setting("_tiiny_ai/coding_model_status", "No coding model configured.")
+		else:
+			settings.set_setting("_tiiny_ai/coding_model_status", "Saved coding model is not in the current catalog. Apply will restore it when available.")
+		return
+	if coding_type.is_empty() and (not catalog[coding_id] is Dictionary or catalog[coding_id].get("type", "").is_empty()):
+		settings.set_setting("_tiiny_ai/coding_model_status", "Coding model catalog entry missing type. Apply will verify capabilities.")
+		return
+	var saved_draft: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	if _valid_saved_draft(saved_draft) and saved_draft.roles.get("coding_model", {}).get("model", "") != coding_id:
+		settings.set_setting("_tiiny_ai/coding_model_status", "Coding model changed since last Apply. Re-check and re-apply to verify capabilities.")
+		return
+	settings.set_setting("_tiiny_ai/coding_model_status", "Coding model stable; apply to verify on-device state.")
+
 func create_configuration_panel() -> Control:
 	var panel := ConfigurationPanel.new()
 	panel.manager = self
@@ -199,10 +229,12 @@ func create_configuration_panel() -> Control:
 
 func is_ready() -> bool:
 	var coding_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model"))
+	if not connection_identity.is_empty() and snapshot.get("connection", "") != connection_identity:
+		return false
 	return is_model_loaded(coding_id) and Planner.suitable("coding_model", snapshot.get("models", {}).get(coding_id, {}))
 
 func is_model_loaded(id: String) -> bool:
-	return connected and not busy and not applying and not id.is_empty() and Time.get_ticks_msec() - int(snapshot.get("time", -100000)) <= SNAPSHOT_LIFETIME * 1000 and snapshot.get("loaded", {}).has(id)
+	return connected and not busy and not applying and not id.is_empty() and Time.get_ticks_msec() - int(snapshot.get("time", -100000)) <= SNAPSHOT_LIFETIME * 1000 and snapshot.get("loaded", {}).has(id) and (connection_identity.is_empty() or snapshot.get("connection", "") == connection_identity)
 
 func _initialize_draft_from_snapshot() -> void:
 	if draft_initialized: return
@@ -226,6 +258,23 @@ func _report(text: String) -> void:
 	message = text
 	log_message.emit("Tiiny models: " + text, 0)
 	changed.emit()
+
+func _acquire_device(purpose: String) -> bool:
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.has_method("acquire_device"):
+		return false
+	var token: String = service.acquire_device(self, purpose)
+	if token.is_empty():
+		return false
+	device_lease_owner = service
+	device_lease = token
+	return true
+
+func _release_device() -> void:
+	if not device_lease.is_empty() and is_instance_valid(device_lease_owner):
+		device_lease_owner.release_device(self, device_lease)
+	device_lease = ""
+	device_lease_owner = null
 
 func _connection() -> Dictionary:
 	var settings := EditorInterface.get_editor_settings()
@@ -299,34 +348,78 @@ func _fetch_snapshot() -> Dictionary:
 	result["time"] = Time.get_ticks_msec()
 	return result
 
-func refresh_device() -> void:
+func refresh_device(keep_plan := false) -> void:
+	await _refresh_snapshot(keep_plan)
+
+# Inference needs a recent device snapshot. Revalidate automatically rather than
+# requiring a manual Refresh, while leaving a pending Check Config plan intact.
+func ensure_ready() -> bool:
+	if is_ready():
+		return true
+	if busy or applying:
+		return false
+	await _refresh_snapshot(true)
+	return is_ready()
+
+func _refresh_snapshot(keep_plan: bool) -> void:
 	if busy: return
+	if not _acquire_device("refresh models"):
+		_report("Tiiny is busy or the Jobs service is unavailable.")
+		return
 	busy = true
-	plan = {}
+	if not keep_plan: plan = {}
 	_report("Reading catalog, loaded models, and SSD capacity…")
 	var result := await _fetch_snapshot()
 	busy = false
+	_release_device()
 	if result.has("error"):
 		connected = false
+		connection_identity = ""
+		# Track explicit error types for recoverable state handling (Slice E).
+		var err_msg: String = str(result.get("error", ""))
+		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
+			last_error_type = "disconnect"
+		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
+			last_error_type = "auth"
+		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "NPU" in err_msg or "SSD" in err_msg:
+			last_error_type = "capacity"
+		else:
+			last_error_type = "unknown"
 		_report(result.error + " No device changes were made.")
 		return
 	snapshot = result
+	snapshot["connection_identity"] = connection_identity
 	_initialize_draft_from_snapshot()
 	connected = true
 	_report("Device data refreshed. Choose changes, then Check Config.")
 
 func check_config() -> void:
 	if busy: return
+	if not _acquire_device("check models"):
+		_report("Tiiny is busy or the Jobs service is unavailable.")
+		return
 	busy = true
 	plan = {}
 	_report("Checking configuration against fresh device state…")
 	var result := await _fetch_snapshot()
 	busy = false
+	_release_device()
 	if result.has("error"):
 		connected = false
+		connection_identity = ""
+		var err_msg: String = str(result.get("error", ""))
+		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
+			last_error_type = "disconnect"
+		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
+			last_error_type = "auth"
+		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "NPU" in err_msg or "SSD" in err_msg:
+			last_error_type = "capacity"
+		else:
+			last_error_type = "unknown"
 		_report(result.error + " Apply is disabled.")
 		return
 	snapshot = result
+	snapshot["connection_identity"] = connection_identity
 	_initialize_draft_from_snapshot()
 	connected = true
 	plan = Planner.check(snapshot, draft, str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model")))
@@ -345,12 +438,19 @@ func apply_config() -> void:
 		plan = {}
 		_report("Configuration check expired or changed. Check Config again.")
 		return
+	if not _acquire_device("apply models"):
+		_report("Tiiny is busy or the Jobs service is unavailable.")
+		return
 	busy = true
 	applying = true
 	var approved := plan.duplicate(true)
 	_report("Revalidating the approved plan…")
 	var fresh := await _fetch_snapshot()
 	if fresh.has("error") or fresh.get("connection") != approved.connection:
+		var error_type := "unavailable" if fresh.has("error") else "changed"
+		connected = false
+		connection_identity = ""
+		last_error_type = error_type
 		await _apply_failed("Device changed or became unavailable. Check Config again.")
 		return
 	var settings := EditorInterface.get_editor_settings()
@@ -378,6 +478,14 @@ func apply_config() -> void:
 		if not verified:
 			await _apply_failed("Tiiny did not confirm the requested %s. Stopped before the next operation." % action.verb)
 			return
+		# Verify NPU allocation matches the model's expected value.
+		if action.verb == "load" and observed.loaded.has(action.id):
+			var expected_npu := 0.0
+			if observed.models.has(action.id) and observed.models[action.id].npu >= 0:
+				expected_npu = observed.models[action.id].npu
+			if expected_npu > 0 and observed.loaded[action.id] != expected_npu:
+				await _apply_failed("Tiiny loaded %s but NPU allocation (%.0f) does not match the expected value (%.0f). The model may be partially loaded." % [action.id, observed.loaded[action.id], expected_npu])
+				return
 		var protected_id: String = approved.draft.roles.coding_model.model if observed.loaded.has(approved.draft.roles.coding_model.model) else old_coding
 		if fresh.loaded.has(old_coding) and not observed.loaded.has(protected_id):
 			await _apply_failed("The scripting model became unavailable. Stopped; check and restore the configuration before continuing.")
@@ -392,6 +500,7 @@ func apply_config() -> void:
 			await _apply_failed("Required model is not loaded: " + id)
 			return
 	snapshot = final
+	snapshot["connection_identity"] = connection_identity
 	connected = true
 	for role in ROLES: settings.set_setting("tiiny_ai/models/" + role, approved.draft.roles[role].model)
 	var coding_id: String = approved.draft.roles.coding_model.model
@@ -400,15 +509,32 @@ func apply_config() -> void:
 	settings.set_setting("_tiiny_ai/applied_configuration", approved.draft)
 	busy = false
 	applying = false
+	_release_device()
 	plan = {}
 	_report("Configuration applied and verified. Chat uses the selected scripting model and request context budget.")
 
 func _apply_failed(reason: String) -> void:
 	var current := await _fetch_snapshot()
-	if not current.has("error"): snapshot = current
-	connected = not current.has("error")
+	if not current.has("error"):
+		snapshot = current
+		connection_identity = current.get("connection", "")
+		connected = not current.has("error")
+	else:
+		connected = false
+		connection_identity = ""
+		# Classify error type for explicit error-state handling (Slice E).
+		var err_msg: String = str(current.get("error", ""))
+		if err_msg.begins_with("Could not start") or err_msg.begins_with("Device request failed"):
+			last_error_type = "disconnect"
+		elif "auth" in err_msg.to_lower() or "401" in err_msg or "403" in err_msg:
+			last_error_type = "auth"
+		elif "capacity" in err_msg.to_lower() or "insufficient" in err_msg.to_lower() or "insufficient" in reason.to_lower() or "NPU" in reason or "SSD" in reason:
+			last_error_type = "capacity"
+		else:
+			last_error_type = "unknown"
 	busy = false
 	applying = false
+	_release_device()
 	plan = {}
 	_report(reason)
 
@@ -464,10 +590,27 @@ func _run_cli(arguments: Array) -> int:
 	operation_started = Time.get_ticks_msec()
 	var reader := ProgressReader.new()
 	var next_poll := operation_started
+	var last_percent := -1.0
+	var stall_threshold := 120.0
+	var stall_start := 0.0
+	var stalled := false
 	while process_id == running_id and OS.is_process_running(running_id):
 		_drain_progress(process, reader, arguments)
 		if arguments[0] == "download" and Time.get_ticks_msec() >= next_poll:
 			await _poll_download_progress(connection, arguments)
+			var latest: float = 0.0
+			if "device" in progress_reports: latest = progress_reports["device"].get("percent", 0.0)
+			if latest > 0 and last_percent >= 0 and latest == last_percent:
+				if stall_start == 0: stall_start = Time.get_ticks_msec()
+				if Time.get_ticks_msec() - stall_start > stall_threshold * 1000 and not stalled:
+					stalled = true
+					var stall_msg := "Progress stalled at %.1f%% for more than %.0fs. The device may be slow or unresponsive; the operation will continue but may not complete." % [latest, stall_threshold]
+					_report(stall_msg)
+			else:
+				if stalled: _report("Progress resumed after stall.")
+				stalled = false
+				stall_start = 0
+				last_percent = latest
 			next_poll = Time.get_ticks_msec() + 3000
 		await get_tree().create_timer(0.1).timeout
 	_drain_progress(process, reader, arguments)
@@ -507,6 +650,8 @@ func stop_cli() -> void:
 
 func _exit_tree() -> void:
 	stop_cli()
+	if not busy:
+		_release_device()
 
 class ConfigurationPanel extends VBoxContainer:
 	var manager: Node

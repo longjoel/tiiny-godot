@@ -51,6 +51,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(b"not JSON")
         elif self.path == "/v1/images/generations":
             self.reply({"data": [{"b64_json": base64.b64encode(b"invalid" if "invalid_png" in prompt else png()).decode()}]})
+        elif "Classify the user's Godot request" in prompt:
+            self.reply({"choices": [{"message": {"role": "assistant", "content": "general"}}]})
         else:
             content = json.dumps({"points": [[0, 0], [32, 0], [32, 48], [0, 48]]}) if "ConvexPolygonShape2D" in prompt else "HTTP fixture OK"
             self.reply({"choices": [{"message": {"role": "assistant", "content": content}}]})

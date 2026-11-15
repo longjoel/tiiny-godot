@@ -16,15 +16,29 @@ func _initialize() -> void:
 		for x in range(28, 36):
 			image.set_pixel(x, y, Color(0.38, 0.22, 0.10, 1))
 	var err := image.save_png("res://tree.png")
+	if err == OK and FileAccess.file_exists("res://followup.json"):
+		var input: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://followup.json"))
+		if not input is Dictionary or not input.get("destination") is String:
+			quit(1)
+			return
+		var request := FileAccess.open("res://append_requests.json", FileAccess.WRITE)
+		if request == null:
+			quit(1)
+			return
+		request.store_string(JSON.stringify({"requests": [{"operation": "create_tree", "parameters": {"destination": input.destination, "timeout_ms": 60000}}]}))
+		request.close()
 	print("Tree fixture generated" if err == OK else "Tree fixture failed")
 	quit(0 if err == OK else 1)
 '''
 const MAX_LOG_BYTES := 65536
 const MAX_OUTPUT_BYTES := 1048576
+const MAX_APPEND_REQUEST_BYTES := 65536
+const MAX_APPEND_REQUESTS := 4
 var root: String
 var executable: String
 var publish: Callable
 var publisher_owner: RefCounted
+var append_job: Callable
 var process: Dictionary = {}
 var pid := -1
 var job: Dictionary = {}
@@ -35,7 +49,7 @@ var finished: Dictionary = {}
 var publication_artifact: Dictionary = {}
 var publication_result: Dictionary = {}
 
-func _init(p_root: String, p_executable: String, p_publish: Variant) -> void:
+func _init(p_root: String, p_executable: String, p_publish: Variant, p_append: Callable = Callable()) -> void:
 	root = p_root
 	executable = p_executable
 	if p_publish is Callable:
@@ -43,6 +57,7 @@ func _init(p_root: String, p_executable: String, p_publish: Variant) -> void:
 	elif p_publish is RefCounted and p_publish.has_method("publish"):
 		publisher_owner = p_publish
 		publish = Callable(publisher_owner, "publish")
+	append_job = p_append
 
 # root must be a newly reserved, manager-owned per-attempt directory; neither
 # the recipe nor the destination can be supplied by the job.
@@ -62,6 +77,12 @@ func start(p_job: Dictionary) -> String:
 		return "Cannot create reviewed generator"
 	script.store_string(RECIPE)
 	script.close()
+	if job.parameters.has("followup_destination"):
+		var followup := FileAccess.open(root.path_join("followup.json"), FileAccess.WRITE)
+		if followup == null:
+			return "Cannot create reviewed worker input"
+		followup.store_string(JSON.stringify({"destination": job.parameters.followup_destination}))
+		followup.close()
 	process = OS.execute_with_pipe(executable, PackedStringArray(["--headless", "--path", root, "--script", "res://generator.gd"]), false)
 	if process.is_empty():
 		return "Could not start generator"
@@ -136,9 +157,50 @@ func _validate_and_publish(result: Dictionary) -> Dictionary:
 	hash.start(HashingContext.HASH_SHA256)
 	hash.update(bytes)
 	var artifact := {"id": job.id + ":tree", "path": output, "sha256": hash.finish().hex_encode(), "format": "png", "recipe": "tree-fixture-v1"}
+	var requests := _accept_append_requests(dir)
+	if requests.has("error"):
+		result["error"] = requests.error
+		return {"state": "failed", "result": result}
+	if requests.has("accepted"):
+		result["appended_jobs"] = requests.accepted
 	publication_artifact = artifact
 	publication_result = result
 	return _poll_publication()
+
+# Reviewed workers may record bounded requests but never wait for them. Each
+# accepted request is durably appended through the same service as the UI.
+func _accept_append_requests(dir: DirAccess) -> Dictionary:
+	var path := root.path_join("append_requests.json")
+	if not FileAccess.file_exists(path):
+		return {"error": "Worker did not record its requested append"} if job.parameters.has("followup_destination") else {}
+	if dir.is_link("append_requests.json") or not append_job.is_valid():
+		return {"error": "Worker append bridge is unavailable or invalid"}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null or file.get_length() > MAX_APPEND_REQUEST_BYTES:
+		return {"error": "Worker append requests exceed the allowed size"}
+	var parser := JSON.new()
+	if parser.parse(file.get_as_text()) != OK:
+		return {"error": "Worker append requests are invalid"}
+	var envelope: Variant = parser.data
+	if not envelope is Dictionary or envelope.size() != 1 or not envelope.get("requests") is Array or envelope.requests.size() > MAX_APPEND_REQUESTS:
+		return {"error": "Worker append requests exceed the allowed count"}
+	if not job.parameters.has("followup_destination") or envelope.requests.size() != 1:
+		return {"error": "Worker append requests do not match the reviewed recipe"}
+	var accepted := []
+	for index in envelope.requests.size():
+		var request: Variant = envelope.requests[index]
+		if not request is Dictionary or request.size() != 2 or request.get("operation") != "create_tree" or not request.get("parameters") is Dictionary or request.parameters.size() != 2 or not request.parameters.get("destination") is String or request.parameters.get("timeout_ms") != 60000:
+			return {"error": "Unsupported worker append request"}
+		if request.parameters.destination != job.parameters.followup_destination:
+			return {"error": "Worker append request changed its declared destination"}
+		# JSON numbers are floats. The shared validator requires integer budgets.
+		var parameters := {"destination": request.parameters.destination, "timeout_ms": 60000}
+		var key := "worker-" + str(job.id) + "-" + str(index)
+		var ack: Variant = append_job.call(key, "create_tree", parameters)
+		if not ack is Dictionary or not ack.has("id") or not ack.has("sequence"):
+			return {"error": "Worker append rejected: " + str(ack.get("error", "invalid acknowledgment") if ack is Dictionary else "invalid acknowledgment")}
+		accepted.append({"id": ack.id, "sequence": ack.sequence})
+	return {"accepted": accepted}
 
 func _poll_publication() -> Dictionary:
 	var publication: Variant = publish.call(job.duplicate(true), publication_artifact.duplicate(true))

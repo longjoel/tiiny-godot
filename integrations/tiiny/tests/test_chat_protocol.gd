@@ -13,16 +13,15 @@ func _begin(dock: Control) -> void:
 	dock.pending_key = "fixture-secret-key"
 	dock.pending_model = "fixture-code"
 	dock.send_button.disabled = true
-	dock.shape_button.disabled = true
 	dock._send_chat("Fixture system", dock.pending_prompt)
 
 func _idle(dock: Control) -> bool:
-	return not dock.send_button.disabled and not dock.shape_button.disabled
+	return not dock.send_button.disabled
 
 func _recover(dock: Control) -> bool:
 	_begin(dock)
 	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "Recovered", "tool_calls": null}))
-	return _idle(dock) and dock.output.text.contains("Recovered")
+	return _idle(dock) and dock.history_text().contains("Recovered")
 
 func _tool(dock: Control, calls: Variant) -> void:
 	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "tool_calls": calls}))
@@ -119,10 +118,10 @@ func run(plugin: EditorPlugin) -> String:
 	# Successful mutation remains visible and in context after a continuation error.
 	_begin(dock)
 	await _tool(dock, [_call("create", "res://completed.gd")])
-	if not FileAccess.file_exists("res://completed.gd") or not dock.output.text.contains("res://completed.gd"): return "Completed tool effect was not visible."
+	if not FileAccess.file_exists("res://completed.gd") or not dock.history_text().contains("res://completed.gd"): return "Completed tool effect was not visible."
 	if dock.conversation.back().get("tool_call_id") != "create": return "Completed effect was not retained in context."
 	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 503, PackedStringArray(), PackedByteArray())
-	if not _idle(dock) or not dock.output.text.contains("res://completed.gd"): return "Continuation failure hid completed work or locked controls."
+	if not _idle(dock) or not dock.history_text().contains("res://completed.gd"): return "Continuation failure hid completed work or locked controls."
 	if not await _recover(dock): return "Continuation failure prevented the next turn."
 	# Repeated IDs in one turn must not dispatch another mutation.
 	_begin(dock)
@@ -139,17 +138,16 @@ func run(plugin: EditorPlugin) -> String:
 	_begin(dock)
 	dock.submit_error = ERR_CANT_CONNECT
 	await _tool(dock, [_call("start-error", "res://start_error.gd")])
-	if not _idle(dock) or not dock.output.text.contains("res://start_error.gd"): return "Failed continuation start lost completed work."
+	if not _idle(dock) or not dock.history_text().contains("res://start_error.gd"): return "Failed continuation start lost completed work."
 	dock.submit_error = OK
 	if not await _recover(dock): return "Immediate continuation failure prevented recovery."
-	# A full context must have a usable escape without erasing prior artifact logs.
+	# New chat clears model context and the dock history; the queue retains the results.
 	dock.conversation.assign([{"role": "user", "content": "x".repeat(20000)}])
 	_begin(dock)
 	if not _idle(dock): return "Context overflow locked controls."
-	var previous_output: String = dock.output.text
-	for child in dock.get_children():
-		if child is Button and child.text == "New conversation": child.pressed.emit()
-	if not dock.conversation.is_empty() or dock.output.text != previous_output: return "Conversation reset lost results or retained full context."
+	var retained_tool_log: String = dock.history_text()
+	dock.new_chat_button.pressed.emit()
+	if not dock.conversation.is_empty() or not dock.history_text().is_empty() or retained_tool_log.is_empty(): return "New chat did not clear context and history."
 	if not await _recover(dock): return "New conversation did not recover from a full context."
 	dock.queue_free()
 	await plugin.get_tree().process_frame
