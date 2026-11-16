@@ -26,9 +26,9 @@ Read [STATUS.md](STATUS.md) first. Each work item records its feature, sequence,
 
 Completion requires recorded evidence for every acceptance criterion. If a criterion proves too broad, split the item and record the changed scope before proceeding. Keep proposed extras in [IDEAS.md](IDEAS.md); do not silently add them to active work.
 
-Use [ACCEPTANCE_SCENARIOS.md](ACCEPTANCE_SCENARIOS.md) for concrete workspace outcomes, [TASK_CATALOG.md](TASK_CATALOG.md) for the 100-task 2D/3D coverage catalog, and [TESTING.md](TESTING.md) for deterministic, editor, device, and model-evaluation layers. The catalog is validated by `integrations/tiiny/tests/check_task_catalog.py`; its v1 macro-centric status is superseded by the v2 reclassification in story 16. Current v1 coverage is 17 supported / 12 partial / 71 missing, with all supported tasks tied to tests.
+Use [ACCEPTANCE_SCENARIOS.md](ACCEPTANCE_SCENARIOS.md) for concrete workspace outcomes, [TASK_CATALOG.md](TASK_CATALOG.md) for the 100-task 2D/3D coverage catalog, and [TESTING.md](TESTING.md) for deterministic, editor, device, and model-evaluation layers. The catalog is validated by `integrations/tiiny/tests/check_task_catalog.py`; v2 classifies all tasks by solution path. Current coverage is 28 supported / 60 partial / 12 specialized-missing, with 28/28 supported tasks tied to tests.
 
-Stories 14–17 revise the authoring architecture: generic typed editor primitives (14), first-class script behavior/attachment/save (15), catalog reclassification and composed-task tests (16), and genuinely specialized recipes (17). They are planning-ready but not implemented. Story 14 is the recommended next item.
+Stories 14–17 are accepted: generic typed editor primitives (14), first-class script behavior/attachment/save (15), catalog v2/composed tests (16), and the first specialized recipe family—2D/3D particles and imported-mesh collision (17). The remaining 12 specialized tasks are explicit follow-ups.
 
 Story 01 is accepted. Its [implementation plan](implementation/01-stabilize-prototype.md) and [completion evidence](evidence/01-completion.md) record the verified prototype, displayed editor checks, and real Tiiny chat/polygon results. Story 04 is now accepted separately; see its [acceptance evidence](evidence/04-acceptance.md).
 

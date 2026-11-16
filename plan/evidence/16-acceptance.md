@@ -11,7 +11,7 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`. No build or test remains running
 - `script_behavior`: 14
 - `specialized_missing`: 15
 
-Status: **25 supported / 60 partial / 15 missing**, 25/25 supported tasks with a test reference.
+Status at story 16 close: **25 supported / 60 partial / 15 missing**, 25/25 supported tasks with a test reference. Story 17 later moved 3 specialized tasks to supported, giving **28 / 60 / 12**.
 
 By dimension:
 
