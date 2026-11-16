@@ -320,6 +320,16 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 		if not approved.get("draft") is Dictionary or not approved.get("actions") is Array or approved.actions.size() > 128 or not approved.get("connection") is String or approved.connection.length() != 64 or not approved.connection.is_valid_hex_number(false):
 			return "Invalid approved model configuration"
 		return ""
+	if operation == "model_schedule":
+		var schedule_keys := parameters.keys()
+		schedule_keys.sort()
+		if not (schedule_keys == ["connection", "model", "role", "timeout_ms"] or schedule_keys == ["connection", "model", "restore", "role", "timeout_ms"]):
+			return "Invalid specialized-model schedule"
+		if not parameters.get("role") is String or parameters.role.is_empty() or parameters.role.length() > 64 or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection") is String or parameters.connection.length() != 64 or not parameters.connection.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
+			return "Invalid specialized-model schedule"
+		if parameters.has("restore") and not parameters.get("restore") is bool:
+			return "Invalid specialized-model restoration flag"
+		return ""
 	if operation == "resource_shape":
 		if parameters.size() != 4 or not parameters.get("description") is String or parameters.description.strip_edges().is_empty() or parameters.description.length() > 100000 or not parameters.get("model") is String or parameters.model.is_empty() or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 3600000:
 			return "Invalid resource-generation request"
@@ -568,7 +578,7 @@ func release_device(owner: Object, token: String) -> bool:
 	return true
 
 func _make_worker(job: Dictionary) -> RefCounted:
-	if job.operation in ["model_apply", "model_restore"]:
+	if job.operation in ["model_apply", "model_restore", "model_schedule"]:
 		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		return ModelWorker.new(manager) if is_instance_valid(manager) else null
 	if job.operation == "resource_shape":
@@ -663,6 +673,8 @@ func _job_title(job: Dictionary) -> String:
 		return label + " — Apply model configuration"
 	if job.operation == "model_restore":
 		return label + " — Restore " + str(job.parameters.get("model", "coding model"))
+	if job.operation == "model_schedule":
+		return label + " — Schedule " + str(job.parameters.get("model", "specialized model"))
 	if job.operation == "chat_turn":
 		return label + " — " + _preview(job.parameters.get("prompt", ""), 90)
 	if job.operation == "resource_shape":
@@ -838,7 +850,7 @@ func _on_skip_job(id: String) -> void:
 	if job.has("error") or not _is_abandonable(job) or not inspecting_model_job.is_empty():
 		return
 	abandon_id = id
-	if job.operation in ["model_apply", "model_restore"]:
+	if job.operation in ["model_apply", "model_restore", "model_schedule"]:
 		abandon_dialog.dialog_text = "Job %s was interrupted during a model operation. Its remote outcome is unknown, and the device lease is held until this is resolved.\n\nAbandoning marks the job skipped and releases the lease. Refresh the device and check the configuration before trying again. Continue?" % id
 	else:
 		abandon_dialog.dialog_text = "Job %s was interrupted after the device request started. Its remote outcome is unknown, and the device lease is held until this is resolved.\n\nAbandoning marks the job skipped and releases the lease. A response that was never recorded, or a tool effect it performed, will not be recovered. Continue?" % id
@@ -955,6 +967,10 @@ func _job_details_text(id: String) -> String:
 	elif job.operation == "attach_tree_to_scene":
 		lines.append("Scene: " + str(job.parameters.get("scene_path", "")))
 		lines.append("Parent: " + str(job.parameters.get("parent_path", "")) + " · Node: " + str(job.parameters.get("node_name", "")))
+	elif job.operation == "model_schedule":
+		lines.append("Role: " + str(job.parameters.get("role", "")))
+		lines.append("Model: " + str(job.parameters.get("model", "")))
+		lines.append("Restore warm set: " + str(job.parameters.get("restore", true)))
 	if _is_abandonable(job):
 		lines.append("Remote outcome: unknown. Skip abandons this job and releases the device lease.")
 	if job.state == "running":

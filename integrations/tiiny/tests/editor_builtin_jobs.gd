@@ -157,7 +157,7 @@ func _run() -> void:
 			_fail("Explicit acknowledgement did not resolve shared uncertainty: job=" + str(jobs.get_job_status(entries[0].id)) + " marker=" + str(jobs._device_marker()) + " lease=" + str(not recovered_lease.is_empty()) + " holder=" + str(jobs.device_purpose))
 			return
 		jobs.release_device(self, recovered_lease)
-	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight"]:
+	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight", "model_schedule", "model_schedule_capacity", "model_schedule_restore", "model_schedule_disconnect"]:
 		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		actual.remove_from_group("tiiny_setup_manager")
 		var fake = load("res://fake_model_manager.gd").new()
@@ -165,9 +165,21 @@ func _run() -> void:
 		var settings := EditorInterface.get_editor_settings()
 		settings.set_setting("tiiny_ai/models/coding_model", "code")
 		fake.fixture_state = {"models": {"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"], "npu": 47, "bytes": 100, "installed": mode != "model_restore_download", "max_context": 32768}, "image": {"name": "Image", "type": "Text-to-Image", "npu": 23, "bytes": 100, "installed": true, "max_context": 0}}, "loaded": {"image": 23}, "npu_total": 100, "npu_used": 80 if mode == "model_restore_capacity" else 23, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "connection": "b".repeat(64)}
+		if mode in ["model_schedule", "model_schedule_capacity", "model_schedule_restore", "model_schedule_disconnect"]:
+			fake.fixture_state.loaded = {"code": 47.0, "image": 23.0}
+			fake.fixture_state.npu_used = 70.0
+			fake.fixture_state.models["special"] = {"name": "Special", "type": "Text-to-Image", "supported": [], "npu": 10, "bytes": 100, "installed": true, "max_context": 0}
+			fake.fixture_state.models["big_image"] = {"name": "Big image", "type": "Text-to-Image", "supported": [], "npu": 60, "bytes": 100, "installed": true, "max_context": 0}
+		if mode == "model_schedule_restore":
+			fake.fixture_state.loaded = {"code": 47.0, "special": 10.0}
+			fake.fixture_state.npu_used = 57.0
 		var saved := {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
 		for role in fake.ROLES:
 			saved.roles[role] = {"model": "code" if role == "coding_model" else "", "context": 8192 if role == "coding_model" else 0, "warm": role == "coding_model"}
+		if mode in ["model_schedule", "model_schedule_capacity", "model_schedule_disconnect"]:
+			saved.roles.image_model = {"model": "image", "context": 0, "warm": true}
+		if mode == "model_schedule_restore":
+			saved.roles.image_model = {"model": "image", "context": 0, "warm": true}
 		settings.set_setting("_tiiny_ai/applied_configuration", saved)
 		fake.draft = saved.duplicate(true)
 		fake.draft_initialized = true
@@ -237,6 +249,80 @@ func _run() -> void:
 				_fail("Chat did not complete after preflight restoration: " + str(jobs.get_job_status(accepted.id)))
 				return
 		else:
+			if mode in ["model_schedule", "model_schedule_capacity"]:
+				var requested := "special" if mode == "model_schedule" else "big_image"
+				var fake_chat = load("res://fake_restore_chat.gd").new()
+				add_child(fake_chat)
+				fake_chat.jobs_service = jobs
+				var raw: Variant = fake_chat._append_job_tool({"operation": "model_schedule", "role": "image_model", "model": requested})
+				if raw is String and raw.begins_with("Error:"):
+					_fail("Specialized scheduling was not accepted by the dock tool: " + raw); return
+				var submitted: Variant = JSON.parse_string(raw)
+				if not submitted is Dictionary or not submitted.get("accepted", false) or not submitted.get("id") is String:
+					_fail("Specialized scheduling was not accepted by the dock tool: " + str(submitted)); return
+				var accepted := {"id": submitted.id}
+				fake_chat.queue_free()
+				while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				var scheduled: Dictionary = jobs.get_job_status(accepted.id)
+				if mode == "model_schedule_capacity":
+					if scheduled.state != "failed" or not fake.calls.is_empty() or not str(scheduled.get("result", {}).get("error", "")).contains("retaining the scripting model"):
+						_fail("Impossible specialized schedule mutated the device or lacked a clear error: " + str(scheduled) + " calls=" + str(fake.calls)); return
+				else:
+					var expected_calls := [["unload", "image"], ["load", "special"], ["unload", "special"], ["load", "image"]]
+					if scheduled.state != "completed" or fake.calls != expected_calls:
+						_fail("Specialized schedule did not evict, load, and restore: " + str(scheduled) + " calls=" + str(fake.calls)); return
+					if not fake.fixture_state.loaded.has("code") or not fake.fixture_state.loaded.has("image") or fake.fixture_state.loaded.has("special"):
+						_fail("Specialized schedule did not restore the configured warm set: " + str(fake.fixture_state.loaded)); return
+					var operations: Array = scheduled.attempts.back().get("device_operations", [])
+					if operations.size() != 4 or not operations.all(func(operation): return operation.state == "verified"):
+						_fail("Specialized schedule did not verify every device operation: " + str(operations)); return
+				print("Built-in Jobs %s passed" % mode)
+				get_tree().quit(0)
+				return
+			if mode == "model_schedule_restore":
+				fake.calls.clear()
+				await fake._fail_schedule("fixture failure", {"changed": true, "uncertain": false}, "b".repeat(64), saved, "code")
+				if fake.calls != [["unload", "special"], ["load", "image"]] or not fake.fixture_state.loaded.has("image") or fake.fixture_state.loaded.has("special"):
+					_fail("Failure path did not restore the configured warm set: " + str(fake.calls) + " loaded=" + str(fake.fixture_state.loaded)); return
+				if not fake.message.contains("warm set was restored"):
+					_fail("Failure path did not report restoration: " + fake.message); return
+				fake.fixture_state.loaded = {"code": 47.0, "special": 10.0}
+				fake.fixture_state.npu_used = 57.0
+				fake.calls.clear()
+				fake.model_job_cancelled = true
+				await fake._fail_schedule("fixture cancellation", {"changed": true, "uncertain": false}, "b".repeat(64), saved, "code")
+				fake.model_job_cancelled = false
+				if fake.calls != [["unload", "special"], ["load", "image"]] or not fake.fixture_state.loaded.has("image"):
+					_fail("Cancellation path did not restore the configured warm set: " + str(fake.calls)); return
+				print("Built-in Jobs %s passed" % mode)
+				get_tree().quit(0)
+				return
+			if mode == "model_schedule_disconnect":
+				fake.snapshot_error = "Device request failed (connection 1, HTTP 0)."
+				var schedule_params := {"role": "image_model", "model": "special", "connection": "b".repeat(64), "timeout_ms": 15000}
+				var first: Dictionary = jobs.append_job("schedule-disconnect", "model_schedule", schedule_params)
+				while jobs.get_job_status(first.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				var failed: Dictionary = jobs.get_job_status(first.id)
+				if failed.state != "failed" or not fake.calls.is_empty() or not str(failed.get("result", {}).get("error", "")).contains("unavailable or changed"):
+					_fail("Disconnected schedule mutated the device or lacked a clear error: " + str(failed) + " calls=" + str(fake.calls)); return
+				var duplicate: Dictionary = jobs.append_job("schedule-disconnect", "model_schedule", schedule_params)
+				if duplicate.get("id", "") != first.id or jobs.queue.snapshot().jobs.size() != 1:
+					_fail("Disconnected schedule was duplicated: " + str(duplicate)); return
+				fake.snapshot_error = ""
+				if not jobs.queue.resolve(first.id, "skip"):
+					_fail("Could not resolve the failed schedule"); return
+				if not jobs.queue.set_paused(false):
+					_fail("Could not resume dispatch after the failed schedule"); return
+				var recovered: Dictionary = jobs.append_job("schedule-recovered", "model_schedule", schedule_params)
+				while jobs.get_job_status(recovered.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+					await get_tree().create_timer(0.05).timeout
+				if jobs.get_job_status(recovered.id).get("state") != "completed" or not fake.fixture_state.loaded.has("image") or fake.fixture_state.loaded.has("special"):
+					_fail("Recovered schedule did not complete or restore: " + str(jobs.get_job_status(recovered.id))); return
+				print("Built-in Jobs %s passed" % mode)
+				get_tree().quit(0)
+				return
 			if mode == "model_restore_stale":
 				jobs.queue.set_paused(true)
 				await fake.refresh_device()

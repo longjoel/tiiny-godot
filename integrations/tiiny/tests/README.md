@@ -85,6 +85,8 @@ The transaction fixture covers the class-agnostic executor, one-undo recipe, sav
 
 The resource HTTP fixture also checks story 09's image path: the generated PNG must decode, import as a `Texture2D`, and satisfy the import-readiness check, while a deliberately invalid PNG must not be reported as importable.
 
+Story 10 adds `Planner.schedule` offline assertions for coding-model protection, eligible eviction, restore actions, already-loaded no-op, and capacity/disk/unknown rejection. The Jobs suite adds `model_schedule` (evict → load → restore with four verified operations), `model_schedule_capacity` (no mutation, clear retained-coding error), `model_schedule_restore` (failure and cancellation restoration), and `model_schedule_disconnect` (same-key dedupe, explicit resolve/resume, recovered schedule).
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.

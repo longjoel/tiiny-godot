@@ -65,9 +65,9 @@ const LEGACY_DEFINITIONS := [
 	{
 		"name": "append_job",
 		"title": "Append reviewed job",
-		"description": "Append a reviewed create_tree or attach_tree_to_scene job. Acceptance is not completion.",
+		"description": "Append a reviewed create_tree, attach_tree_to_scene, or model_schedule job. Acceptance is not completion.",
 		"parameters": {"type": "object", "properties": {
-			"operation": {"type": "string", "enum": ["create_tree", "attach_tree_to_scene"]},
+			"operation": {"type": "string", "enum": ["create_tree", "attach_tree_to_scene", "model_schedule"]},
 			"destination": {"type": "string", "maxLength": 512},
 			"followup_destination": {"type": "string", "maxLength": 512},
 			"artifact_id": {"type": "string", "maxLength": 512},
@@ -75,6 +75,9 @@ const LEGACY_DEFINITIONS := [
 			"scene_sha256": {"type": "string", "maxLength": 128},
 			"parent_path": {"type": "string", "maxLength": 512},
 			"node_name": {"type": "string", "maxLength": 128},
+			"role": {"type": "string", "enum": ["coding_model", "image_model", "image_to_3d_model", "music_model", "speech_model"]},
+			"model": {"type": "string", "minLength": 1, "maxLength": 512},
+			"restore": {"type": "boolean"},
 		}, "required": ["operation"], "additionalProperties": false},
 		"risk": "long_running",
 		"timeout_ms": 15000,

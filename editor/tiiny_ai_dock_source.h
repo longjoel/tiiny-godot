@@ -1025,9 +1025,21 @@ func _append_job_tool(arguments: Dictionary) -> String:
 			if not arguments.get(field) is String:
 				return "Error: Invalid attachment arguments."
 			parameters[field] = arguments[field]
+	elif operation == "model_schedule" and arguments.size() in [3, 4]:
+		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		if manager == null or not manager.has_method("job_connection_identity"):
+			return "Error: Tiiny device manager is unavailable."
+		var identity: String = manager.job_connection_identity()
+		if identity.is_empty():
+			return "Error: " + str(manager.message)
+		if not arguments.get("role") is String or not arguments.get("model") is String:
+			return "Error: Invalid specialized-model schedule."
+		if arguments.has("restore") and not arguments.get("restore") is bool:
+			return "Error: Invalid specialized-model restoration flag."
+		parameters = {"role": arguments.role, "model": arguments.model, "connection": identity, "restore": bool(arguments.get("restore", true))}
 	else:
 		return "Error: Unsupported job or invalid arguments."
-	parameters["timeout_ms"] = 60000
+	parameters["timeout_ms"] = 7200000 if operation == "model_schedule" else 60000
 	var key := "chat-" + Crypto.new().generate_random_bytes(16).hex_encode()
 	var result: Dictionary = jobs_service.append_job(key, operation, parameters)
 	if result.has("error"):

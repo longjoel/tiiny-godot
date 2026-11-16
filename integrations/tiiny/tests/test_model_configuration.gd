@@ -125,6 +125,26 @@ func _initialize() -> void:
 	assert(unloading.ok and unloading.actions == [{"verb": "unload", "id": "image"}])
 	assert(not unloading.actions.any(func(action): return action.verb == "unload" and action.id == "code"))
 	assert(state.loaded.has("image")) # Plan has no effects on observed state.
+	var scheduling := state.duplicate(true)
+	scheduling.models["small"] = {"id": "small", "name": "Small", "type": "Text-to-Image", "supported": [], "npu": 10, "bytes": 5 * 1073741824, "installed": true, "max_context": 0, "state": "downloaded"}
+	scheduling.models["big_image"] = {"id": "big_image", "name": "Big image", "type": "Text-to-Image", "supported": [], "npu": 60, "bytes": 5 * 1073741824, "installed": true, "max_context": 0, "state": "downloaded"}
+	scheduling.models["pending"] = {"id": "pending", "name": "Pending", "type": "Text-to-Image", "supported": [], "npu": 10, "bytes": 200 * 1073741824, "installed": false, "max_context": 0, "state": "not_downloaded"}
+	var scheduled: Dictionary = planner.schedule(scheduling, config, "image_model", "small", "code")
+	assert(scheduled.ok)
+	assert(scheduled.temporary == [{"verb": "unload", "id": "image"}, {"verb": "load", "id": "small"}])
+	assert(scheduled.restore == [{"verb": "unload", "id": "small"}, {"verb": "load", "id": "image"}])
+	assert(not scheduled.temporary.any(func(action): return action.id == "code"))
+	var no_capacity: Dictionary = planner.schedule(scheduling, config, "image_model", "big_image", "code")
+	assert(not no_capacity.ok and no_capacity.temporary.is_empty())
+	assert(Array(no_capacity.errors).any(func(error): return "retaining the scripting model" in error))
+	var no_disk: Dictionary = planner.schedule(scheduling, config, "image_model", "pending", "code")
+	assert(not no_disk.ok and Array(no_disk.errors).any(func(error): return "SSD" in error))
+	assert(not planner.schedule(scheduling, config, "bogus_role", "small", "code").ok)
+	var same_model: Dictionary = planner.schedule(state, config, "coding_model", "code", "code")
+	assert(same_model.ok and same_model.temporary.is_empty() and same_model.restore.is_empty())
+	var unknown_capacity := state.duplicate(true)
+	unknown_capacity.npu_total = -1
+	assert(not planner.schedule(unknown_capacity, config, "image_model", "small", "code").ok)
 	var unknown := state.duplicate(true)
 	unknown.npu_total = -1
 	assert(not planner.check(unknown, config, "code").ok)

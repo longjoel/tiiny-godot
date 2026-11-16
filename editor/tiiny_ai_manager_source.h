@@ -96,6 +96,88 @@ class Planner:
 		# The scripting model coordinates tools; a prompt enhancer is not a coordinator.
 		return role != "coding_model" or model.get("supported", []).has("Tool Use")
 
+	static func schedule(state: Dictionary, config: Dictionary, role: String, requested: String, active_coding: String) -> Dictionary:
+		var errors := PackedStringArray()
+		var warnings := PackedStringArray()
+		var temporary: Array[Dictionary] = []
+		var models: Dictionary = state.get("models", {})
+		var loaded: Dictionary = state.get("loaded", {})
+		var roles: Dictionary = config.get("roles", {})
+		var coding_id := str(roles.get("coding_model", {}).get("model", ""))
+		if coding_id.is_empty() and not active_coding.is_empty(): coding_id = active_coding
+		if coding_id.is_empty() or not models.has(coding_id):
+			errors.append("Choose a compatible scripting model before scheduling specialized work.")
+		elif not suitable("coding_model", models[coding_id]):
+			errors.append("The configured scripting model is not compatible with tool use.")
+		if requested.is_empty() or not models.has(requested):
+			errors.append("Unknown model: " + requested)
+		elif not suitable(role, models[requested]):
+			errors.append("%s is not compatible with %s." % [requested, ROLES.get(role, role)])
+		if not errors.is_empty():
+			return {"ok": false, "errors": errors, "warnings": warnings, "temporary": [], "restore": [], "restore_ok": false, "restore_errors": PackedStringArray(), "requested": requested, "role": role, "coding": coding_id}
+		if loaded.has(requested):
+			warnings.append("%s is already loaded; no device changes are needed." % requested)
+			return {"ok": true, "errors": errors, "warnings": warnings, "temporary": [], "restore": [], "restore_ok": true, "restore_errors": PackedStringArray(), "requested": requested, "role": role, "coding": coding_id, "protected": coding_id, "npu_projected": float(state.get("npu_used", -1))}
+		var reserve := float(config.get("npu_reserve", 5))
+		var disk_reserve := float(config.get("disk_reserve_gib", 2)) * 1073741824.0
+		if reserve < 0 or reserve > 50: errors.append("NPU reserve must be between 0 and 50 units.")
+		if disk_reserve < 0: errors.append("SSD reserve cannot be negative.")
+		var total := float(state.get("npu_total", -1))
+		var npu_used := float(state.get("npu_used", -1))
+		if total <= 0 or npu_used < 0: errors.append("NPU capacity is unavailable.")
+		var known_used := 0.0
+		for id in loaded:
+			if float(loaded[id]) < 0: errors.append("Unknown running NPU allocation for " + str(id))
+			else: known_used += float(loaded[id])
+		var overhead := maxf(0, npu_used - known_used)
+		var model: Dictionary = models[requested]
+		var allocation := float(model.get("npu", -1))
+		if allocation < 0: errors.append("Unknown NPU allocation for " + requested)
+		var coding_units := 0.0
+		if loaded.has(coding_id) and float(loaded[coding_id]) >= 0: coding_units += float(loaded[coding_id])
+		if active_coding != coding_id and loaded.has(active_coding) and float(loaded[active_coding]) >= 0: coding_units += float(loaded[active_coding])
+		if total > 0 and allocation >= 0 and npu_used >= 0 and overhead + coding_units + allocation + reserve > total:
+			errors.append("%s needs %.0f NPU units while retaining the scripting model (%.0f protected, %.0f reserved); only %.0f exist. No model will be unloaded." % [requested, overhead + coding_units + allocation + reserve, coding_units, reserve, total])
+		var added_bytes := 0.0
+		var scratch_bytes := 0.0
+		if not model.get("installed", false):
+			if model.bytes <= 0: errors.append("Unknown download size for " + requested)
+			else:
+				added_bytes += model.bytes
+				scratch_bytes = model.bytes
+		if int(state.get("disk_free", -1)) < 0: errors.append("SSD free space is unavailable.")
+		elif added_bytes + scratch_bytes + disk_reserve > float(state.get("disk_free", 0)): errors.append("SSD headroom is insufficient for " + requested + ".")
+		if not errors.is_empty():
+			return {"ok": false, "errors": errors, "warnings": warnings, "temporary": [], "restore": [], "restore_ok": false, "restore_errors": PackedStringArray(), "requested": requested, "role": role, "coding": coding_id}
+		for id in loaded:
+			if id != requested and id != coding_id and id != active_coding:
+				temporary.append({"verb": "unload", "id": id})
+		if not model.get("installed", false): temporary.append({"verb": "download", "id": requested})
+		if not loaded.has(requested): temporary.append({"verb": "load", "id": requested})
+		# Simulate the temporary set, then let the normal planner derive the
+		# exact actions that restore the configured warm set.
+		var post := state.duplicate(true)
+		var post_loaded := {}
+		for id in loaded:
+			var removed := false
+			for action in temporary:
+				if action.verb == "unload" and action.id == id:
+					removed = true
+					break
+			if not removed: post_loaded[id] = loaded[id]
+		post_loaded[requested] = allocation
+		post["loaded"] = post_loaded
+		var post_used := overhead
+		for id in post_loaded: post_used += float(post_loaded[id])
+		post["npu_used"] = post_used
+		var restore := check(post, config, active_coding)
+		if not restore.ok:
+			errors.append_array(restore.errors)
+			warnings.append_array(restore.warnings)
+			return {"ok": false, "errors": errors, "warnings": warnings, "temporary": [], "restore": [], "restore_ok": false, "restore_errors": restore.errors, "requested": requested, "role": role, "coding": coding_id}
+		warnings.append_array(restore.warnings)
+		return {"ok": true, "errors": errors, "warnings": warnings, "temporary": temporary, "restore": restore.actions, "restore_ok": true, "restore_errors": PackedStringArray(), "requested": requested, "role": role, "coding": coding_id, "protected": coding_id, "npu_projected": overhead + coding_units + allocation + reserve}
+
 	static func check(state: Dictionary, config: Dictionary, active_coding: String) -> Dictionary:
 		var errors := PackedStringArray()
 		var warnings := PackedStringArray()
@@ -620,6 +702,8 @@ func poll_model_job(job: Dictionary) -> Dictionary:
 		model_job_checkpoint_failed = false
 		if job.operation == "model_restore":
 			_execute_model_restoration(job.parameters)
+		elif job.operation == "model_schedule":
+			_execute_model_schedule(job.parameters)
 		else:
 			_execute_model_configuration(job.parameters.approved)
 	if model_job_id != job.id:
@@ -811,6 +895,143 @@ func _execute_model_restoration(parameters: Dictionary) -> void:
 	plan = {}
 	_report("Coding model restored and verified.")
 	model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log)}}
+func job_connection_identity() -> String:
+	var connection := _connection()
+	return "" if connection.has("error") else str(connection.get("identity", ""))
+
+func _execute_model_schedule(parameters: Dictionary) -> void:
+	busy = true
+	applying = true
+	last_operation_failed = false
+	operation_log.clear()
+	var role := str(parameters.get("role", ""))
+	var requested := str(parameters.get("model", ""))
+	var identity := str(parameters.get("connection", ""))
+	var restore := bool(parameters.get("restore", true))
+	var connection := _connection()
+	if connection.has("error") or connection.get("identity", "") != identity:
+		await _apply_failed("The device connection changed before scheduling " + requested + ".")
+		return
+	_report("Checking capacity for " + requested + "…")
+	var fresh := await _fetch_snapshot()
+	if model_job_cancelled:
+		await _fail_schedule("Scheduling cancelled before device changes.", {"changed": false, "uncertain": false}, identity, {}, "")
+		return
+	if fresh.has("error") or fresh.get("connection", "") != identity:
+		await _apply_failed("The device is unavailable or changed before scheduling " + requested + ".")
+		return
+	var settings := EditorInterface.get_editor_settings()
+	var saved: Dictionary = settings.get_setting("_tiiny_ai/applied_configuration")
+	if not _valid_saved_draft(saved):
+		await _apply_failed("Apply a model configuration before scheduling specialized work.")
+		return
+	var active := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	var plan := Planner.schedule(fresh, saved, role, requested, active)
+	if not plan.get("ok", false):
+		await _apply_failed("Cannot schedule %s: %s" % [requested, " ".join(plan.errors)])
+		return
+	var protected_coding := str(plan.get("coding", ""))
+	var executed := await _run_scheduled_actions(plan.temporary, identity, "Loading " + requested)
+	if not executed.get("ok", false):
+		await _fail_schedule(str(executed.get("error", "Scheduled model operation failed.")), executed, identity, saved, active)
+		return
+	if fresh.loaded.has(protected_coding) and not executed.get("snapshot", {}).get("loaded", {}).has(protected_coding):
+		await _fail_schedule("The scripting model was lost while scheduling " + requested + ".", executed, identity, saved, active)
+		return
+	if not restore:
+		if not _accept_snapshot(executed.snapshot):
+			await _apply_failed("The device changed while scheduling " + requested + ".")
+			return
+		busy = false
+		applying = false
+		current_operation = {}
+		current_progress = 0.0
+		plan = {}
+		_report("%s is loaded. The configured warm set was not restored because restoration was skipped by request." % requested)
+		model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log), "requested": requested, "restored": false}}
+		return
+	var restored := await _restore_scheduled_set(identity, saved, active, false)
+	if not restored.get("ok", false):
+		await _fail_schedule("Scheduled work finished, but restoring the configured warm set failed.", restored, identity, saved, active)
+		return
+	var final := await _fetch_snapshot()
+	if final.has("error") or final.get("connection", "") != identity:
+		await _apply_failed("Could not verify the restored warm set on the original device.")
+		return
+	if not _accept_snapshot(final):
+		await _apply_failed("The device changed after restoring the configured warm set.")
+		return
+	busy = false
+	applying = false
+	current_operation = {}
+	current_progress = 0.0
+	last_operation_failed = false
+	plan = {}
+	_report("%s scheduled and verified; the configured warm set was restored." % requested)
+	model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log), "requested": requested, "restored": true}}
+
+func _run_scheduled_actions(actions: Array, identity: String, label: String, ignore_cancel := false) -> Dictionary:
+	var changed := false
+	for action in actions:
+		if not ignore_cancel and model_job_cancelled:
+			return {"ok": false, "cancelled": true, "changed": changed, "uncertain": false, "error": "Scheduled model operation cancelled."}
+		var connection := _connection()
+		if connection.has("error") or connection.get("identity", "") != identity:
+			return {"ok": false, "changed": changed, "uncertain": false, "error": "The device connection changed during scheduling."}
+		_report("%s: %s %s…" % [label, str(action.verb).capitalize(), str(action.id)])
+		operation_log.append("%s %s" % [action.verb, action.id])
+		_set_operation(str(action.verb), str(action.id))
+		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+		if not model_job_id.is_empty() and (service == null or not service.begin_model_operation(self, device_lease, model_job_id, action.verb, action.id, identity)):
+			return {"ok": false, "changed": changed, "uncertain": false, "error": "Could not record the scheduled model operation. Stopped before starting it."}
+		changed = true
+		var exit_code := await _run_cli([action.verb, action.id])
+		if exit_code != 0 or (not ignore_cancel and model_job_cancelled) or model_job_checkpoint_failed:
+			return {"ok": false, "cancelled": model_job_cancelled, "changed": changed, "uncertain": true, "error": "Scheduled %s did not finish; the device state is unknown, so no further model commands were sent." % str(action.verb)}
+		var observed := await _fetch_snapshot()
+		if observed.has("error") or observed.get("connection", "") != identity:
+			return {"ok": false, "changed": changed, "uncertain": true, "error": "Could not verify the scheduled model on the original device."}
+		var verified := false
+		if action.verb == "load": verified = observed.loaded.has(action.id)
+		elif action.verb == "unload": verified = not observed.loaded.has(action.id)
+		elif action.verb == "download": verified = observed.models.has(action.id) and observed.models[action.id].installed
+		if not verified:
+			return {"ok": false, "changed": changed, "uncertain": true, "error": "Tiiny did not confirm the scheduled %s." % str(action.verb)}
+		if action.verb == "load" and observed.loaded.has(action.id):
+			var expected_npu := float(observed.models.get(action.id, {}).get("npu", -1))
+			if expected_npu > 0 and float(observed.loaded[action.id]) != expected_npu:
+				return {"ok": false, "changed": changed, "uncertain": true, "error": "Tiiny loaded %s but its NPU allocation does not match the catalog." % str(action.id)}
+		if not model_job_id.is_empty() and not service.queue.verify_device_operation(model_job_id):
+			return {"ok": false, "changed": changed, "uncertain": true, "error": "Could not record scheduled-model verification."}
+		snapshot = observed
+	return {"ok": true, "changed": changed, "uncertain": false, "snapshot": snapshot}
+
+func _restore_scheduled_set(identity: String, saved: Dictionary, active: String, ignore_cancel: bool) -> Dictionary:
+	var connection := _connection()
+	if connection.has("error") or connection.get("identity", "") != identity:
+		return {"ok": false, "changed": false, "uncertain": false, "error": "The device connection changed before warm-set restoration."}
+	var observed := await _fetch_snapshot()
+	if observed.has("error") or observed.get("connection", "") != identity:
+		return {"ok": false, "changed": false, "uncertain": true, "error": "Could not read the device before warm-set restoration."}
+	var plan := Planner.check(observed, saved, active)
+	if not plan.get("ok", false):
+		return {"ok": false, "changed": false, "uncertain": false, "error": "Warm-set restoration is not possible with the current capacity: " + " ".join(plan.errors)}
+	return await _run_scheduled_actions(plan.actions, identity, "Restoring configured warm set", ignore_cancel)
+
+func _fail_schedule(reason: String, executed: Dictionary, identity: String, saved: Dictionary, active: String) -> void:
+	var note := ""
+	if bool(executed.get("uncertain", false)):
+		note = " A device operation has an unknown outcome; no further model commands were sent. Review the device before retrying."
+	elif bool(executed.get("changed", false)) and not saved.is_empty():
+		var restored := await _restore_scheduled_set(identity, saved, active, true)
+		if restored.get("ok", false):
+			note = " The configured warm set was restored."
+		elif bool(restored.get("uncertain", false)):
+			note = " Warm-set restoration could not be verified; review the device before retrying."
+		else:
+			note = " Warm-set restoration failed: " + str(restored.get("error", "unknown error"))
+	await _apply_failed(reason + note)
+
 func _restore_model_command(verb: String, id: String, identity: String) -> Dictionary:
 	if model_job_cancelled: return {"error": "Coding-model restoration cancelled."}
 	var connection := _connection()
