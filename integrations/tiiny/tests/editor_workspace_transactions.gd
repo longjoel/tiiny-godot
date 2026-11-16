@@ -499,6 +499,90 @@ func _run() -> void:
 	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save specialized recipes"); return
 	root = EditorInterface.get_edited_scene_root()
+
+	var tilemap: Dictionary = transactions.execute("add_tilemap_layer", {"parent_path": ".", "node_name": "Ground", "texture_path": "res://generated/source.png", "tile_width": 2, "tile_height": 2, "paint_origin": true})
+	var layer: TileMapLayer = root.get_node_or_null("Ground")
+	if not tilemap.get("ok", false) or layer == null or layer.tile_set == null or layer.tile_set.get_source_count() != 1 or layer.get_cell_source_id(Vector2i.ZERO) != 0:
+		_fail("TileMapLayer recipe failed: " + str(tilemap)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save TileMap"); return
+	root = EditorInterface.get_edited_scene_root()
+	var gridmap: Dictionary = transactions.execute("add_gridmap", {"parent_path": "World", "node_name": "Grid", "cell_size": 1.0, "paint_origin": true})
+	var grid: GridMap = root.get_node_or_null("World/Grid")
+	if not gridmap.get("ok", false) or grid == null or grid.mesh_library == null or grid.get_cell_item(Vector3i.ZERO) != 0:
+		_fail("GridMap recipe failed: " + str(gridmap)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save GridMap"); return
+	root = EditorInterface.get_edited_scene_root()
+	var animated: Dictionary = transactions.execute("add_animated_sprite", {"parent_path": ".", "node_name": "AnimatedIcon", "texture_paths": ["res://generated/source.png", "res://generated/source.png"], "animation_name": "idle", "fps": 6.0})
+	var animated_sprite: AnimatedSprite2D = root.get_node_or_null("AnimatedIcon")
+	if not animated.get("ok", false) or animated_sprite == null or animated_sprite.sprite_frames == null or not animated_sprite.sprite_frames.has_animation("idle") or animated_sprite.sprite_frames.get_frame_count("idle") != 2:
+		_fail("AnimatedSprite2D recipe failed: " + str(animated)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save AnimatedSprite"); return
+	root = EditorInterface.get_edited_scene_root()
+	var themed: Dictionary = transactions.execute("apply_theme", {"target_path": "MainCamera/HudLabel", "font_size": 24})
+	var themed_label: Label = root.get_node_or_null("MainCamera/HudLabel")
+	if not themed.get("ok", false) or themed_label == null or themed_label.theme == null or themed_label.theme.default_font_size != 24:
+		_fail("Theme recipe failed: " + str(themed)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save theme"); return
+	root = EditorInterface.get_edited_scene_root()
+	var looped: Dictionary = transactions.execute("configure_audio_loop", {"target_path": "GeneratedLine", "enabled": true})
+	var loop_player: AudioStreamPlayer = root.get_node_or_null("GeneratedLine")
+	if not looped.get("ok", false) or loop_player == null or not loop_player.stream is AudioStreamWAV or loop_player.stream.loop_mode != AudioStreamWAV.LOOP_FORWARD:
+		_fail("Audio loop recipe failed: " + str(looped)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save audio loop"); return
+	root = EditorInterface.get_edited_scene_root()
+	var navigation: Dictionary = transactions.execute("add_navigation_region", {"parent_path": "World", "node_name": "NavRegion", "agent_radius": 0.5, "cell_size": 0.25})
+	var nav_region: NavigationRegion3D = root.get_node_or_null("World/NavRegion")
+	if not navigation.get("ok", false) or nav_region == null or not nav_region.navigation_mesh is NavigationMesh:
+		_fail("NavigationRegion recipe failed: " + str(navigation)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save navigation"); return
+	root = EditorInterface.get_edited_scene_root()
+	var tree_result: Dictionary = transactions.execute("add_animation_tree", {"animation_player_path": "Torch/AnimationPlayer", "node_name": "TorchTree"})
+	var anim_tree: AnimationTree = root.get_node_or_null("Torch/TorchTree")
+	if not tree_result.get("ok", false) or anim_tree == null or not anim_tree.tree_root is AnimationNodeStateMachine or anim_tree.get_node_or_null(anim_tree.anim_player) == null:
+		_fail("AnimationTree recipe failed: " + str(tree_result)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save AnimationTree"); return
+	root = EditorInterface.get_edited_scene_root()
+	var weather: Dictionary = transactions.execute("add_weather_3d", {"parent_path": "World", "node_name": "Rain", "amount": 100, "extent": 8.0, "speed": 12.0, "color": "#aaccff"})
+	var rain: GPUParticles3D = root.get_node_or_null("World/Rain")
+	if not weather.get("ok", false) or rain == null or not rain.process_material is ParticleProcessMaterial:
+		_fail("Weather recipe failed: " + str(weather)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save weather"); return
+	root = EditorInterface.get_edited_scene_root()
+
+	var trail: Dictionary = transactions.execute("add_trail_3d", {"parent_path": "World", "node_name": "Trail", "width": 0.2, "lifetime": 1.5, "color": "#66ccff"})
+	var trail_node: Trail3D = root.get_node_or_null("World/Trail")
+	if not trail.get("ok", false) or trail_node == null or not is_equal_approx(trail_node.width, 0.2) or not trail_node.emitting:
+		_fail("Trail3D recipe failed: " + str(trail)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save trail"); return
+	root = EditorInterface.get_edited_scene_root()
+	var torch_anim_player: AnimationPlayer = root.get_node_or_null("Torch/AnimationPlayer")
+	if torch_anim_player == null: _fail("Torch AnimationPlayer is missing"); return
+	var playback: Dictionary = transactions.execute("play_animation", {"target_path": "Torch/AnimationPlayer", "animation": str(torch_anim_player.get_animation_list()[0]), "autoplay": true})
+	if not playback.get("ok", false) or str(torch_anim_player.current_animation).is_empty():
+		_fail("Animation playback recipe failed: " + str(playback)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save animation playback"); return
+	root = EditorInterface.get_edited_scene_root()
+	var mesh_quality: Dictionary = dock.call("_registry_validate_mesh", {"target_path": "World/CollisionMesh"}, {})
+	if not mesh_quality.get("ok", false) or int(mesh_quality.get("data", {}).get("vertices", 0)) <= 0 or str(mesh_quality.get("data", {}).get("quality", "")) != "unverified":
+		_fail("Mesh quality validation failed: " + str(mesh_quality)); return
+	var bus_name := "TiinyFixtureBus"
+	var bus_result: Dictionary = dock.call("_registry_configure_audio_bus", {"name": bus_name, "volume_db": -12.0}, {})
+	var bus_index := AudioServer.get_bus_index(bus_name)
+	if not bus_result.get("ok", false) or bus_index < 0 or absf(AudioServer.get_bus_volume_db(bus_index) + 12.0) > 0.01:
+		_fail("Audio bus configuration failed: " + str(bus_result)); return
+	var bus_remove: Dictionary = dock.call("_registry_configure_audio_bus", {"name": bus_name, "remove": true}, {})
+	if not bus_remove.get("ok", false) or AudioServer.get_bus_index(bus_name) >= 0:
+		_fail("Audio bus removal failed: " + str(bus_remove)); return
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	registry.set_handler("read_project_file", Callable(dock, "_registry_read_file"))
 	registry.set_handler("replace_in_gdscript", Callable(dock, "_registry_replace_script"))

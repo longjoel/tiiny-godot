@@ -573,6 +573,8 @@ func _read_only(_object: Object, _name: String, info: Dictionary) -> bool:
 
 func _coerce_value(info: Dictionary, value: Variant) -> Variant:
 	var type := int(info.get("type", TYPE_NIL))
+	if type == TYPE_STRING_NAME and value is String: return StringName(value)
+	if type == TYPE_NODE_PATH and value is String: return NodePath(value)
 	if type in [TYPE_VECTOR2, TYPE_VECTOR2I] and value is Dictionary and value.has("x") and value.has("y"):
 		return Vector2(float(value.x), float(value.y)) if type == TYPE_VECTOR2 else Vector2i(int(value.x), int(value.y))
 	if type in [TYPE_VECTOR3, TYPE_VECTOR3I] and value is Dictionary and value.has("x") and value.has("y") and value.has("z"):
@@ -585,6 +587,8 @@ func _coerce_value(info: Dictionary, value: Variant) -> Variant:
 
 func _value_compatible(info: Dictionary, value: Variant) -> bool:
 	var type := int(info.get("type", TYPE_NIL))
+	if type == TYPE_STRING_NAME and value is String: return true
+	if type == TYPE_NODE_PATH and value is String: return true
 	if type == TYPE_OBJECT:
 		if value == null: return true
 		if not value is Object: return false
@@ -752,6 +756,137 @@ func _register_default_recipes() -> void:
 		"timeout_ms": 30000,
 		"validate": Callable(self, "_validate_mesh_collision"),
 		"build": Callable(self, "_build_mesh_collision"),
+	})
+	register_recipe({
+		"name": "add_tilemap_layer",
+		"title": "Add TileMapLayer",
+		"description": "Create a TileMapLayer with a TileSet and optional atlas source from an image. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"texture_path": {"type": "string", "maxLength": 512},
+			"tile_width": {"type": "integer", "minimum": 1, "maximum": 4096},
+			"tile_height": {"type": "integer", "minimum": 1, "maximum": 4096},
+			"paint_origin": {"type": "boolean"},
+		}, "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_tilemap"), "build": Callable(self, "_build_tilemap"),
+	})
+	register_recipe({
+		"name": "add_gridmap",
+		"title": "Add GridMap",
+		"description": "Create a GridMap with a one-cell MeshLibrary. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"cell_size": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+			"paint_origin": {"type": "boolean"},
+		}, "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_gridmap"), "build": Callable(self, "_build_gridmap"),
+	})
+	register_recipe({
+		"name": "add_animated_sprite",
+		"title": "Add AnimatedSprite2D",
+		"description": "Create an AnimatedSprite2D with a SpriteFrames animation from image paths. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"texture_paths": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 512}},
+			"animation_name": {"type": "string", "maxLength": 128},
+			"fps": {"type": "number", "exclusiveMinimum": 0, "maximum": 120},
+		}, "required": ["texture_paths"], "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 30000,
+		"validate": Callable(self, "_validate_animated_sprite"), "build": Callable(self, "_build_animated_sprite"),
+	})
+	register_recipe({
+		"name": "apply_theme",
+		"title": "Apply theme and font size",
+		"description": "Create and assign a Theme with a default font size and optional font. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"font_size": {"type": "integer", "minimum": 1, "maximum": 256},
+			"font_path": {"type": "string", "maxLength": 512},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_theme"), "build": Callable(self, "_build_theme"),
+	})
+	register_recipe({
+		"name": "configure_audio_loop",
+		"title": "Configure audio loop",
+		"description": "Duplicate an AudioStreamPlayer stream and enable or disable looping. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"enabled": {"type": "boolean"},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_audio_loop"), "build": Callable(self, "_build_audio_loop"),
+	})
+	register_recipe({
+		"name": "add_navigation_region",
+		"title": "Add NavigationRegion3D",
+		"description": "Create a NavigationRegion3D with a configured NavigationMesh. Baking is not performed. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"agent_radius": {"type": "number", "minimum": 0, "maximum": 1000},
+			"cell_size": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+		}, "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_navigation"), "build": Callable(self, "_build_navigation"),
+	})
+	register_recipe({
+		"name": "add_animation_tree",
+		"title": "Add AnimationTree state",
+		"description": "Create an AnimationTree with a one-state AnimationNodeStateMachine bound to an existing AnimationPlayer. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"animation_player_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"state_name": {"type": "string", "maxLength": 128},
+		}, "required": ["animation_player_path"], "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_animation_tree"), "build": Callable(self, "_build_animation_tree"),
+	})
+	register_recipe({
+		"name": "add_weather_3d",
+		"title": "Add 3D weather particles",
+		"description": "Create a GPUParticles3D rain/snow field with an emission box. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"amount": {"type": "integer", "minimum": 1, "maximum": 4096},
+			"extent": {"type": "number", "exclusiveMinimum": 0, "maximum": 10000},
+			"speed": {"type": "number", "minimum": 0, "maximum": 10000},
+			"color": {"type": "string", "maxLength": 32},
+		}, "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_weather"), "build": Callable(self, "_build_weather"),
+	})
+	register_recipe({
+		"name": "add_trail_3d",
+		"title": "Add 3D trail",
+		"description": "Create a native Trail3D ribbon under a 3D parent. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+			"lifetime": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+			"color": {"type": "string", "maxLength": 32},
+		}, "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_trail"), "build": Callable(self, "_build_trail"),
+	})
+	register_recipe({
+		"name": "play_animation",
+		"title": "Play existing animation",
+		"description": "Set the current/autoplay animation on an existing AnimationPlayer, including imported skeleton clips. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"animation": {"type": "string", "maxLength": 128},
+			"autoplay": {"type": "boolean"},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "mutating", "timeout_ms": 15000,
+		"validate": Callable(self, "_validate_play_animation"), "build": Callable(self, "_build_play_animation"),
 	})
 	register_recipe({
 		"name": "apply_editor_transaction",
@@ -1269,6 +1404,295 @@ func _build_mesh_collision(request: Dictionary) -> Dictionary:
 		{"op": "set_owner", "node": "collision", "owner": "body"},
 		{"op": "set_property", "target": "collision", "property": "shape", "value": {"ref": "shape"}},
 	]}
+
+func _owned_parent(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"): return {"error": found}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		return {"error": {"code": "read_only_instance", "message": "The parent must be owned by the edited scene."}}
+	return {"parent": parent, "parent_path": parent_path}
+
+func _node_name(params: Dictionary, parent: Node, base: String) -> Dictionary:
+	var name := str(params.get("node_name", "")).strip_edges()
+	if name.is_empty(): name = _unique_name(parent, base)
+	elif not _valid_name(name): return {"error": {"code": "invalid_name", "message": "Invalid node name."}}
+	if parent.get_node_or_null(NodePath(name)) != null: return {"error": {"code": "name_conflict", "message": "A node named " + name + " already exists."}}
+	return {"name": name}
+
+func _validate_tilemap(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "TileMapLayer")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var tw := int(params.get("tile_width", 16)); var th := int(params.get("tile_height", 16))
+	if tw < 1 or th < 1 or tw > 4096 or th > 4096: return {"ok": false, "code": "invalid_arguments", "message": "Tile size must be between 1 and 4096."}
+	var texture: Variant = null
+	var texture_path := str(params.get("texture_path", "")).strip_edges()
+	if not texture_path.is_empty():
+		if not texture_path.begins_with("res://") or ".." in texture_path.split("/") or not FileAccess.file_exists(texture_path):
+			return {"ok": false, "code": "invalid_arguments", "message": "Tile texture must be an existing res:// image."}
+		texture = ResourceLoader.load(texture_path, "", ResourceLoader.CACHE_MODE_REUSE)
+		if not texture is Texture2D: return {"ok": false, "code": "artifact_invalid", "message": "Tile texture did not load as Texture2D."}
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "texture": texture, "tile_size": Vector2i(tw, th), "paint": bool(params.get("paint_origin", false))}}
+
+func _build_tilemap(request: Dictionary) -> Dictionary:
+	var tileset := TileSet.new()
+	tileset.tile_size = request.tile_size
+	var has_source := false
+	if request.texture is Texture2D:
+		var source := TileSetAtlasSource.new()
+		source.texture = request.texture
+		source.texture_region_size = request.tile_size
+		source.create_tile(Vector2i.ZERO)
+		tileset.add_source(source, 0)
+		has_source = true
+	var ops: Array = [
+		{"op": "create_resource_value", "id": "tileset", "resource": tileset},
+		{"op": "create_node", "id": "layer", "class": "TileMapLayer", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "layer"},
+		{"op": "set_owner", "node": "layer", "owner": "."},
+		{"op": "set_property", "target": "layer", "property": "tile_set", "value": {"ref": "tileset"}},
+	]
+	if request.paint and has_source:
+		ops.append({"op": "call_method", "target": "layer", "method": "set_cell", "args": [Vector2i.ZERO, 0, Vector2i.ZERO, 0], "undo_method": "erase_cell", "undo_args": [Vector2i.ZERO]})
+	return {"ok": true, "action_name": "Add TileMapLayer", "summary": "Added %s with a %dx%d TileSet%s." % [request.node_name, request.tile_size.x, request.tile_size.y, " and one painted tile" if request.paint and has_source else ""], "data": {"has_source": has_source, "tile_size": [request.tile_size.x, request.tile_size.y]}, "ops": ops}
+
+func _validate_gridmap(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "GridMap")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var size := float(params.get("cell_size", 1.0))
+	if size <= 0 or size > 1000: return {"ok": false, "code": "invalid_arguments", "message": "cell_size must be positive and bounded."}
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "cell_size": size, "paint": bool(params.get("paint_origin", true))}}
+
+func _build_gridmap(request: Dictionary) -> Dictionary:
+	var library := MeshLibrary.new()
+	library.create_item(0)
+	library.set_item_name(0, "Cell")
+	library.set_item_mesh(0, BoxMesh.new())
+	var ops: Array = [
+		{"op": "create_resource_value", "id": "library", "resource": library},
+		{"op": "create_node", "id": "grid", "class": "GridMap", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "grid"},
+		{"op": "set_owner", "node": "grid", "owner": "."},
+		{"op": "set_property", "target": "grid", "property": "mesh_library", "value": {"ref": "library"}},
+		{"op": "set_property", "target": "grid", "property": "cell_size", "value": Vector3.ONE * request.cell_size},
+	]
+	if request.paint:
+		ops.append({"op": "call_method", "target": "grid", "method": "set_cell_item", "args": [Vector3i.ZERO, 0], "undo_method": "set_cell_item", "undo_args": [Vector3i.ZERO, -1]})
+	return {"ok": true, "action_name": "Add GridMap", "summary": "Added %s with a one-cell MeshLibrary%s." % [request.node_name, " and one painted cell" if request.paint else ""], "data": {"cell_size": request.cell_size}, "ops": ops}
+
+func _validate_animated_sprite(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "AnimatedSprite2D")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var paths: Variant = params.get("texture_paths")
+	if not paths is Array or paths.is_empty() or paths.size() > 32: return {"ok": false, "code": "invalid_arguments", "message": "texture_paths must contain 1-32 image paths."}
+	var textures: Array = []
+	for path in paths:
+		if not path is String or not path.begins_with("res://") or ".." in path.split("/") or not FileAccess.file_exists(path): return {"ok": false, "code": "artifact_missing", "message": "Sprite frame image is missing: " + str(path)}
+		var texture: Variant = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
+		if not texture is Texture2D: return {"ok": false, "code": "artifact_invalid", "message": "Sprite frame is not a Texture2D: " + str(path)}
+		textures.append(texture)
+	var animation := str(params.get("animation_name", "default")).strip_edges()
+	if animation.is_empty(): animation = "default"
+	var fps := float(params.get("fps", 8.0))
+	if fps <= 0 or fps > 120: return {"ok": false, "code": "invalid_arguments", "message": "fps must be between 0 and 120."}
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "textures": textures, "animation": animation, "fps": fps}}
+
+func _build_animated_sprite(request: Dictionary) -> Dictionary:
+	var frames := SpriteFrames.new()
+	if request.animation != "default": frames.add_animation(request.animation)
+	for texture in request.textures: frames.add_frame(request.animation, texture)
+	frames.set_animation_speed(request.animation, request.fps)
+	return {"ok": true, "action_name": "Add AnimatedSprite2D", "summary": "Added %s with %d frame(s) in %s at %.1f fps." % [request.node_name, Array(request.textures).size(), request.animation, request.fps], "data": {"animation": request.animation, "frames": Array(request.textures).size()}, "ops": [
+		{"op": "create_resource_value", "id": "frames", "resource": frames},
+		{"op": "create_node", "id": "sprite", "class": "AnimatedSprite2D", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "sprite"},
+		{"op": "set_owner", "node": "sprite", "owner": "."},
+		{"op": "set_property", "target": "sprite", "property": "sprite_frames", "value": {"ref": "frames"}},
+		{"op": "set_property", "target": "sprite", "property": "animation", "value": request.animation},
+		{"op": "set_property", "target": "sprite", "property": "autoplay", "value": request.animation},
+	]}
+
+func _validate_theme(params: Dictionary, context: Dictionary) -> Dictionary:
+	var target_path := str(params.get("target_path", "")).strip_edges()
+	var found: Dictionary = inspector.resolve_scene_node(context.root, target_path)
+	if found.has("error"): return {"ok": false, "code": found.error.code, "message": found.error.message}
+	var target: Node = found.node
+	if not target is Control: return {"ok": false, "code": "invalid_target", "message": "Theme target must be a Control."}
+	if target != context.root and target.get_owner() != context.root: return {"ok": false, "code": "read_only_instance", "message": "Theme target must be owned by the edited scene."}
+	var font_size := int(params.get("font_size", 16))
+	if font_size < 1 or font_size > 256: return {"ok": false, "code": "invalid_arguments", "message": "font_size must be between 1 and 256."}
+	var font: Variant = null
+	var font_path := str(params.get("font_path", "")).strip_edges()
+	if not font_path.is_empty():
+		if not font_path.begins_with("res://") or not FileAccess.file_exists(font_path): return {"ok": false, "code": "artifact_missing", "message": "Font file is missing: " + font_path}
+		font = ResourceLoader.load(font_path, "", ResourceLoader.CACHE_MODE_REUSE)
+		if not font is Font: return {"ok": false, "code": "artifact_invalid", "message": "Font did not load as a Font."}
+	return {"ok": true, "request": {"target_path": target_path, "font_size": font_size, "font": font}}
+
+func _build_theme(request: Dictionary) -> Dictionary:
+	var theme := Theme.new()
+	theme.default_font_size = request.font_size
+	if request.font is Font: theme.default_font = request.font
+	return {"ok": true, "action_name": "Apply theme", "summary": "Applied a Theme with default font size %d to %s." % [request.font_size, request.target_path], "data": {"font_size": request.font_size}, "ops": [
+		{"op": "create_resource_value", "id": "theme", "resource": theme},
+		{"op": "set_property", "target": request.target_path, "property": "theme", "value": {"ref": "theme"}},
+	]}
+
+func _validate_audio_loop(params: Dictionary, context: Dictionary) -> Dictionary:
+	var target_path := str(params.get("target_path", "")).strip_edges()
+	var found: Dictionary = inspector.resolve_scene_node(context.root, target_path)
+	if found.has("error"): return {"ok": false, "code": found.error.code, "message": found.error.message}
+	var target: Node = found.node
+	if not target is AudioStreamPlayer or target.stream == null: return {"ok": false, "code": "invalid_target", "message": "Target must be an AudioStreamPlayer with a stream."}
+	if target != context.root and target.get_owner() != context.root: return {"ok": false, "code": "read_only_instance", "message": "Audio target must be owned by the edited scene."}
+	return {"ok": true, "request": {"target_path": target_path, "enabled": bool(params.get("enabled", true))}}
+
+func _build_audio_loop(request: Dictionary) -> Dictionary:
+	var found: Dictionary = inspector.resolve_scene_node(EditorInterface.get_edited_scene_root(), request.target_path)
+	var target: AudioStreamPlayer = found.get("node")
+	var copy := target.stream.duplicate()
+	if copy == null: return {"ok": false, "code": "invalid_operation", "message": "Audio stream could not be duplicated."}
+	if copy is AudioStreamWAV:
+		copy.loop_mode = AudioStreamWAV.LOOP_FORWARD if request.enabled else AudioStreamWAV.LOOP_DISABLED
+	elif copy.get("loop") != null:
+		copy.set("loop", request.enabled)
+	else:
+		return {"ok": false, "code": "invalid_operation", "message": "This audio stream does not expose a loop setting."}
+	return {"ok": true, "action_name": "Configure audio loop", "summary": ("Enabled" if request.enabled else "Disabled") + " looping for " + request.target_path + " on a duplicated stream.", "ops": [
+		{"op": "create_resource_value", "id": "stream", "resource": copy},
+		{"op": "set_property", "target": request.target_path, "property": "stream", "value": {"ref": "stream"}},
+	]}
+
+func _validate_navigation(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "NavigationRegion3D")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var radius := float(params.get("agent_radius", 0.5)); var cell := float(params.get("cell_size", 0.25))
+	if radius < 0 or radius > 1000 or cell <= 0 or cell > 1000: return {"ok": false, "code": "invalid_arguments", "message": "Navigation radius/cell size are out of range."}
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "agent_radius": radius, "cell_size": cell}}
+
+func _build_navigation(request: Dictionary) -> Dictionary:
+	var navmesh := NavigationMesh.new()
+	navmesh.agent_radius = request.agent_radius
+	navmesh.cell_size = request.cell_size
+	return {"ok": true, "action_name": "Add NavigationRegion3D", "summary": "Added %s with a NavigationMesh; baking is not performed." % request.node_name, "data": {"bake": "not_requested"}, "ops": [
+		{"op": "create_resource_value", "id": "navmesh", "resource": navmesh},
+		{"op": "create_node", "id": "region", "class": "NavigationRegion3D", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "region"},
+		{"op": "set_owner", "node": "region", "owner": "."},
+		{"op": "set_property", "target": "region", "property": "navigation_mesh", "value": {"ref": "navmesh"}},
+	]}
+
+func _validate_animation_tree(params: Dictionary, context: Dictionary) -> Dictionary:
+	var found: Dictionary = inspector.resolve_scene_node(context.root, str(params.get("animation_player_path", "")))
+	if found.has("error"): return {"ok": false, "code": found.error.code, "message": found.error.message}
+	var player: Node = found.node
+	if not player is AnimationPlayer or player.get_animation_list().is_empty(): return {"ok": false, "code": "invalid_target", "message": "AnimationTree target must be an AnimationPlayer with at least one animation."}
+	if player.get_parent() == null or (player.get_parent() != context.root and player.get_parent().get_owner() != context.root): return {"ok": false, "code": "read_only_instance", "message": "AnimationPlayer parent must be owned by the edited scene."}
+	var state_name := str(params.get("state_name", "")).strip_edges()
+	if state_name.is_empty(): state_name = str(player.get_animation_list()[0])
+	if not player.has_animation(state_name): return {"ok": false, "code": "invalid_arguments", "message": "AnimationPlayer has no animation named " + state_name}
+	var name_result := _node_name(params, player.get_parent(), "AnimationTree")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	return {"ok": true, "request": {"player": player, "parent_path": str(context.root.get_path_to(player.get_parent())) if player.get_parent() != context.root else ".", "node_name": name_result.name, "state_name": state_name, "anim_player": NodePath("../" + str(player.name))}}
+
+func _build_animation_tree(request: Dictionary) -> Dictionary:
+	var machine := AnimationNodeStateMachine.new()
+	var state := AnimationNodeAnimation.new()
+	state.animation = request.state_name
+	machine.add_node(request.state_name, state, Vector2.ZERO)
+	return {"ok": true, "action_name": "Add AnimationTree", "summary": "Added %s with state %s bound to %s." % [request.node_name, request.state_name, request.player.name], "data": {"state": request.state_name}, "ops": [
+		{"op": "create_resource_value", "id": "machine", "resource": machine},
+		{"op": "create_node", "id": "tree", "class": "AnimationTree", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "tree"},
+		{"op": "set_owner", "node": "tree", "owner": "."},
+		{"op": "set_property", "target": "tree", "property": "anim_player", "value": request.anim_player},
+		{"op": "set_property", "target": "tree", "property": "tree_root", "value": {"ref": "machine"}},
+		{"op": "set_property", "target": "tree", "property": "active", "value": true},
+	]}
+
+func _validate_weather(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "Weather")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var amount := int(params.get("amount", 200)); var extent := float(params.get("extent", 10.0)); var speed := float(params.get("speed", 12.0))
+	if amount < 1 or amount > 4096 or extent <= 0 or extent > 10000 or speed < 0 or speed > 10000: return {"ok": false, "code": "invalid_arguments", "message": "Weather amount/extent/speed are out of range."}
+	var color := Color(0.7, 0.8, 1.0)
+	if params.get("color") is String and not str(params.color).strip_edges().is_empty(): color = Color.from_string(str(params.color), color)
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "amount": amount, "extent": extent, "speed": speed, "color": color}}
+
+func _build_weather(request: Dictionary) -> Dictionary:
+	var material := ParticleProcessMaterial.new()
+	material.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	material.emission_box_extents = Vector3(request.extent, 1.0, request.extent)
+	material.direction = Vector3(0, -1, 0)
+	material.spread = 8.0
+	material.gravity = Vector3(0, -9.8, 0)
+	material.initial_velocity_min = request.speed
+	material.initial_velocity_max = request.speed
+	material.scale_min = 0.05
+	material.scale_max = 0.05
+	material.color = request.color
+	return {"ok": true, "action_name": "Add 3D weather", "summary": "Added %s with %d weather particles across a %.1f unit box." % [request.node_name, request.amount, request.extent], "data": {"amount": request.amount, "extent": request.extent}, "ops": [
+		{"op": "create_resource", "id": "material", "class": "ParticleProcessMaterial", "properties": {"direction": Vector3(0, -1, 0), "gravity": Vector3(0, -9.8, 0), "initial_velocity_min": request.speed, "initial_velocity_max": request.speed, "spread": 8.0, "scale_min": 0.05, "scale_max": 0.05, "color": request.color, "emission_shape": ParticleProcessMaterial.EMISSION_SHAPE_BOX, "emission_box_extents": Vector3(request.extent, 1.0, request.extent)}},
+		{"op": "create_node", "id": "weather", "class": "GPUParticles3D", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "weather"},
+		{"op": "set_owner", "node": "weather", "owner": "."},
+		{"op": "set_property", "target": "weather", "property": "amount", "value": request.amount},
+		{"op": "set_property", "target": "weather", "property": "lifetime", "value": 4.0},
+		{"op": "set_property", "target": "weather", "property": "emitting", "value": true},
+		{"op": "set_property", "target": "weather", "property": "process_material", "value": {"ref": "material"}},
+	]}
+
+func _validate_trail(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_result := _owned_parent(params, context)
+	if parent_result.has("error"): return {"ok": false, "code": parent_result.error.code, "message": parent_result.error.message}
+	var name_result := _node_name(params, parent_result.parent, "Trail3D")
+	if name_result.has("error"): return {"ok": false, "code": name_result.error.code, "message": name_result.error.message}
+	var width := float(params.get("width", 0.2)); var lifetime := float(params.get("lifetime", 1.0))
+	if width <= 0 or width > 1000 or lifetime <= 0 or lifetime > 60: return {"ok": false, "code": "invalid_arguments", "message": "Trail width/lifetime are out of range."}
+	var color := Color(0.4, 0.8, 1.0)
+	if params.get("color") is String and not str(params.color).strip_edges().is_empty(): color = Color.from_string(str(params.color), color)
+	return {"ok": true, "request": {"parent_path": parent_result.parent_path, "node_name": name_result.name, "width": width, "lifetime": lifetime, "color": color}}
+
+func _build_trail(request: Dictionary) -> Dictionary:
+	return {"ok": true, "action_name": "Add Trail3D", "summary": "Added %s Trail3D ribbon (width %.2f, lifetime %.1fs)." % [request.node_name, request.width, request.lifetime], "data": {"width": request.width, "lifetime": request.lifetime}, "ops": [
+		{"op": "create_node", "id": "trail", "class": "Trail3D", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "trail"},
+		{"op": "set_owner", "node": "trail", "owner": "."},
+		{"op": "set_property", "target": "trail", "property": "width", "value": request.width},
+		{"op": "set_property", "target": "trail", "property": "lifetime", "value": request.lifetime},
+		{"op": "set_property", "target": "trail", "property": "color", "value": request.color},
+		{"op": "set_property", "target": "trail", "property": "emitting", "value": true},
+	]}
+
+func _validate_play_animation(params: Dictionary, context: Dictionary) -> Dictionary:
+	var found: Dictionary = inspector.resolve_scene_node(context.root, str(params.get("target_path", "")))
+	if found.has("error"): return {"ok": false, "code": found.error.code, "message": found.error.message}
+	var player: Node = found.node
+	if not player is AnimationPlayer: return {"ok": false, "code": "invalid_target", "message": "Target must be an AnimationPlayer."}
+	if player != context.root and player.get_owner() != context.root: return {"ok": false, "code": "read_only_instance", "message": "AnimationPlayer must be owned by the edited scene."}
+	var animations: Array = player.get_animation_list()
+	if animations.is_empty(): return {"ok": false, "code": "invalid_target", "message": "AnimationPlayer has no animations."}
+	var animation := str(params.get("animation", "")).strip_edges()
+	if animation.is_empty(): animation = str(animations[0])
+	if not player.has_animation(animation): return {"ok": false, "code": "invalid_arguments", "message": "AnimationPlayer has no animation named " + animation}
+	return {"ok": true, "request": {"target_path": str(params.get("target_path", "")), "animation": animation, "autoplay": bool(params.get("autoplay", true))}}
+
+func _build_play_animation(request: Dictionary) -> Dictionary:
+	var ops: Array = [{"op": "set_property", "target": request.target_path, "property": "current_animation", "value": request.animation}]
+	if request.autoplay: ops.append({"op": "set_property", "target": request.target_path, "property": "autoplay", "value": request.animation})
+	return {"ok": true, "action_name": "Play animation " + request.animation, "summary": "Set %s to animation %s." % [request.target_path, request.animation], "data": {"animation": request.animation}, "ops": ops}
 
 func _unique_name(parent: Node, base: String) -> String:
 	var candidate := base

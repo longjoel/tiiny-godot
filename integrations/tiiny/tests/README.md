@@ -87,7 +87,7 @@ The resource HTTP fixture also checks story 09's image path: the generated PNG m
 
 Story 09 adds live coverage with `check_chat_multicall_live.py`: the configured downloaded `Tongyi-MAI/Z-Image-Turbo` is loaded on demand, a soccer-ball image is generated/imported, the configured warm set is restored, and `add_sprite_from_image` creates a `SoccerBall` Sprite2D. The generated texture is captured at `/tmp/tiiny-live-sprite.png`.
 
-`check_task_catalog.py` validates `plan/task-catalog.json` v2 and reports coverage for 100 common 2D/3D/project tasks. It checks unique IDs/prompts, solution classes, status consistency, tool existence against 36 embedded tools, and test references for every supported task. Current result: 100 tasks, 28 supported / 60 partial / 12 specialized-missing, 28/28 supported tasks with tests; solution classes are native_macro 18, composed_primitives 56, script_behavior 14, specialized_missing 12. Report: `/tmp/tiiny-task-coverage-v2.json`; table: `plan/TASK_CATALOG.md`.
+`check_task_catalog.py` validates `plan/task-catalog.json` v2 and reports coverage for 100 common 2D/3D/project tasks. It checks unique IDs/prompts, solution classes, status consistency, tool existence against 36 embedded tools, and test references for every supported task. Current result: 100 tasks, 40 supported / 60 partial / 0 specialized-missing, 40/40 supported tasks with tests; solution classes are native_macro 30, composed_primitives 56, script_behavior 14, specialized_missing 0. The 60 partial tasks are composed/script workflows still lacking focused per-task tests. Report: `/tmp/tiiny-task-coverage-v2.json`; table: `plan/TASK_CATALOG.md`.
 
 Story 10 adds `Planner.schedule` offline assertions for coding-model protection, eligible eviction, restore actions, already-loaded no-op, and capacity/disk/unknown rejection. The Jobs suite adds `model_schedule` (evict → load → restore with four verified operations), `model_schedule_capacity` (no mutation, clear retained-coding error), `model_schedule_restore` (failure and cancellation restoration), and `model_schedule_disconnect` (same-key dedupe, explicit resolve/resume, recovered schedule).
 
@@ -103,7 +103,7 @@ Story 14 adds `apply_editor_transaction`: bounded typed create/set/resource/assi
 
 Story 15 adds `attach_script` to `apply_editor_transaction` and an explicit `save_edited_scene` file tool. The transaction fixture attaches a script with undo/redo, saves without adding a fake undo entry, reloads the scene, and verifies persistence. Live behavior evidence remains the velocity/spin script edits.
 
-Story 17 adds `add_particles_2d`, `add_particles_3d`, and `add_mesh_collision`; the transaction fixture covers structure, typed properties, trimesh collision, and undo/redo.
+Story 17 adds TileMapLayer, GridMap, AnimatedSprite2D, theme/font, audio loop/bus, NavigationRegion3D, AnimationTree/playback, Trail3D, 3D weather, particles, imported-mesh collision, and mesh-quality validation; the transaction fixture covers structure, typed properties, and undo/redo.
 
 `check_jobs_displayed.py` launches a displayed X11 editor and captures `/tmp/tiiny-jobs-displayed.png` after a completed `create_tree` job, verifying the Jobs dock is visible with its queued/running/attention/completed/failed columns and card.
 

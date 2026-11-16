@@ -6,24 +6,24 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | Status | Count |
 | --- | ---: |
-| supported | 28 |
+| supported | 40 |
 | partial | 60 |
-| missing | 12 |
+| missing | 0 |
 
 | Solution class | Count |
 | --- | ---: |
-| native_macro | 18 |
+| native_macro | 30 |
 | composed_primitives | 56 |
 | script_behavior | 14 |
-| specialized_missing | 12 |
+| specialized_missing | 0 |
 
 | Dimension | Supported | Partial | Missing |
 | --- | ---: | ---: | ---: |
-| 2d | 10 | 35 | 5 |
-| 3d | 8 | 25 | 7 |
+| 2d | 15 | 35 | 0 |
+| 3d | 15 | 25 | 0 |
 | project | 10 | 0 | 0 |
 
-> Behavior tasks are script work, not missing editor features. Composed tasks use `apply_editor_transaction`; specialized tasks remain story 17.
+> Behavior tasks are script work, not missing editor features. Composed tasks use `apply_editor_transaction`; supported specialized tasks have native recipes/tools.
 
 ## Tasks
 
@@ -44,10 +44,10 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 2D-011 | Add a Polygon2D | composed_primitives | partial | apply_editor_transaction |
 | 2D-012 | Add a Line2D path | composed_primitives | partial | apply_editor_transaction |
 | 2D-013 | Add a Marker2D spawn point | composed_primitives | partial | apply_editor_transaction |
-| 2D-014 | Add a TileMapLayer | specialized_missing | missing | No TileMap creation/tileset tool. |
+| 2D-014 | Add a TileMapLayer | native_macro | supported | add_tilemap_layer |
 | 2D-015 | Add a ParallaxBackground | composed_primitives | partial | apply_editor_transaction |
 | 2D-016 | Add GPUParticles2D | native_macro | supported | add_particles_2d |
-| 2D-017 | Add an AnimatedSprite2D | specialized_missing | missing | No SpriteFrames/animated sprite tool. |
+| 2D-017 | Add an AnimatedSprite2D | native_macro | supported | add_animated_sprite |
 | 2D-018 | Add a PointLight2D glow | composed_primitives | partial | apply_editor_transaction |
 | 2D-019 | Add a CanvasModulate night tint | composed_primitives | partial | apply_editor_transaction |
 | 2D-020 | Add screen shake | script_behavior | partial | read_project_file, replace_in_gdscript |
@@ -83,10 +83,10 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 2D-040 | Build an inventory grid | composed_primitives | partial | apply_editor_transaction |
 | 2D-041 | Add a dialogue box | composed_primitives | partial | apply_editor_transaction |
 | 2D-042 | Connect a button signal | composed_primitives | supported | apply_editor_transaction |
-| 2D-043 | Apply a theme and font | specialized_missing | missing | No theme/font mutation tool. |
-| 2D-044 | Loop background music | specialized_missing | missing | Audio import creates a player but does not configure looping, volume, or buses. |
+| 2D-043 | Apply a theme and font | native_macro | supported | apply_theme |
+| 2D-044 | Loop background music | native_macro | supported | configure_audio_loop |
 | 2D-045 | Play a jump sound | script_behavior | partial | read_project_file, replace_in_gdscript |
-| 2D-046 | Set an audio bus volume | specialized_missing | missing | No AudioServer/bus mutation tool. |
+| 2D-046 | Set an audio bus volume | native_macro | supported | configure_audio_bus |
 | 2D-047 | Make the camera follow the player | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 2D-048 | Set camera limits and smoothing | composed_primitives | partial | apply_editor_transaction |
 | 2D-049 | Tween a node position | script_behavior | partial | read_project_file, replace_in_gdscript |
@@ -101,12 +101,12 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 3D-053 | Add a DirectionalLight3D | composed_primitives | partial | apply_editor_transaction |
 | 3D-054 | Add a WorldEnvironment sky | composed_primitives | partial | apply_editor_transaction |
 | 3D-055 | Add a CSGBox3D | composed_primitives | partial | apply_editor_transaction |
-| 3D-056 | Add a GridMap | specialized_missing | missing | No GridMap tool. |
+| 3D-056 | Add a GridMap | native_macro | supported | add_gridmap |
 | 3D-057 | Add a StaticBody3D collision | composed_primitives | partial | apply_editor_transaction |
 | 3D-058 | Add a CharacterBody3D controller | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-059 | Add a RigidBody3D crate | composed_primitives | partial | apply_editor_transaction |
 | 3D-060 | Add an Area3D trigger | composed_primitives | partial | apply_editor_transaction |
-| 3D-061 | Add a NavigationRegion3D | specialized_missing | missing | No navigation tool. |
+| 3D-061 | Add a NavigationRegion3D | native_macro | supported | add_navigation_region |
 | 3D-062 | Add a Marker3D spawn | composed_primitives | partial | apply_editor_transaction |
 | 3D-063 | Import a generated GLB model | native_macro | supported | import_generated_model |
 | 3D-064 | Generate a 3D model from a reference image | native_macro | supported | append_job, get_job_status, import_generated_model |
@@ -136,16 +136,16 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 3D-077 | Animate a door opening | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-078 | Create an orbiting camera | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-079 | Tween the camera | script_behavior | partial | read_project_file, replace_in_gdscript |
-| 3D-080 | Play a character animation state | specialized_missing | missing | No AnimationTree/state machine tool. |
-| 3D-081 | Animate a skeleton | specialized_missing | missing | No skeleton/animation tool. |
+| 3D-080 | Play a character animation state | native_macro | supported | add_animation_tree |
+| 3D-081 | Animate a skeleton | native_macro | supported | play_animation |
 
 ### 3D effects
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
 | 3D-082 | Add 3D particles | native_macro | supported | add_particles_3d |
-| 3D-083 | Add a 3D trail | specialized_missing | missing | No 3D trail/particle tool. |
-| 3D-084 | Add 3D rain or snow | specialized_missing | missing | No 3D weather/particle tool. |
+| 3D-083 | Add a 3D trail | native_macro | supported | add_trail_3d |
+| 3D-084 | Add 3D rain or snow | native_macro | supported | add_weather_3d |
 
 ### 3D audio
 
@@ -157,7 +157,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
-| 3D-086 | Validate PBR maps and topology | specialized_missing | missing | Import reports topology/PBR as unverified; no geometry/PBR validator. |
+| 3D-086 | Validate PBR maps and topology | native_macro | supported | validate_mesh_quality |
 
 ### 3D camera
 

@@ -1,6 +1,6 @@
 # Story 17 implementation plan — specialized authoring recipes
 
-Status: Accepted for the first specialized family (particles and mesh collision); remaining families are follow-ups.
+Status: Accepted. All catalog specialized families have native recipes/tools and deterministic coverage.
 
 Parent: [17 — Specialized authoring recipes](../work-items/17-specialized-authoring.md).
 
@@ -45,4 +45,4 @@ First family verified; see [acceptance evidence](../evidence/17-acceptance.md).
 
 ## Handoff
 
-Implemented particles 2D/3D and imported-mesh collision. Remaining specialized tasks (TileMap, GridMap, navigation, AnimationTree, skeleton, audio buses, trails/weather, theme/font, PBR validation) remain explicit follow-ups.
+Implemented TileMapLayer, GridMap, AnimatedSprite2D, theme/font, audio loop/bus, NavigationRegion3D, AnimationTree, animation playback, Trail3D, 3D weather, particles 2D/3D, imported-mesh collision, and mesh-quality validation. See acceptance evidence for boundaries (navigation bake, skeleton clip requirement, global audio bus, unverified visual/quality claims).

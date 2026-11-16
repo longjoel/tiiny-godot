@@ -1,6 +1,6 @@
 # 16 — Catalog-driven composition and coverage tests
 
-Status: Accepted. Catalog v2 classifies all 100 tasks by solution class with 28 supported / 60 partial / 12 specialized-missing after story 17; every supported task has a test reference and a 10+ prompt live sample is recorded. See [acceptance evidence](../evidence/16-acceptance.md).
+Status: Accepted. Catalog v2 classifies all 100 tasks by solution class with 40 supported / 60 partial / 0 specialized-missing after story 17; every supported task has a test reference and a 10+ prompt live sample is recorded. See [acceptance evidence](../evidence/16-acceptance.md).
 
 Feature: Task catalog v2, composed-task tests, and live coverage
 

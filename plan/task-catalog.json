@@ -205,11 +205,13 @@
       "dimension": "2d",
       "task": "Add a TileMapLayer",
       "prompt": "Create a TileMapLayer for the ground.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No TileMap creation/tileset tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_tilemap_layer"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-015",
@@ -248,11 +250,13 @@
       "dimension": "2d",
       "task": "Add an AnimatedSprite2D",
       "prompt": "Create an AnimatedSprite2D with an idle animation.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No SpriteFrames/animated sprite tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_animated_sprite"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-018",
@@ -638,11 +642,13 @@
       "dimension": "2d",
       "task": "Apply a theme and font",
       "prompt": "Apply the project theme and a larger font to the HUD.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No theme/font mutation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "apply_theme"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-044",
@@ -651,11 +657,13 @@
       "dimension": "2d",
       "task": "Loop background music",
       "prompt": "Play music.ogg on loop at low volume.",
-      "status": "missing",
-      "tools": [],
-      "gap": "Audio import creates a player but does not configure looping, volume, or buses.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "configure_audio_loop"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-045",
@@ -680,11 +688,13 @@
       "dimension": "2d",
       "task": "Set an audio bus volume",
       "prompt": "Lower the Music bus to -12 dB.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No AudioServer/bus mutation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "configure_audio_bus"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-047",
@@ -831,11 +841,13 @@
       "dimension": "3d",
       "task": "Add a GridMap",
       "prompt": "Create a GridMap for the floor.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No GridMap tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_gridmap"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-057",
@@ -905,11 +917,13 @@
       "dimension": "3d",
       "task": "Add a NavigationRegion3D",
       "prompt": "Bake a navigation region for enemies.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No navigation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_navigation_region"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-062",
@@ -1194,11 +1208,13 @@
       "dimension": "3d",
       "task": "Play a character animation state",
       "prompt": "Blend idle and run animations.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No AnimationTree/state machine tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_animation_tree"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-081",
@@ -1207,11 +1223,13 @@
       "dimension": "3d",
       "task": "Animate a skeleton",
       "prompt": "Play the imported walk animation.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No skeleton/animation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "play_animation"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-082",
@@ -1235,11 +1253,13 @@
       "dimension": "3d",
       "task": "Add a 3D trail",
       "prompt": "Add a trail behind the projectile.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No 3D trail/particle tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_trail_3d"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-084",
@@ -1248,11 +1268,13 @@
       "dimension": "3d",
       "task": "Add 3D rain or snow",
       "prompt": "Add a rain effect to the scene.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No 3D weather/particle tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_weather_3d"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-085",
@@ -1276,11 +1298,13 @@
       "dimension": "3d",
       "task": "Validate PBR maps and topology",
       "prompt": "Check that this generated model has good topology and PBR maps.",
-      "status": "missing",
-      "tools": [],
-      "gap": "Import reports topology/PBR as unverified; no geometry/PBR validator.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "validate_mesh_quality"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-087",

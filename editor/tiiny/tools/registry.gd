@@ -88,6 +88,28 @@ const LEGACY_DEFINITIONS := [
 		"timeout_ms": 15000,
 	},
 	{
+		"name": "configure_audio_bus",
+		"title": "Configure audio bus",
+		"description": "Create or remove a named audio bus and set its volume. This is a global project-runtime change, not a scene undo action.",
+		"parameters": {"type": "object", "properties": {
+			"name": {"type": "string", "minLength": 1, "maxLength": 64},
+			"volume_db": {"type": "number", "minimum": -80, "maximum": 24},
+			"remove": {"type": "boolean"},
+		}, "required": ["name"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 10000,
+	},
+	{
+		"name": "validate_mesh_quality",
+		"title": "Validate mesh geometry and maps",
+		"description": "Inspect an existing MeshInstance3D: surfaces, vertex/index counts, materials, PBR map presence, and bounds. Quality remains explicitly unverified.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "read",
+		"timeout_ms": 10000,
+	},
+	{
 		"name": "save_edited_scene",
 		"title": "Save edited scene",
 		"description": "Explicitly save the edited scene to its existing res:// path. This is a file write, not a scene undo action.",

@@ -1,49 +1,43 @@
 # Story 17 — acceptance evidence
 
-Story 17 is accepted for the first specialized family. 2D/3D particle effects and imported-mesh collision are implemented and moved in the catalog; the remaining specialized tasks stay explicit gaps.
+Story 17 is accepted. All 12 remaining specialized catalog tasks now have native recipes/tools with deterministic tests, and the catalog has **zero specialized-missing tasks**.
 
 Executable: `bin/godot.linuxbsd.editor.x86_64`. No build or test remains running.
 
-## Implemented recipes
+## Implemented specialized families
 
-- `add_particles_2d` — GPUParticles2D + ParticleProcessMaterial with amount, lifetime, gravity, initial velocity, spread, scale, and color; one undo.
-- `add_particles_3d` — GPUParticles3D + ParticleProcessMaterial with the same typed controls; one undo.
-- `add_mesh_collision` — StaticBody3D + CollisionShape3D with a trimesh `ConcavePolygonShape3D` generated from an existing MeshInstance3D mesh; one undo.
+- 2D: `add_tilemap_layer`, `add_animated_sprite`, `apply_theme`, `configure_audio_loop`, `configure_audio_bus`, `add_particles_2d`.
+- 3D: `add_gridmap`, `add_navigation_region`, `add_animation_tree`, `play_animation`, `add_trail_3d`, `add_particles_3d`, `add_weather_3d`, `add_mesh_collision`.
+- Validation: `validate_mesh_quality` reports surfaces, vertex/index counts, materials, PBR-map presence, bounds, and explicit `quality: unverified`.
 
 ## Criterion matrix
 
 | Criterion | Evidence |
 | --- | --- |
-| Typed inputs, target/availability validation, one undo | Recipes validate parent/target ownership, names, numeric ranges, mesh presence, and create only new nodes/resources. Each commits one undo action. The transaction fixture verifies 2D/3D particles and mesh collision, plus undo/redo. |
-| Preserve existing animations/resources | New particles/materials and collision bodies are owned additions; no existing animation or shared resource is mutated. Object references are transaction-created. |
-| Unsupported combinations fail before mutation | Missing/owned-parent/name conflicts, invalid ranges, non-MeshInstance3D targets, and meshes without a trimesh shape return typed errors before mutation. |
-| Complex workflows record validation/quality | Particle creation is structural; no particle appearance/quality claim. Trimesh collision is generated from the actual mesh and reported; no topology optimization claim. |
-| Catalog tasks move only with a passing test | `2D-016` (GPUParticles2D), `3D-082` (3D particles), and `3D-065` (imported-mesh collision) moved from specialized-missing to native/supported with the transaction fixture as their test. |
-| Live/device checks where model/generator involved | These recipes do not call a model or generator; deterministic editor coverage is used. |
-
-## Catalog remeasure
-
-- Supported: **28** (was 25)
-- Partial: 60
-- Specialized-missing: **12** (was 15)
-- Solution classes: native_macro 18, composed_primitives 56, script_behavior 14, specialized_missing 12
-- Supported tasks with tests: 28/28
-
-Remaining specialized-missing tasks: TileMapLayer, AnimatedSprite2D, theme/font, music loop, audio bus, GridMap, NavigationRegion3D, AnimationTree state, skeleton animation, 3D trail, 3D weather, PBR/topology validation. These remain story 17 follow-ups or documented limitations.
+| Typed inputs, target/availability validation, one undo where supported | Recipes validate parent/target ownership, names, ranges, texture/mesh/script/resource inputs, and commit one scene undo action. Audio bus configuration is global runtime state and is explicitly not scene-undoable. |
+| Preserve existing animations/resources | Theme, loop, and animation recipes create/duplicate owned resources rather than mutating shared ones. AnimationTree/play-animation do not delete existing clips. |
+| Unsupported combinations fail before mutation | Missing textures/fonts/audio streams, non-Control theme targets, non-MeshInstance3D targets, non-AnimationPlayer targets, invalid ranges, and name/ownership conflicts return typed errors. |
+| Complex workflows record validation/quality | Navigation reports `bake: not_requested`; mesh quality reports metrics with `quality: unverified`; audio loop reports duplicated-stream behavior; skeleton playback requires an existing clip. |
+| Catalog tasks move only with a passing test | All 12 remaining specialized IDs moved to native/supported with the transaction fixture as the test. Catalog: **40 supported / 60 partial / 0 specialized-missing**, 40/40 supported tested. |
+| Live/device checks where model/generator involved | These recipes do not call a model or generator; deterministic editor coverage is used. Existing live asset/model traces remain separate. |
 
 ## Runs
 
-| Check | Result | Report/log |
+| Check | Result | Log/report |
 | --- | --- | --- |
-| Transaction/registry fixture | Passed particles 2D/3D, mesh collision, undo/redo, and all prior generic/native tests | `/tmp/transactions-17f.log` |
-| Catalog validator | Passed: 100 tasks, 36 tools, 28 supported / 60 partial / 12 missing, 28/28 tested | `/tmp/tiiny-task-coverage-v2.json` |
-| Jobs suite | Passed all 31 modes | `/tmp/jobs-17.log` |
-| Editor smoke | Passed 11/11 | `/tmp/tiiny-story17-smoke.json` |
-| Build | Exit 0, `00:00:34.96` | `/tmp/tiiny-story17-build.log` |
+| Transaction/registry fixture | Passed TileMap, GridMap, AnimatedSprite, theme, audio loop/bus, navigation, AnimationTree, animation playback, Trail3D, weather, particles, mesh collision, mesh quality, and all prior generic/native tests | `/tmp/transactions-17-final3.log` |
+| Catalog validator | Passed: 100 tasks, 48 tools, 40 supported / 60 partial / 0 missing, 40/40 tests | `/tmp/tiiny-task-coverage-final.json` |
+| Jobs suite | Passed all 31 modes | `/tmp/jobs-17-final.log` |
+| Editor smoke | Passed 11/11 | `/tmp/tiiny-story17-final-smoke.json` |
+| Debugger fixture | Passed | `/tmp/debugger-17-final.log` |
+| Build | Exit 0, `00:00:35.45` | `/tmp/tiiny-story17c-build.log` |
 
 ## Remaining boundaries
 
-- Particle appearance (color/trail/shader quality) was not visually reviewed; only structure/properties were tested.
-- Trimesh collision is a literal mesh shape; no convex decomposition, simplification, or performance validation.
-- 12 specialized tasks remain unimplemented; they are explicitly missing rather than hidden as supported.
-- No live model turn was run for particles/mesh collision; no model/generator was involved.
+- NavigationRegion3D creation configures a NavigationMesh but does not bake; baking remains an unverified follow-up.
+- Skeleton animation playback requires an existing imported AnimationPlayer clip; no skeleton creation/retargeting.
+- Audio bus configuration is global runtime state and has no scene undo entry.
+- Mesh-quality validation reports measurable metrics and explicitly unverified quality; it does not certify topology or PBR correctness.
+- Particle/weather/trail appearance was not visually reviewed; structure/properties were tested.
+- Audio loop supports streams exposing `loop_mode`/`loop`; unsupported stream types fail clearly.
+- 60 catalog tasks remain partial because their composed/script workflows lack focused per-task tests, not because they are missing specialized tools.

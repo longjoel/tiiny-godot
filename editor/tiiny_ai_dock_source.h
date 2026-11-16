@@ -959,6 +959,8 @@ func _ensure_workspace_registry() -> bool:
 	workspace_registry.set_handler("read_project_file", Callable(self, "_registry_read_file"))
 	workspace_registry.set_handler("replace_in_gdscript", Callable(self, "_registry_replace_script"))
 	workspace_registry.set_handler("save_edited_scene", Callable(self, "_registry_save_scene"))
+	workspace_registry.set_handler("configure_audio_bus", Callable(self, "_registry_configure_audio_bus"))
+	workspace_registry.set_handler("validate_mesh_quality", Callable(self, "_registry_validate_mesh"))
 	workspace_registry.set_handler("append_job", Callable(self, "_registry_append_job"))
 	workspace_registry.set_handler("get_job_status", Callable(self, "_registry_job_status"))
 	return true
@@ -994,6 +996,12 @@ func _registry_replace_script(arguments: Dictionary, _context: Dictionary) -> Di
 
 func _registry_save_scene(_arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	return _save_scene_tool()
+
+func _registry_configure_audio_bus(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _configure_audio_bus_tool(str(arguments.get("name", "")), float(arguments.get("volume_db", 0.0)), bool(arguments.get("remove", false)))
+
+func _registry_validate_mesh(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _validate_mesh_quality_tool(str(arguments.get("target_path", "")))
 
 func _registry_append_job(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var text := _append_job_tool(arguments)
@@ -1047,11 +1055,19 @@ func _refresh_registry_availability() -> void:
 	values["add_particles_2d"] = values["import_generated_model"]
 	values["add_particles_3d"] = values["import_generated_model"]
 	values["add_mesh_collision"] = {"available": saved and not dirty and _scene_has_class(root, "MeshInstance3D"), "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No MeshInstance3D is present for collision generation." if not _scene_has_class(root, "MeshInstance3D") else ""))}
+	for name in ["add_tilemap_layer", "add_gridmap", "add_animated_sprite", "configure_audio_loop", "add_navigation_region", "add_weather_3d"]:
+		values[name] = values["import_generated_model"]
+	values["apply_theme"] = {"available": saved and not dirty and _scene_has_class(root, "Control"), "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No Control is present for a theme." if not _scene_has_class(root, "Control") else ""))}
+	values["add_animation_tree"] = {"available": saved and not dirty and _scene_has_class(root, "AnimationPlayer"), "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No AnimationPlayer is present for an AnimationTree." if not _scene_has_class(root, "AnimationPlayer") else ""))}
+	values["add_trail_3d"] = values["import_generated_model"]
+	values["play_animation"] = {"available": saved and not dirty and _scene_has_class(root, "AnimationPlayer"), "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No AnimationPlayer is present for playback." if not _scene_has_class(root, "AnimationPlayer") else ""))}
 	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no configured/downloaded image model." if not image_available else ""}
 	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]
 	values["replace_in_gdscript"] = values["create_gdscript"]
 	values["save_edited_scene"] = {"available": saved, "reason": "Open a saved scene before saving it." if not saved else ""}
+	values["configure_audio_bus"] = {"available": true, "reason": ""}
+	values["validate_mesh_quality"] = {"available": saved, "reason": "Open a saved scene to inspect a mesh." if not saved else ""}
 	values["append_job"] = {"available": jobs_available, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
 	values["get_job_status"] = values["append_job"]
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
@@ -1540,6 +1556,58 @@ func _save_scene_tool() -> Dictionary:
 		return _tool_text_result("Error: Could not save the scene (error %d)." % error)
 	var dirty := path in EditorInterface.get_unsaved_scenes()
 	return {"ok": true, "summary": "Saved scene: " + path, "data": {"path": path, "dirty": dirty}, "affected": [{"kind": "file", "path": path}]}
+
+func _configure_audio_bus_tool(name: String, volume_db: float, remove: bool) -> Dictionary:
+	name = name.strip_edges()
+	if name.is_empty() or name.length() > 64 or name.validate_node_name() != name:
+		return _tool_text_result("Error: Audio bus name must be a short safe name.")
+	if volume_db < -80 or volume_db > 24:
+		return _tool_text_result("Error: Audio bus volume must be between -80 and 24 dB.")
+	var index := AudioServer.get_bus_index(name)
+	if remove:
+		if index <= 0:
+			return _tool_text_result("Error: The audio bus does not exist or cannot be removed.")
+		AudioServer.remove_bus(index)
+		return {"ok": true, "summary": "Removed audio bus " + name + ".", "data": {"name": name, "removed": true}, "affected": []}
+	if index < 0:
+		AudioServer.add_bus()
+		index = AudioServer.bus_count - 1
+		AudioServer.set_bus_name(index, name)
+	AudioServer.set_bus_volume_db(index, volume_db)
+	return {"ok": true, "summary": "Set audio bus %s to %.1f dB." % [name, volume_db], "data": {"name": name, "volume_db": volume_db, "index": index}, "affected": []}
+
+func _validate_mesh_quality_tool(target_path: String) -> Dictionary:
+	if target_path.strip_edges().is_empty():
+		return _tool_text_result("Error: target_path is required.")
+	var found: Dictionary = workspace_inspector.resolve_scene_node(EditorInterface.get_edited_scene_root(), target_path) if workspace_inspector != null else {"error": {"code": "unavailable", "message": "Workspace inspector is unavailable."}}
+	if found.has("error"):
+		return _tool_text_result("Error: " + str(found.error.message))
+	var target: Node = found.node
+	if not target is MeshInstance3D or target.mesh == null:
+		return _tool_text_result("Error: Target must be an owned MeshInstance3D with a mesh.")
+	var mesh: Mesh = target.mesh
+	var surfaces: Array = []
+	var vertices := 0
+	var indices := 0
+	var materials: Array[String] = []
+	var pbr := {"albedo": false, "normal": false, "roughness": false}
+	for surface in mesh.get_surface_count():
+		var arrays: Array = mesh.surface_get_arrays(surface)
+		var verts: Variant = arrays[Mesh.ARRAY_VERTEX] if arrays.size() > Mesh.ARRAY_VERTEX else PackedVector3Array()
+		var idx: Variant = arrays[Mesh.ARRAY_INDEX] if arrays.size() > Mesh.ARRAY_INDEX else PackedInt32Array()
+		var vertex_count: int = verts.size() if verts is PackedVector3Array else 0
+		var index_count: int = idx.size() if idx is PackedInt32Array else 0
+		vertices += vertex_count
+		indices += index_count
+		var material = target.get_active_material(surface)
+		materials.append(material.get_class() if material != null else "none")
+		if material is StandardMaterial3D:
+			if material.albedo_texture != null: pbr.albedo = true
+			if material.normal_enabled and material.normal_texture != null: pbr.normal = true
+			if material.roughness_texture != null: pbr.roughness = true
+		surfaces.append({"surface": surface, "vertices": vertex_count, "indices": index_count, "material": materials.back()})
+	var bounds: AABB = mesh.get_aabb()
+	return {"ok": true, "summary": "Mesh has %d surface(s), %d vertices, %d indices; PBR/topology quality is unverified." % [surfaces.size(), vertices, indices], "data": {"path": target_path, "surfaces": surfaces, "vertices": vertices, "indices": indices, "materials": materials, "bounds": {"position": [bounds.position.x, bounds.position.y, bounds.position.z], "size": [bounds.size.x, bounds.size.y, bounds.size.z]}, "pbr_maps": pbr, "quality": "unverified"}, "affected": []}
 
 func _create_script_tool(path: String, source: String) -> String:
 	var normalized := path.simplify_path()
