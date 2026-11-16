@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "total": 100,
   "tasks": [
     {
@@ -15,7 +15,8 @@
         "add_sprite_from_image"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "native_macro"
     },
     {
       "id": "2D-002",
@@ -29,7 +30,8 @@
         "add_sprite_from_image"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-003",
@@ -40,11 +42,11 @@
       "prompt": "Replace the Icon texture with res://art/player.png.",
       "status": "partial",
       "tools": [
-        "read_project_file",
-        "replace_in_gdscript"
+        "apply_editor_transaction"
       ],
       "gap": "No direct texture/property mutation recipe; requires a script or manual inspector edit.",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-004",
@@ -53,14 +55,13 @@
       "dimension": "2d",
       "task": "Move, rotate, or scale a node",
       "prompt": "Move the player to (200, 300) and scale it to 1.5.",
-      "status": "partial",
+      "status": "supported",
       "tools": [
-        "inspect_node",
-        "read_project_file",
-        "replace_in_gdscript"
+        "apply_editor_transaction"
       ],
-      "gap": "No generic transform mutation tool; script edits are the fallback.",
-      "test": ""
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-005",
@@ -69,10 +70,13 @@
       "dimension": "2d",
       "task": "Add a ColorRect background",
       "prompt": "Add a full-screen dark blue background.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic Control creation recipe.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-006",
@@ -81,10 +85,13 @@
       "dimension": "2d",
       "task": "Add a Camera2D",
       "prompt": "Add a Camera2D and make it current.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No generic node creation or camera configuration tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-007",
@@ -93,10 +100,13 @@
       "dimension": "2d",
       "task": "Add a CanvasLayer HUD",
       "prompt": "Create a CanvasLayer for the HUD.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-008",
@@ -105,10 +115,13 @@
       "dimension": "2d",
       "task": "Add a Label with text",
       "prompt": "Add a Label showing \"Score: 0\" at the top left.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No UI node creation tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-009",
@@ -117,10 +130,13 @@
       "dimension": "2d",
       "task": "Add a Button",
       "prompt": "Add a Start button to the scene.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No UI node creation tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-010",
@@ -129,10 +145,13 @@
       "dimension": "2d",
       "task": "Add a ProgressBar",
       "prompt": "Add a health ProgressBar.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-011",
@@ -141,10 +160,13 @@
       "dimension": "2d",
       "task": "Add a Polygon2D",
       "prompt": "Create a Polygon2D for a simple hill.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No polygon node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-012",
@@ -153,10 +175,13 @@
       "dimension": "2d",
       "task": "Add a Line2D path",
       "prompt": "Draw a Line2D path across the level.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No Line2D creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-013",
@@ -165,10 +190,13 @@
       "dimension": "2d",
       "task": "Add a Marker2D spawn point",
       "prompt": "Add a Marker2D where enemies should spawn.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-014",
@@ -180,7 +208,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No TileMap creation/tileset tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-015",
@@ -189,10 +218,13 @@
       "dimension": "2d",
       "task": "Add a ParallaxBackground",
       "prompt": "Add a two-layer parallax background.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No parallax node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-016",
@@ -204,7 +236,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No particle creation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-017",
@@ -216,7 +249,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No SpriteFrames/animated sprite tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-018",
@@ -225,10 +259,13 @@
       "dimension": "2d",
       "task": "Add a PointLight2D glow",
       "prompt": "Add a warm PointLight2D around the torch.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "Torch flicker requires an existing light; no light creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-019",
@@ -237,10 +274,13 @@
       "dimension": "2d",
       "task": "Add a CanvasModulate night tint",
       "prompt": "Make the scene look like night with CanvasModulate.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No CanvasModulate creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-020",
@@ -249,10 +289,14 @@
       "dimension": "2d",
       "task": "Add screen shake",
       "prompt": "Shake the camera when the player takes damage.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No camera or tween creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "2D-021",
@@ -266,7 +310,8 @@
         "add_rectangular_collision_shape"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-022",
@@ -275,10 +320,13 @@
       "dimension": "2d",
       "task": "Add a StaticBody2D platform",
       "prompt": "Add a static platform at the bottom of the level.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic physics body creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-023",
@@ -287,10 +335,13 @@
       "dimension": "2d",
       "task": "Add a CharacterBody2D player",
       "prompt": "Create a CharacterBody2D player with movement.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic body creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-024",
@@ -299,10 +350,13 @@
       "dimension": "2d",
       "task": "Add a RigidBody2D crate",
       "prompt": "Add a pushable RigidBody2D crate.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic body creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-025",
@@ -311,10 +365,13 @@
       "dimension": "2d",
       "task": "Add an Area2D trigger",
       "prompt": "Add an Area2D that triggers when the player enters.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No Area2D creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-026",
@@ -323,10 +380,13 @@
       "dimension": "2d",
       "task": "Create a one-way platform",
       "prompt": "Make this platform one-way from below.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No collision one-way configuration recipe.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-027",
@@ -340,7 +400,8 @@
         "assign_slippery_surface"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-028",
@@ -351,10 +412,11 @@
       "prompt": "Make the Platform bouncy while keeping normal grip.",
       "status": "partial",
       "tools": [
-        "assign_slippery_surface"
+        "apply_editor_transaction"
       ],
       "gap": "The recipe sets bounce but always applies low friction; no general PhysicsMaterial editor.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-029",
@@ -363,10 +425,13 @@
       "dimension": "2d",
       "task": "Set collision layers and masks",
       "prompt": "Put enemies on layer 2 and make them collide with the player layer.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No collision layer/mask mutation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-030",
@@ -375,10 +440,13 @@
       "dimension": "2d",
       "task": "Add a RayCast2D",
       "prompt": "Add a downward RayCast2D to detect the floor.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No RayCast2D creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-031",
@@ -387,10 +455,13 @@
       "dimension": "2d",
       "task": "Add a PinJoint2D",
       "prompt": "Connect two bodies with a PinJoint2D.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No joint creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-032",
@@ -399,10 +470,13 @@
       "dimension": "2d",
       "task": "Add a DampedSpringJoint2D",
       "prompt": "Add a springy connection between two crates.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No joint creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-033",
@@ -411,10 +485,13 @@
       "dimension": "2d",
       "task": "Add a CollisionPolygon2D",
       "prompt": "Create a polygon collision shape for the cave wall.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "Only rectangle collision shapes are supported.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-034",
@@ -423,10 +500,13 @@
       "dimension": "2d",
       "task": "Configure mass and damping",
       "prompt": "Make the crate heavier and slow its damping.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic RigidBody property mutation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-035",
@@ -441,7 +521,8 @@
         "replace_in_gdscript"
       ],
       "gap": "Requires a script edit; no native raycast setup.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "2D-036",
@@ -450,10 +531,13 @@
       "dimension": "2d",
       "task": "Add a score label HUD",
       "prompt": "Show the score in a label.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-037",
@@ -462,10 +546,13 @@
       "dimension": "2d",
       "task": "Build a start menu",
       "prompt": "Create a start menu with Play and Quit.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI composition tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-038",
@@ -474,10 +561,13 @@
       "dimension": "2d",
       "task": "Build a pause menu",
       "prompt": "Add a pause menu toggled by Escape.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI or input tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-039",
@@ -486,10 +576,13 @@
       "dimension": "2d",
       "task": "Add a health bar",
       "prompt": "Add a health bar that follows the player.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-040",
@@ -498,10 +591,13 @@
       "dimension": "2d",
       "task": "Build an inventory grid",
       "prompt": "Create a 3x3 inventory grid.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI composition tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-041",
@@ -510,10 +606,13 @@
       "dimension": "2d",
       "task": "Add a dialogue box",
       "prompt": "Add a dialogue box with speaker name and text.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No UI composition tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-042",
@@ -522,13 +621,13 @@
       "dimension": "2d",
       "task": "Connect a button signal",
       "prompt": "Connect the Start button to a start_game function.",
-      "status": "partial",
+      "status": "supported",
       "tools": [
-        "read_project_file",
-        "replace_in_gdscript"
+        "apply_editor_transaction"
       ],
-      "gap": "No signal-connection tool; requires a script edit.",
-      "test": ""
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-043",
@@ -540,7 +639,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No theme/font mutation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-044",
@@ -549,12 +649,11 @@
       "dimension": "2d",
       "task": "Loop background music",
       "prompt": "Play music.ogg on loop at low volume.",
-      "status": "partial",
-      "tools": [
-        "import_generated_audio"
-      ],
+      "status": "missing",
+      "tools": [],
       "gap": "Audio import creates a player but does not configure looping, volume, or buses.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-045",
@@ -565,12 +664,12 @@
       "prompt": "Play jump.wav when the player jumps.",
       "status": "partial",
       "tools": [
-        "import_generated_audio",
         "read_project_file",
         "replace_in_gdscript"
       ],
       "gap": "Requires audio import plus a script edit; no signal/audio wiring tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "2D-046",
@@ -582,7 +681,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No AudioServer/bus mutation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "2D-047",
@@ -591,10 +691,14 @@
       "dimension": "2d",
       "task": "Make the camera follow the player",
       "prompt": "Smoothly follow the player with Camera2D.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No Camera2D creation or follow tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "2D-048",
@@ -603,10 +707,13 @@
       "dimension": "2d",
       "task": "Set camera limits and smoothing",
       "prompt": "Keep the camera inside the level bounds.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No Camera2D property mutation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "2D-049",
@@ -615,10 +722,14 @@
       "dimension": "2d",
       "task": "Tween a node position",
       "prompt": "Tween the platform between two positions.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No tween creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "2D-050",
@@ -627,10 +738,14 @@
       "dimension": "2d",
       "task": "Tween scale and rotation",
       "prompt": "Pulse the pickup scale and rotate it.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No tween/animation creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-051",
@@ -639,10 +754,13 @@
       "dimension": "3d",
       "task": "Add a MeshInstance3D box",
       "prompt": "Add a 1x1x1 box mesh to the scene.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No generic 3D node creation tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-052",
@@ -651,10 +769,13 @@
       "dimension": "3d",
       "task": "Add a Camera3D",
       "prompt": "Add a Camera3D looking at the origin.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No Camera3D creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-053",
@@ -663,10 +784,13 @@
       "dimension": "3d",
       "task": "Add a DirectionalLight3D",
       "prompt": "Add a sun light with soft shadows.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No light creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-054",
@@ -675,10 +799,13 @@
       "dimension": "3d",
       "task": "Add a WorldEnvironment sky",
       "prompt": "Add a procedural sky and ambient light.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No environment creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-055",
@@ -687,10 +814,13 @@
       "dimension": "3d",
       "task": "Add a CSGBox3D",
       "prompt": "Block out a room with CSGBox3D.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No CSG creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-056",
@@ -702,7 +832,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No GridMap tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-057",
@@ -711,10 +842,13 @@
       "dimension": "3d",
       "task": "Add a StaticBody3D collision",
       "prompt": "Add collision to the floor mesh.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No 3D collision creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-058",
@@ -723,10 +857,14 @@
       "dimension": "3d",
       "task": "Add a CharacterBody3D controller",
       "prompt": "Create a first-person CharacterBody3D controller.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No 3D body/controller creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-059",
@@ -735,10 +873,13 @@
       "dimension": "3d",
       "task": "Add a RigidBody3D crate",
       "prompt": "Add a pushable physics crate.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No 3D body creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-060",
@@ -747,10 +888,13 @@
       "dimension": "3d",
       "task": "Add an Area3D trigger",
       "prompt": "Trigger when the player enters the doorway.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No Area3D creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-061",
@@ -762,7 +906,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No navigation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-062",
@@ -771,10 +916,13 @@
       "dimension": "3d",
       "task": "Add a Marker3D spawn",
       "prompt": "Add a spawn point for enemies.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No generic 3D node creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-063",
@@ -788,7 +936,8 @@
         "import_generated_model"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-064",
@@ -803,8 +952,9 @@
         "get_job_status",
         "import_generated_model"
       ],
-      "gap": "The generator and import are separate tool calls/jobs.",
-      "test": "integrations/tiiny/tests/check_asset_generation.py"
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_asset_generation.py",
+      "solution": "native_macro"
     },
     {
       "id": "3D-065",
@@ -816,7 +966,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No mesh-to-collision generation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-066",
@@ -827,11 +978,11 @@
       "prompt": "Scale the imported prop to 2x and rotate it 45 degrees.",
       "status": "partial",
       "tools": [
-        "read_project_file",
-        "replace_in_gdscript"
+        "apply_editor_transaction"
       ],
       "gap": "No generic transform mutation tool; script edits are the fallback.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-067",
@@ -840,10 +991,13 @@
       "dimension": "3d",
       "task": "Add an OmniLight3D",
       "prompt": "Add a warm omni light for the torch.",
-      "status": "missing",
-      "tools": [],
-      "gap": "Torch flicker requires an existing light; no light creation tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-068",
@@ -857,7 +1011,8 @@
         "add_torch_flicker"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-069",
@@ -866,10 +1021,13 @@
       "dimension": "3d",
       "task": "Add a SpotLight3D",
       "prompt": "Add a spotlight for the streetlamp.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No light creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-070",
@@ -878,10 +1036,13 @@
       "dimension": "3d",
       "task": "Add distance fog",
       "prompt": "Add volumetric fog to the scene.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No environment/fog tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-071",
@@ -890,10 +1051,13 @@
       "dimension": "3d",
       "task": "Set PBR color, metallic, and roughness",
       "prompt": "Make the metal crate metallic and rough.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No material creation/property tool.",
-      "test": ""
+      "status": "supported",
+      "tools": [
+        "apply_editor_transaction"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-072",
@@ -902,10 +1066,13 @@
       "dimension": "3d",
       "task": "Apply an albedo texture",
       "prompt": "Apply this texture as the material albedo.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No material/texture assignment tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-073",
@@ -914,10 +1081,13 @@
       "dimension": "3d",
       "task": "Add emission glow",
       "prompt": "Make the neon sign emit light.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No material emission tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-074",
@@ -926,10 +1096,13 @@
       "dimension": "3d",
       "task": "Make a material transparent",
       "prompt": "Make the glass material transparent.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No material transparency tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-075",
@@ -938,10 +1111,13 @@
       "dimension": "3d",
       "task": "Add a ReflectionProbe",
       "prompt": "Add a reflection probe for the room.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No reflection probe tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-076",
@@ -956,7 +1132,8 @@
         "replace_in_gdscript"
       ],
       "gap": "No generic animation creation; script fallback.",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-077",
@@ -971,7 +1148,8 @@
         "replace_in_gdscript"
       ],
       "gap": "No animation/tween/signal tool; script fallback.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-078",
@@ -980,10 +1158,14 @@
       "dimension": "3d",
       "task": "Create an orbiting camera",
       "prompt": "Orbit the camera around the model.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No Camera3D/script animation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-079",
@@ -992,10 +1174,14 @@
       "dimension": "3d",
       "task": "Tween the camera",
       "prompt": "Move the camera to a new position over 2 seconds.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No tween creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-080",
@@ -1007,7 +1193,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No AnimationTree/state machine tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-081",
@@ -1019,7 +1206,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No skeleton/animation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-082",
@@ -1031,7 +1219,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No 3D particle creation tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-083",
@@ -1043,7 +1232,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No 3D trail/particle tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-084",
@@ -1055,7 +1245,8 @@
       "status": "missing",
       "tools": [],
       "gap": "No 3D weather/particle tool.",
-      "test": ""
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-085",
@@ -1066,10 +1257,11 @@
       "prompt": "Make the waterfall sound positional in 3D.",
       "status": "partial",
       "tools": [
-        "import_generated_audio"
+        "apply_editor_transaction"
       ],
       "gap": "Audio import creates AudioStreamPlayer, not AudioStreamPlayer3D or attenuation.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-086",
@@ -1078,12 +1270,11 @@
       "dimension": "3d",
       "task": "Validate PBR maps and topology",
       "prompt": "Check that this generated model has good topology and PBR maps.",
-      "status": "partial",
-      "tools": [
-        "import_generated_model"
-      ],
+      "status": "missing",
+      "tools": [],
       "gap": "Import reports topology/PBR as unverified; no geometry/PBR validator.",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "",
+      "solution": "specialized_missing"
     },
     {
       "id": "3D-087",
@@ -1092,10 +1283,13 @@
       "dimension": "3d",
       "task": "Import a texture as a material",
       "prompt": "Create a material from res://art/brick.png.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No material creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-088",
@@ -1104,10 +1298,14 @@
       "dimension": "3d",
       "task": "Add camera collision",
       "prompt": "Stop the camera clipping through walls.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
       "gap": "No Camera3D configuration tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "3D-089",
@@ -1116,10 +1314,13 @@
       "dimension": "3d",
       "task": "Add 3D text",
       "prompt": "Add a floating Label3D above the shop.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No 3D text creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "3D-090",
@@ -1128,10 +1329,13 @@
       "dimension": "3d",
       "task": "Add a decal",
       "prompt": "Put a crack decal on the wall.",
-      "status": "missing",
-      "tools": [],
+      "status": "partial",
+      "tools": [
+        "apply_editor_transaction"
+      ],
       "gap": "No decal creation tool.",
-      "test": ""
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "composed_primitives"
     },
     {
       "id": "PROJECT-091",
@@ -1143,10 +1347,12 @@
       "status": "supported",
       "tools": [
         "read_project_file",
-        "replace_in_gdscript"
+        "replace_in_gdscript",
+        "create_gdscript"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "script_behavior"
     },
     {
       "id": "PROJECT-092",
@@ -1157,10 +1363,13 @@
       "prompt": "Create a new GDScript for a pickup.",
       "status": "supported",
       "tools": [
+        "read_project_file",
+        "replace_in_gdscript",
         "create_gdscript"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/test_chat_protocol.gd"
+      "test": "integrations/tiiny/tests/test_chat_protocol.gd",
+      "solution": "script_behavior"
     },
     {
       "id": "PROJECT-093",
@@ -1177,7 +1386,8 @@
         "inspect_resource"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_workspace_inspector.py"
+      "test": "integrations/tiiny/tests/check_workspace_inspector.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-094",
@@ -1192,7 +1402,8 @@
         "remove_breakpoint"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_debugger.py"
+      "test": "integrations/tiiny/tests/check_debugger.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-095",
@@ -1209,7 +1420,8 @@
         "select_stack_frame"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_debugger.py"
+      "test": "integrations/tiiny/tests/check_debugger.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-096",
@@ -1225,7 +1437,8 @@
         "debug_pause"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_debugger.py"
+      "test": "integrations/tiiny/tests/check_debugger.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-097",
@@ -1240,7 +1453,8 @@
         "get_job_status"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_builtin_jobs.py"
+      "test": "integrations/tiiny/tests/check_builtin_jobs.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-098",
@@ -1255,8 +1469,9 @@
         "get_job_status",
         "import_generated_audio"
       ],
-      "gap": "The generator and import are separate job/tool steps.",
-      "test": "integrations/tiiny/tests/check_asset_generation.py"
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_asset_generation.py",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-099",
@@ -1270,7 +1485,8 @@
         "import_generated_audio"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "PROJECT-100",
@@ -1284,7 +1500,8 @@
         "generate_image"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
+      "solution": "native_macro"
     }
   ]
 }

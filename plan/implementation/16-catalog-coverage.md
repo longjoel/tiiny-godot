@@ -1,6 +1,6 @@
 # Story 16 implementation plan — catalog-driven composition and coverage tests
 
-Status: Queued. Depends on stories 13–15.
+Status: Accepted. Catalog v2, validator, composed/native tests, and live coverage are implemented.
 
 Parent: [16 — Catalog-driven composition and coverage tests](../work-items/16-catalog-coverage.md).
 
@@ -51,3 +51,5 @@ Do not treat a single success as a rate.
 - Supported/composed/script tasks have actual tests, not just tool names.
 - Remaining `specialized_missing` entries are truly specialized.
 - Live results are recorded honestly, including failures.
+
+All gates verified; see [acceptance evidence](../evidence/16-acceptance.md).

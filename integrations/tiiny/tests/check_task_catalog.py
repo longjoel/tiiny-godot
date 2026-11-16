@@ -34,6 +34,7 @@ def main() -> int:
     prompts = set()
     tools = available_tools()
     statuses = {"supported": 0, "partial": 0, "missing": 0}
+    solutions = {"native_macro": 0, "composed_primitives": 0, "script_behavior": 0, "specialized_missing": 0}
     by_dimension = {}
     supported_with_tests = 0
     for task in tasks:
@@ -49,6 +50,15 @@ def main() -> int:
         if status not in statuses:
             errors.append(f"{tid}: invalid status {status}")
             continue
+        solution = task.get("solution", "")
+        if solution not in solutions:
+            errors.append(f"{tid}: invalid solution class {solution}")
+        else:
+            solutions[solution] += 1
+        if status == "supported" and solution == "specialized_missing":
+            errors.append(f"{tid}: specialized task cannot be supported")
+        if status == "missing" and solution != "specialized_missing":
+            errors.append(f"{tid}: only specialized_missing tasks may be missing")
         statuses[status] += 1
         dim = task.get("dimension", "")
         by_dimension.setdefault(dim, {"supported": 0, "partial": 0, "missing": 0})[status] += 1
@@ -63,6 +73,10 @@ def main() -> int:
             errors.append(f"{tid}: supported task has no tools")
         if status == "missing" and listed:
             errors.append(f"{tid}: missing task unexpectedly lists tools")
+        if status == "supported" and solution == "composed_primitives" and "apply_editor_transaction" not in listed:
+            errors.append(f"{tid}: composed task must list apply_editor_transaction")
+        if status == "supported" and solution == "script_behavior" and not ({"read_project_file", "replace_in_gdscript", "create_gdscript"} & set(listed)):
+            errors.append(f"{tid}: script task must list script tools")
         test = task.get("test", "")
         if test:
             if not (ROOT / test).exists():
@@ -77,6 +91,7 @@ def main() -> int:
         "available_tools": sorted(tools),
         "tool_count": len(tools),
         "status": statuses,
+        "solution": solutions,
         "by_dimension": by_dimension,
         "supported_with_test": supported_with_tests,
         "supported_coverage_percent": round(100.0 * statuses["supported"] / max(1, len(tasks)), 1),
@@ -85,6 +100,7 @@ def main() -> int:
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Catalog: {len(tasks)} tasks, {len(tools)} native tools")
     print(f"Supported: {statuses['supported']} ({report['supported_coverage_percent']}%), Partial: {statuses['partial']}, Missing: {statuses['missing']}")
+    print("Solution classes: " + ", ".join(f"{key}={value}" for key, value in solutions.items()))
     print(f"Supported tasks with a test reference: {supported_with_tests}/{statuses['supported']}")
     for dim in ("2d", "3d", "project"):
         counts = by_dimension.get(dim, {})
