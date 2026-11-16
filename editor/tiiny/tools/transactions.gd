@@ -107,7 +107,7 @@ func _execute(context: Dictionary, built: Dictionary, recipe_name: String, turn_
 		affected.append({"kind": "resource", "scene_path": context.scene_path, "resource": resource})
 	var token := str(turn_context.get("undo_group", ""))
 	if token.is_empty(): token = "tiiny:" + Crypto.new().generate_random_bytes(8).hex_encode()
-	var data := {"recipe": recipe_name, "scene": scene, "created": {"nodes": created_nodes, "resources": created_resources}, "dirty": true}
+	var data := {"recipe": recipe_name, "action_name": action_name, "scene": scene, "created": {"nodes": created_nodes, "resources": created_resources}, "dirty": true}
 	var result := {"ok": true, "summary": str(built.get("summary", "Applied recipe " + recipe_name + ".")), "data": data, "affected": affected, "undo_group": token, "scene_revision": str(scene.get("revision", context.revision))}
 	return result
 

@@ -925,6 +925,9 @@ func _refresh() -> void:
 	else:
 		_update_running_card()
 
+func show_job(id: String) -> void:
+	_show_details(id)
+
 func _show_details(id: String) -> void:
 	if not available:
 		return

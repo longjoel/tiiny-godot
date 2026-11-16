@@ -33,6 +33,9 @@ def make_project(project: Path) -> None:
     (project / "base.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Base" type="Node2D"]\n'
     )
+    (project / "running.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Running" type="Node2D"]\n'
+    )
 
 with tempfile.TemporaryDirectory(prefix="tiiny-workspace-transactions-") as directory:
     project = Path(directory) / "project"

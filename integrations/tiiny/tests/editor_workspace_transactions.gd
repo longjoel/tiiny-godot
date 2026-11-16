@@ -242,9 +242,23 @@ func _run() -> void:
 		_fail("Chat did not return a structured recipe result: " + str(envelope)); return
 	if root.get_node_or_null("Enemy/CollisionShape2D") == null or chat.turn_ledger.size() != 1:
 		_fail("Chat recipe or ledger result is missing"); return
-	var chat_history: Array = _history(root)
-	if not chat_history[2].undo(): _fail("Chat recipe undo failed"); return
-	if root.get_node_or_null("Enemy/CollisionShape2D") != null: _fail("Chat recipe undo left the shape"); return
+	var cards: Array = chat.action_cards_state()
+	if cards.size() != 1 or cards[0].status != "Completed" or str(cards[0].action_name).is_empty():
+		_fail("Action card state is wrong: " + str(cards)); return
+	var first_card: Control = cards[0].card
+	if first_card == null: _fail("Action card UI is missing"); return
+	var select_button: Button = first_card.find_child("ActionSelect", true, false)
+	if select_button == null: _fail("Action card Select button is missing"); return
+	select_button.pressed.emit()
+	await get_tree().process_frame
+	var selected: Array = EditorInterface.get_selection().get_selected_nodes()
+	if not selected.any(func(node): return str(root.get_path_to(node)) == "Enemy/CollisionShape2D"):
+		_fail("Action card did not select the recorded node"); return
+	var undo_button: Button = first_card.find_child("ActionUndo", true, false)
+	if undo_button == null: _fail("Action card Undo button is missing"); return
+	undo_button.pressed.emit()
+	await get_tree().process_frame
+	if root.get_node_or_null("Enemy/CollisionShape2D") != null: _fail("Action card Undo did not remove the shape"); return
 	chat._start_answer("code")
 	var unknown_call := {"id": "call-unknown", "type": "function", "function": {"name": "unsupported_fixture_tool", "arguments": "{}"}}
 	var unknown_reply := {"choices": [{"message": {"role": "assistant", "tool_calls": [unknown_call]}}]}
@@ -252,6 +266,36 @@ func _run() -> void:
 	var unknown_envelope: Variant = JSON.parse_string(chat.turn_messages.back().content)
 	if not unknown_envelope is Dictionary or str(unknown_envelope.get("error", {}).get("code", "")) != "unknown_tool":
 		_fail("Chat unknown tool was not structured: " + str(unknown_envelope)); return
+	cards = chat.action_cards_state()
+	if cards.is_empty() or cards.back().ok or str(cards.back().status) != "Failed":
+		_fail("Failed action card state is wrong: " + str(cards)); return
+	var failed_card: Control = cards.back().card
+	if failed_card == null or failed_card.find_child("ActionRetry", true, false) == null:
+		_fail("Failed action card has no retry path"); return
+	chat._start_answer("code")
+	var file_call := {"id": "call-file", "type": "function", "function": {"name": "create_gdscript", "arguments": JSON.stringify({"path": "res://action_card.gd", "source": "extends Node\n", "reason": "action card fixture"})}}
+	var file_reply := {"choices": [{"message": {"role": "assistant", "tool_calls": [file_call]}}]}
+	await chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify(file_reply).to_utf8_buffer())
+	var file_card: Control = chat.action_cards_state().back().card
+	if file_card == null or file_card.find_child("ActionFileNote", true, false) == null or file_card.find_child("ActionUndo", true, false) != null:
+		_fail("File action card incorrectly offers scene undo"); return
+	chat.size = Vector2(320, 600)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if file_card.size.x <= 0 or file_card.size.x > 321:
+		_fail("Action card did not fit the small chat width: " + str(file_card.size)); return
+	EditorInterface.play_custom_scene("res://running.tscn")
+	var playing := false
+	for index in range(100):
+		if EditorInterface.is_playing_scene(): playing = true; break
+		await get_tree().create_timer(0.05).timeout
+	if not playing: _fail("Running scene did not start for chat UI test"); return
+	if chat.history_text().is_empty() or chat.action_cards_state().is_empty():
+		_fail("Chat action history disappeared while a scene ran"); return
+	EditorInterface.stop_playing_scene()
+	for index in range(100):
+		if not EditorInterface.is_playing_scene(): break
+		await get_tree().create_timer(0.05).timeout
 	chat.queue_free()
 	await get_tree().process_frame
 

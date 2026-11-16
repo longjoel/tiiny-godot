@@ -40,6 +40,7 @@ var workspace_transactions: RefCounted
 var workspace_registry_script: Script
 var workspace_registry: RefCounted
 var turn_ledger: Array[Dictionary] = []
+var action_cards: Array[Dictionary] = []
 var turn_id := ""
 var tool_call_count := 0
 var turn_scene_context: Dictionary = {}
@@ -194,6 +195,191 @@ func _append_message(role: String, text: String) -> void:
 	history_box.add_child(row)
 	_scroll_to_bottom.call_deferred()
 
+func _append_action_card(result: Dictionary, arguments: Dictionary) -> void:
+	var summary := str(result.get("summary", result.get("error", {}).get("message", "Tool finished.")))
+	if not summary.strip_edges().is_empty():
+		message_log.append(summary)
+	var data: Dictionary = result.get("data", {}) if result.get("data", {}) is Dictionary else {}
+	var state := str(data.get("state", ""))
+	var status := "Completed"
+	var color := Color(0.45, 0.82, 0.55)
+	if not bool(result.get("ok", false)):
+		status = "Failed"
+		color = Color(1.0, 0.48, 0.42)
+	elif state in ["queued", "running"]:
+		status = state.capitalize()
+		color = Color(0.55, 0.75, 1.0)
+	var affected: Array = result.get("affected", []) if result.get("affected", []) is Array else []
+	var card := PanelContainer.new()
+	card.name = "ActionCard"
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style := StyleBoxFlat.new()
+	style.set_corner_radius_all(5)
+	style.set_content_margin_all(7)
+	style.bg_color = Color(color.r, color.g, color.b, 0.08)
+	style.border_width_left = 3
+	style.border_color = color
+	card.add_theme_stylebox_override("panel", style)
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 3)
+	card.add_child(box)
+	var header := HBoxContainer.new()
+	box.add_child(header)
+	var status_label := Label.new()
+	status_label.name = "ActionStatus"
+	status_label.text = status + " · " + str(result.get("tool", "tool"))
+	status_label.add_theme_color_override("font_color", color)
+	status_label.add_theme_font_size_override("font_size", 11)
+	status_label.clip_text = true
+	status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	header.add_child(status_label)
+	var summary_label := Label.new()
+	summary_label.name = "ActionSummary"
+	summary_label.text = summary
+	summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(summary_label)
+	if not affected.is_empty():
+		var affected_label := Label.new()
+		affected_label.name = "ActionAffected"
+		var parts: Array[String] = []
+		for entry in affected:
+			if not entry is Dictionary: continue
+			if str(entry.get("kind", "")) == "node":
+				parts.append("Node: " + str(entry.get("path", "")))
+			elif str(entry.get("kind", "")) == "resource":
+				parts.append("Resource: " + str(entry.get("class", entry.get("path", "resource"))))
+			elif str(entry.get("kind", "")) == "job":
+				parts.append("Job: " + str(entry.get("id", "")))
+		affected_label.text = " · ".join(parts)
+		affected_label.add_theme_font_size_override("font_size", 11)
+		affected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		affected_label.add_theme_color_override("font_color", Color(0.68, 0.7, 0.76))
+		box.add_child(affected_label)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 4)
+	box.add_child(buttons)
+	for entry in affected:
+		if not entry is Dictionary: continue
+		if str(entry.get("kind", "")) == "node":
+			var select := _action_button("Select")
+			select.name = "ActionSelect"
+			select.pressed.connect(_select_action_node.bind(str(entry.get("scene_path", str(data.get("scene", {}).get("path", "")))), str(entry.get("path", ""))))
+			buttons.add_child(select)
+		elif str(entry.get("kind", "")) == "resource":
+			var open := _action_button("Open")
+			open.name = "ActionOpen"
+			open.pressed.connect(_open_action_resource.bind(str(entry.get("scene_path", str(data.get("scene", {}).get("path", "")))), str(entry.get("path", "")), str(entry.get("owner", ""))))
+			buttons.add_child(open)
+		elif str(entry.get("kind", "")) == "job":
+			var show := _action_button("Show job")
+			show.name = "ActionShowJob"
+			show.pressed.connect(_show_action_job.bind(str(entry.get("id", ""))))
+			buttons.add_child(show)
+	var action_name := str(data.get("action_name", ""))
+	if not str(result.get("undo_group", "")).is_empty() and not action_name.is_empty():
+		var undo := _action_button("Undo")
+		undo.name = "ActionUndo"
+		undo.pressed.connect(_undo_action.bind(action_name))
+		buttons.add_child(undo)
+	if not bool(result.get("ok", false)) and not str(result.get("tool", "")).is_empty():
+		var retry := _action_button("Retry")
+		retry.name = "ActionRetry"
+		retry.pressed.connect(_retry_action.bind(str(result.get("tool", "")), arguments.duplicate(true)))
+		buttons.add_child(retry)
+	if str(result.get("undo_group", "")).is_empty() and str(result.get("tool", "")) in ["create_gdscript", "generate_image"]:
+		var file_note := Label.new()
+		file_note.name = "ActionFileNote"
+		file_note.text = "File change · not scene-undoable"
+		file_note.add_theme_font_size_override("font_size", 10)
+		file_note.add_theme_color_override("font_color", Color(0.75, 0.7, 0.55))
+		buttons.add_child(file_note)
+	history_box.add_child(card)
+	action_cards.append({"tool": str(result.get("tool", "")), "status": status, "summary": summary, "affected": affected, "undo_group": str(result.get("undo_group", "")), "action_name": action_name, "ok": bool(result.get("ok", false)), "state": state, "card": card})
+	while action_cards.size() > 100:
+		var oldest: Dictionary = action_cards.pop_front()
+		var old_card: Variant = oldest.get("card", null)
+		if is_instance_valid(old_card): old_card.queue_free()
+	_scroll_to_bottom.call_deferred()
+
+func action_cards_state() -> Array:
+	return action_cards.duplicate(true)
+
+func _action_button(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.flat = true
+	button.add_theme_font_size_override("font_size", 10)
+	return button
+
+func _select_action_node(scene_path: String, path: String) -> void:
+	if not scene_path.is_empty() and (EditorInterface.get_edited_scene_root() == null or EditorInterface.get_edited_scene_root().scene_file_path != scene_path):
+		EditorInterface.open_scene_from_path(scene_path)
+		for index in range(20): await get_tree().process_frame
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null or (not scene_path.is_empty() and root.scene_file_path != scene_path):
+		_set_status("The recorded scene is not open: " + scene_path)
+		return
+	var node := root if path == "." else root.get_node_or_null(NodePath(path))
+	if node == null:
+		_set_status("The recorded target no longer exists: " + path)
+		return
+	EditorInterface.get_selection().clear()
+	EditorInterface.get_selection().add_node(node)
+	EditorInterface.edit_node(node)
+	_set_status("Selected " + path)
+
+func _open_action_resource(scene_path: String, path: String, owner_path: String) -> void:
+	if not path.is_empty() and ResourceLoader.exists(path):
+		var resource := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
+		if resource is Resource:
+			EditorInterface.edit_resource(resource)
+			_set_status("Opened resource " + path)
+			return
+	if not owner_path.is_empty():
+		_select_action_node(scene_path, owner_path)
+		return
+	_set_status("This resource is embedded and has no saved path.")
+
+func _show_action_job(id: String) -> void:
+	if id.is_empty() or not is_instance_valid(jobs_service) or not jobs_service.has_method("show_job"):
+		_set_status("The job record is unavailable.")
+		return
+	jobs_service.show_job(id)
+
+func _undo_action(action_name: String) -> void:
+	var root := EditorInterface.get_edited_scene_root()
+	var manager := EditorInterface.get_editor_undo_redo()
+	if root == null or manager == null:
+		_set_status("No edited scene is available to undo.")
+		return
+	var history_id: int = manager.get_object_history_id(root)
+	var history = manager.get_history_undo_redo(history_id)
+	if history == null:
+		_set_status("The scene has no undo history.")
+		return
+	if str(history.get_current_action_name()) != action_name:
+		_set_status("The editor history is not at that action. Use Edit > Undo or inspect the recorded action.")
+		return
+	if history.undo(): _set_status("Undid " + action_name)
+	else: _set_status("Godot could not undo " + action_name)
+
+func _retry_action(tool: String, arguments: Dictionary) -> void:
+	if not _ensure_workspace_registry():
+		_set_status("The tool registry is unavailable.")
+		return
+	var context: Dictionary = {}
+	var current: Dictionary = workspace_registry.current_scene_context({})
+	if not current.has("error") and current.get("scene", {}) is Dictionary:
+		context = current.scene.duplicate(true)
+	context["call_id"] = "retry-" + Crypto.new().generate_random_bytes(4).hex_encode()
+	context["undo_group"] = "tiiny:" + str(context.get("call_id", ""))
+	var result: Dictionary = await workspace_registry.execute(tool, arguments, context)
+	_append_action_card(result, arguments)
+	if bool(result.get("ok", false)): _set_status("Retry completed.")
+	else: _set_status(str(result.get("summary", "Retry failed.")))
+
 func _scroll_to_bottom() -> void:
 	if is_instance_valid(history_scroll):
 		history_scroll.scroll_vertical = int(history_scroll.get_v_scroll_bar().max_value)
@@ -206,6 +392,8 @@ func _new_chat() -> void:
 		return
 	conversation.clear()
 	turn_messages.clear()
+	turn_ledger.clear()
+	action_cards.clear()
 	message_log.clear()
 	for child in history_box.get_children():
 		history_box.remove_child(child)
@@ -504,10 +692,18 @@ func _registry_create_gdscript(arguments: Dictionary, _context: Dictionary) -> D
 	return result
 
 func _registry_append_job(arguments: Dictionary, _context: Dictionary) -> Dictionary:
-	return _tool_text_result(_append_job_tool(arguments))
+	var text := _append_job_tool(arguments)
+	var parsed: Variant = JSON.parse_string(text) if not text.begins_with("Error:") else null
+	if parsed is Dictionary and parsed.get("accepted", false):
+		return {"ok": true, "summary": "Queued %s job %s at position %s. Acceptance is not completion." % [str(arguments.get("operation", "reviewed")), str(parsed.get("id", "")), str(parsed.get("sequence", ""))], "data": parsed, "affected": [{"kind": "job", "id": str(parsed.get("id", ""))}]}
+	return _tool_text_result(text)
 
 func _registry_job_status(arguments: Dictionary, _context: Dictionary) -> Dictionary:
-	return _tool_text_result(_job_status_tool(str(arguments.get("id", ""))))
+	var text := _job_status_tool(str(arguments.get("id", "")))
+	var parsed: Variant = JSON.parse_string(text) if not text.begins_with("Error:") else null
+	if parsed is Dictionary:
+		return {"ok": true, "summary": "Job %s is %s." % [str(parsed.get("id", arguments.get("id", ""))), str(parsed.get("state", "unknown"))], "data": parsed, "affected": [{"kind": "job", "id": str(parsed.get("id", arguments.get("id", "")))}]}
+	return _tool_text_result(text)
 
 func _image_model_warm() -> bool:
 	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
@@ -735,7 +931,7 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": serialized})
 			# Preserve actual tool effects even when the continuation fails.
 			conversation = turn_messages.duplicate(true)
-			_append_message("tool", str(tool_result.get("summary", "Tool finished.")))
+			_append_action_card(tool_result, arguments)
 			_set_status("Tool finished.")
 			if queued_chat_started and queued_chat_cancel:
 				send_button.disabled = false
