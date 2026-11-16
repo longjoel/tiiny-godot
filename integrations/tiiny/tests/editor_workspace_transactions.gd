@@ -272,12 +272,82 @@ func _run() -> void:
 	if _error_code(unsupported) != "invalid_target":
 		_fail("Slippery-surface did not reject a non-physics target: " + str(unsupported)); return
 
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before asset import tests"); return
+	root = EditorInterface.get_edited_scene_root()
+	var world: Node3D = root.get_node_or_null("World")
+	if world == null: _fail("World 3D fixture node is missing"); return
+	var doc := GLTFDocument.new()
+	var gltf_state := GLTFState.new()
+	var model_root := Node3D.new()
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "Mesh"
+	var box := BoxMesh.new()
+	box.size = Vector3(1, 1, 1)
+	mesh_instance.mesh = box
+	var model_material := StandardMaterial3D.new()
+	model_material.albedo_color = Color(0.8, 0.3, 0.1)
+	mesh_instance.material_override = model_material
+	model_root.add_child(mesh_instance)
+	mesh_instance.owner = model_root
+	var append_error := doc.append_from_scene(model_root, gltf_state)
+	model_root.free()
+	if append_error != OK: _fail("Could not build the fixture GLB: " + str(append_error)); return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://generated"))
+	if doc.write_to_filesystem(gltf_state, "res://generated/torch_prop.glb") != OK:
+		_fail("Could not write the fixture GLB"); return
+	EditorInterface.get_resource_filesystem().scan()
+	var glb_deadline := Time.get_ticks_msec() + 15000
+	while not ResourceLoader.exists("res://generated/torch_prop.glb") and Time.get_ticks_msec() < glb_deadline:
+		await get_tree().create_timer(0.1).timeout
+	if not ResourceLoader.exists("res://generated/torch_prop.glb"): _fail("Fixture GLB did not import"); return
+	var source_hash := FileAccess.get_sha256("res://generated/source.png")
+	var missing: Dictionary = transactions.execute("import_generated_model", {"path": "res://generated/missing.glb", "parent_path": "World"})
+	if _error_code(missing) != "artifact_missing" or FileAccess.get_sha256("res://generated/source.png") != source_hash:
+		_fail("Downstream 3D failure did not preserve the stage-1 image artifact: " + str(missing)); return
+	var imported_model: Dictionary = transactions.execute("import_generated_model", {"path": "res://generated/torch_prop.glb", "parent_path": "World", "node_name": "GeneratedProp"})
+	if not imported_model.get("ok", false) or Array(imported_model.get("data", {}).get("meshes", [])).is_empty():
+		_fail("Generated 3D model import failed: " + str(imported_model)); return
+	if str(imported_model.get("data", {}).get("validation", {}).get("topology", "")) != "unverified" or str(imported_model.get("data", {}).get("validation", {}).get("pbr_maps", "")) != "unverified":
+		_fail("Generated 3D model claimed unverified quality"); return
+	var instance: Node = root.get_node_or_null("World/GeneratedProp")
+	if instance == null or instance.find_children("*", "MeshInstance3D", true, false).is_empty():
+		_fail("Generated model instance has no mesh"); return
+	var model_undo := _history(root)
+	if not model_undo[2].undo() or root.get_node_or_null("World/GeneratedProp") != null:
+		_fail("Generated model undo failed"); return
+	if not model_undo[2].redo() or root.get_node_or_null("World/GeneratedProp") == null:
+		_fail("Generated model redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after model import"); return
+	root = EditorInterface.get_edited_scene_root()
+	var audio_deadline := Time.get_ticks_msec() + 15000
+	while not ResourceLoader.exists("res://generated/line.wav") and Time.get_ticks_msec() < audio_deadline:
+		await get_tree().create_timer(0.1).timeout
+	if not ResourceLoader.exists("res://generated/line.wav"): _fail("Fixture WAV did not import"); return
+	var imported_audio: Dictionary = transactions.execute("import_generated_audio", {"path": "res://generated/line.wav", "player_name": "GeneratedLine"})
+	if not imported_audio.get("ok", false) or float(imported_audio.get("data", {}).get("duration", 0.0)) <= 0.0:
+		_fail("Generated audio import failed: " + str(imported_audio)); return
+	if str(imported_audio.get("data", {}).get("validation", {}).get("loop", "")) != "unverified":
+		_fail("Generated audio claimed loop verification"); return
+	var audio_player: AudioStreamPlayer = root.get_node_or_null("GeneratedLine")
+	if audio_player == null or audio_player.stream == null:
+		_fail("Generated audio player/stream is missing"); return
+	var audio_undo := _history(root)
+	if not audio_undo[2].undo() or root.get_node_or_null("GeneratedLine") != null:
+		_fail("Generated audio undo failed"); return
+	if not audio_undo[2].redo() or root.get_node_or_null("GeneratedLine") == null:
+		_fail("Generated audio redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after audio import"); return
+	root = EditorInterface.get_edited_scene_root()
+
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	for definition in registry.definitions():
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
-	for recipe_name in ["add_torch_flicker", "assign_slippery_surface"]:
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio"]:
 		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
 			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
 	var bad_schema: Dictionary = await registry.execute("add_rectangular_collision_shape", {"parent_path": "Enemy", "width": "wide", "height": 1})
@@ -314,6 +384,8 @@ func _run() -> void:
 	for planned in ["image_to_3d", "music_generation", "speech_generation"]:
 		if str(recipes.get(planned, {}).get("status", "")) != "planned":
 			_fail("Planned recipe is not marked planned: " + planned); return
+	if recipes.has("sound_effect") or recipes.has("sound_effects"):
+		_fail("Sound effects were advertised without a tested recipe"); return
 	if str(recipes.get("image_to_3d", {}).get("output", "")) != "Mesh" or str(recipes.get("music_generation", {}).get("output", "")) != "AudioStream":
 		_fail("Planned recipe output types are wrong: " + str(recipes)); return
 	if not registry.supports_resource_type("ConvexPolygonShape2D") or not registry.supports_resource_type("Texture2D"):

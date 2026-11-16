@@ -108,6 +108,9 @@ func _execute(context: Dictionary, built: Dictionary, recipe_name: String, turn_
 	var token := str(turn_context.get("undo_group", ""))
 	if token.is_empty(): token = "tiiny:" + Crypto.new().generate_random_bytes(8).hex_encode()
 	var data := {"recipe": recipe_name, "action_name": action_name, "scene": scene, "created": {"nodes": created_nodes, "resources": created_resources}, "dirty": true}
+	var extra: Variant = built.get("data", {})
+	if extra is Dictionary:
+		for key in extra: data[key] = extra[key]
 	var result := {"ok": true, "summary": str(built.get("summary", "Applied recipe " + recipe_name + ".")), "data": data, "affected": affected, "undo_group": token, "scene_revision": str(scene.get("revision", context.revision))}
 	return result
 
@@ -120,7 +123,7 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 			return _error("invalid_operation", "Operation must be an object with an op.")
 		var kind := str(op.op)
 		var id := str(op.get("id", ""))
-		if kind in ["create_node", "create_resource", "create_resource_value"]:
+		if kind in ["create_node", "create_resource", "create_resource_value", "create_node_value"]:
 			if id.is_empty() or op_by_id.has(id) or id.length() > 64:
 				return _error("invalid_operation", "Operation IDs must be unique and non-empty.")
 			op_by_id[id] = op
@@ -153,6 +156,10 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 				var value: Variant = op.get("resource")
 				if not value is Resource: return _error("invalid_operation", "Recipe resource value must be a Resource.")
 				resources[str(op.id)] = value
+			"create_node_value":
+				var node_value: Variant = op.get("node")
+				if not node_value is Node or node_value.get_parent() != null: return _error("invalid_operation", "Recipe node value must be an unparented Node.")
+				nodes[str(op.id)] = node_value
 			_:
 				pass
 	var error := _validate_references(ops, nodes, resources, op_by_id, root, context)
@@ -263,6 +270,8 @@ func _apply_do(manager: Object, op: Dictionary, nodes: Dictionary, resources: Di
 			manager.add_undo_property(target, str(op.property), target.get(str(op.property)))
 		"create_resource_value":
 			manager.add_do_reference(resources[str(op.id)])
+		"create_node_value":
+			manager.add_do_reference(nodes[str(op.id)])
 		"call_method":
 			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
 			_add_undo_redo_call(manager, true, target, str(op.method), _operation_args(op.get("args", []), nodes, resources, op_by_id))
@@ -323,6 +332,9 @@ func _values_equal(a: Variant, b: Variant) -> bool:
 func _scene_is_clean_after_undo(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dictionary, root: Node) -> bool:
 	for op in ops:
 		if str(op.op) == "create_node":
+			var node: Node = nodes[str(op.id)]
+			if is_instance_valid(node) and node.is_inside_tree(): return false
+		elif str(op.op) == "create_node_value":
 			var node: Node = nodes[str(op.id)]
 			if is_instance_valid(node) and node.is_inside_tree(): return false
 		elif str(op.op) == "call_method" and op.has("verify_method"):
@@ -416,6 +428,34 @@ func _register_default_recipes() -> void:
 		"timeout_ms": 15000,
 		"validate": Callable(self, "_validate_slippery"),
 		"build": Callable(self, "_build_slippery"),
+	})
+	register_recipe({
+		"name": "import_generated_model",
+		"title": "Import generated 3D model",
+		"description": "Validate a generated GLB/GLTF artifact and instance its meshes and materials into the scene.",
+		"parameters": {"type": "object", "properties": {
+			"path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+		}, "required": ["path"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+		"validate": Callable(self, "_validate_import_model"),
+		"build": Callable(self, "_build_import_model"),
+	})
+	register_recipe({
+		"name": "import_generated_audio",
+		"title": "Import generated audio",
+		"description": "Validate a generated WAV/OGG artifact and add it to an AudioStreamPlayer.",
+		"parameters": {"type": "object", "properties": {
+			"path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"parent_path": {"type": "string", "maxLength": 512},
+			"player_name": {"type": "string", "minLength": 1, "maxLength": 128},
+		}, "required": ["path"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+		"validate": Callable(self, "_validate_import_audio"),
+		"build": Callable(self, "_build_import_audio"),
 	})
 
 func _validate_collision(params: Dictionary, context: Dictionary) -> Dictionary:
@@ -575,6 +615,96 @@ func _build_slippery(request: Dictionary) -> Dictionary:
 	return {"ok": true, "action_name": "Make %s slippery" % request.body_path, "summary": summary, "ops": [
 		{"op": "create_resource", "id": "material", "class": "PhysicsMaterial", "properties": {"friction": request.friction, "bounce": request.bounce, "rough": request.rough, "absorbent": request.absorbent}},
 		{"op": "set_property", "target": request.body_path, "property": "physics_material_override", "value": {"ref": "material"}},
+	]}
+
+func _validate_import_model(params: Dictionary, context: Dictionary) -> Dictionary:
+	var path := str(params.get("path", "")).strip_edges()
+	if not path.begins_with("res://") or ".." in path.split("/") or not (path.ends_with(".glb") or path.ends_with(".gltf")):
+		return {"ok": false, "code": "invalid_arguments", "message": "A res:// .glb or .gltf artifact path is required."}
+	if not FileAccess.file_exists(path):
+		return {"ok": false, "code": "artifact_missing", "message": "Generated model artifact is missing: " + path}
+	var packed: Variant = ResourceLoader.load(path, "PackedScene", ResourceLoader.CACHE_MODE_REUSE)
+	if not packed is PackedScene:
+		return {"ok": false, "code": "artifact_invalid", "message": "Generated model did not load as a PackedScene: " + path}
+	var instance: Node = packed.instantiate()
+	if instance == null:
+		return {"ok": false, "code": "artifact_invalid", "message": "Generated model could not be instantiated."}
+	var mesh_nodes: Array = instance.find_children("*", "MeshInstance3D", true, false)
+	if mesh_nodes.is_empty():
+		instance.free()
+		return {"ok": false, "code": "artifact_invalid", "message": "Generated model contains no MeshInstance3D nodes."}
+	var meshes: Array[String] = []
+	var materials: Array[String] = []
+	for mesh_node in mesh_nodes:
+		meshes.append(str(mesh_node.name))
+		var mesh: Mesh = mesh_node.mesh
+		if mesh == null: continue
+		for surface in mesh.get_surface_count():
+			var material = mesh_node.get_active_material(surface)
+			materials.append(material.get_class() if material != null else "none")
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"):
+		instance.free()
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		instance.free()
+		return {"ok": false, "code": "read_only_instance", "message": "The model parent must be owned by the edited scene."}
+	var node_name := str(params.get("node_name", "")).strip_edges()
+	if node_name.is_empty(): node_name = _unique_name(parent, "GeneratedModel" if str(instance.name).is_empty() else str(instance.name))
+	elif not _valid_name(node_name):
+		instance.free()
+		return {"ok": false, "code": "invalid_name", "message": "Invalid model node name."}
+	if parent.get_node_or_null(NodePath(node_name)) != null:
+		instance.free()
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + node_name + " already exists."}
+	instance.name = node_name
+	return {"ok": true, "request": {"path": path, "parent_path": parent_path, "node_name": node_name, "instance": instance, "meshes": meshes, "materials": materials}}
+
+func _build_import_model(request: Dictionary) -> Dictionary:
+	return {"ok": true, "action_name": "Import generated model " + request.node_name, "summary": "Imported %s under %s with %d mesh(es) and %d material surface(s). Topology and PBR maps are unverified." % [request.path, request.parent_path, Array(request.meshes).size(), Array(request.materials).size()], "data": {"artifact": request.path, "meshes": request.meshes, "materials": request.materials, "validation": {"topology": "unverified", "pbr_maps": "unverified"}}, "ops": [
+		{"op": "create_node_value", "id": "model", "node": request.instance},
+		{"op": "add_child", "parent": request.parent_path, "node": "model"},
+		{"op": "set_owner", "node": "model", "owner": "."},
+	]}
+
+func _validate_import_audio(params: Dictionary, context: Dictionary) -> Dictionary:
+	var path := str(params.get("path", "")).strip_edges()
+	if not path.begins_with("res://") or ".." in path.split("/") or not (path.ends_with(".wav") or path.ends_with(".ogg")):
+		return {"ok": false, "code": "invalid_arguments", "message": "A res:// .wav or .ogg artifact path is required."}
+	if not FileAccess.file_exists(path):
+		return {"ok": false, "code": "artifact_missing", "message": "Generated audio artifact is missing: " + path}
+	var stream: Variant = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
+	if not stream is AudioStream:
+		return {"ok": false, "code": "artifact_invalid", "message": "Generated audio did not load as an AudioStream: " + path}
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"):
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		return {"ok": false, "code": "read_only_instance", "message": "The audio parent must be owned by the edited scene."}
+	var player_name := str(params.get("player_name", "")).strip_edges()
+	if player_name.is_empty(): player_name = _unique_name(parent, "AudioStreamPlayer")
+	elif not _valid_name(player_name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid audio player name."}
+	if parent.get_node_or_null(NodePath(player_name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + player_name + " already exists."}
+	var channels := -1
+	if stream is AudioStreamWAV:
+		channels = 2 if stream.is_stereo() else 1
+	return {"ok": true, "request": {"path": path, "parent_path": parent_path, "player_name": player_name, "stream": stream, "duration": stream.get_length(), "channels": channels}}
+
+func _build_import_audio(request: Dictionary) -> Dictionary:
+	return {"ok": true, "action_name": "Import generated audio " + request.player_name, "summary": "Imported %s into %s (%.2fs). Looping and seamlessness are unverified." % [request.path, request.player_name, request.duration], "data": {"artifact": request.path, "duration": request.duration, "channels": request.channels, "validation": {"loop": "unverified"}}, "ops": [
+		{"op": "create_node", "id": "player", "class": "AudioStreamPlayer", "name": request.player_name},
+		{"op": "create_resource_value", "id": "stream", "resource": request.stream},
+		{"op": "add_child", "parent": request.parent_path, "node": "player"},
+		{"op": "set_owner", "node": "player", "owner": "."},
+		{"op": "set_property", "target": "player", "property": "stream", "value": {"ref": "stream"}},
 	]}
 
 func _unique_name(parent: Node, base: String) -> String:

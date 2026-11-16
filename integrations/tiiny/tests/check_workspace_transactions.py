@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the embedded typed scene transaction provider in a disposable editor."""
 from pathlib import Path
+import math
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
+import wave
+import zlib
 
 root = Path(__file__).resolve().parents[3]
 binary = root / "bin/godot.linuxbsd.editor.x86_64"
@@ -31,7 +35,8 @@ def make_project(project: Path) -> None:
         '[node name="Tree" type="Node2D" parent="."]\n\n'
         '[node name="Torch" type="Node2D" parent="."]\n\n'
         '[node name="Light2D" type="Light2D" parent="Torch"]\n\n'
-        '[node name="Platform" type="StaticBody2D" parent="."]\n'
+        '[node name="Platform" type="StaticBody2D" parent="."]\n\n'
+        '[node name="World" type="Node3D" parent="."]\n'
     )
     (project / "base.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Base" type="Node2D"]\n'
@@ -39,6 +44,21 @@ def make_project(project: Path) -> None:
     (project / "running.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Running" type="Node2D"]\n'
     )
+    generated = project / "generated"
+    generated.mkdir()
+    # Stage-1 image artifact: a real 2x2 PNG used to prove intermediates survive
+    # a downstream 3D import failure.
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+    raw = b"".join(b"\x00" + bytes([200, 40, 40]) * 2 for _ in range(2))
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    (generated / "source.png").write_bytes(png)
+    # A real PCM WAV artifact for the audio import recipe.
+    with wave.open(str(generated / "line.wav"), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(22050)
+        wav.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 220 * i / 22050))) for i in range(5512)))
 
 with tempfile.TemporaryDirectory(prefix="tiiny-workspace-transactions-") as directory:
     project = Path(directory) / "project"

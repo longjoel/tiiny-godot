@@ -91,6 +91,8 @@ Story 11 adds transaction-fixture coverage for native torch-flicker animation (l
 
 Story 12 adds `check_debugger.py`, which starts a real fixture scene, pauses at a breakpoint, and verifies session/state, stack frames, `Members/counter=7`, `Locals/doubled=null`, frame selection, runtime tree identities, continue/stale-frame rejection, session-end errors, and breakpoint set/removal. Runtime property values remain explicitly unavailable without a selected remote node.
 
+Story 13 adds transaction-fixture coverage for `import_generated_model` (real generated GLB, mesh/material metadata, topology/PBR unverified, undo/redo, missing-downstream artifact preserves the stage-1 PNG hash) and `import_generated_audio` (real WAV, positive duration, loop unverified, undo/redo). It also asserts the registry advertises both import recipes and no sound-effect recipe.
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.
