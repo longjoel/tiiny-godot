@@ -233,11 +233,13 @@
       "dimension": "2d",
       "task": "Add GPUParticles2D",
       "prompt": "Add a dust particle effect around the player.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No particle creation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_particles_2d"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "2D-017",
@@ -963,11 +965,13 @@
       "dimension": "3d",
       "task": "Add collision to an imported mesh",
       "prompt": "Give the imported model a matching collision shape.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No mesh-to-collision generation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_mesh_collision"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-066",
@@ -1216,11 +1220,13 @@
       "dimension": "3d",
       "task": "Add 3D particles",
       "prompt": "Add sparks around the anvil.",
-      "status": "missing",
-      "tools": [],
-      "gap": "No 3D particle creation tool.",
-      "test": "",
-      "solution": "specialized_missing"
+      "status": "supported",
+      "tools": [
+        "add_particles_3d"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro"
     },
     {
       "id": "3D-083",

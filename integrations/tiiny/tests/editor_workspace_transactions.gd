@@ -461,6 +461,44 @@ func _run() -> void:
 	if reloaded_player == null or reloaded_player.get_script() == null or not str(reloaded_player.get_script().resource_path).ends_with("attach_fixture.gd"):
 		_fail("Saved script attachment did not survive reload"); return
 
+
+	var particles2: Dictionary = transactions.execute("add_particles_2d", {"parent_path": ".", "node_name": "DustParticles", "amount": 12, "lifetime": 0.8, "gravity": 100, "initial_velocity": 40, "spread": 35, "scale": 3, "color": "#ffcc88"})
+	var dust: GPUParticles2D = root.get_node_or_null("DustParticles")
+	if not particles2.get("ok", false) or dust == null or not dust.process_material is ParticleProcessMaterial or dust.amount != 12:
+		_fail("2D particle recipe failed: " + str(particles2)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after 2D particles"); return
+	root = EditorInterface.get_edited_scene_root()
+	var particles3: Dictionary = transactions.execute("add_particles_3d", {"parent_path": "World", "node_name": "Sparks", "amount": 16, "lifetime": 1.2, "gravity": 9.8, "initial_velocity": 2.0, "spread": 60, "scale": 0.2})
+	var sparks: GPUParticles3D = root.get_node_or_null("World/Sparks")
+	if not particles3.get("ok", false) or sparks == null or not sparks.process_material is ParticleProcessMaterial:
+		_fail("3D particle recipe failed: " + str(particles3)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after 3D particles"); return
+	root = EditorInterface.get_edited_scene_root()
+	var mesh_ops := [
+		{"op": "create_resource", "id": "box", "class": "BoxMesh", "properties": {"size": Vector3(1, 1, 1)}},
+		{"op": "create_node", "id": "collision_mesh", "class": "MeshInstance3D", "parent": "World", "name": "CollisionMesh"},
+		{"op": "assign_resource", "target": "collision_mesh", "property": "mesh", "resource": "box"},
+	]
+	var mesh_created: Dictionary = transactions.execute("apply_editor_transaction", {"operations": mesh_ops})
+	if not mesh_created.get("ok", false): _fail("Could not create collision mesh fixture: " + str(mesh_created)); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save collision mesh fixture"); return
+	root = EditorInterface.get_edited_scene_root()
+	var mesh_collision: Dictionary = transactions.execute("add_mesh_collision", {"target_path": "World/CollisionMesh", "body_name": "CollisionBody"})
+	var body: StaticBody3D = root.get_node_or_null("World/CollisionBody")
+	var mesh_shape: CollisionShape3D = root.get_node_or_null("World/CollisionBody/CollisionShape3D")
+	if not mesh_collision.get("ok", false) or body == null or mesh_shape == null or not mesh_shape.shape is ConcavePolygonShape3D:
+		_fail("Mesh collision recipe failed: " + str(mesh_collision)); return
+	var particle_undo := _history(root)
+	if not particle_undo[2].undo() or root.get_node_or_null("World/CollisionBody") != null:
+		_fail("Mesh collision undo failed"); return
+	if not particle_undo[2].redo() or root.get_node_or_null("World/CollisionBody") == null:
+		_fail("Mesh collision redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save specialized recipes"); return
+	root = EditorInterface.get_edited_scene_root()
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	registry.set_handler("read_project_file", Callable(dock, "_registry_read_file"))
 	registry.set_handler("replace_in_gdscript", Callable(dock, "_registry_replace_script"))
@@ -468,7 +506,7 @@ func _run() -> void:
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
-	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "add_sprite_from_image", "apply_editor_transaction", "read_project_file", "replace_in_gdscript"]:
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "add_sprite_from_image", "apply_editor_transaction", "add_particles_2d", "add_particles_3d", "add_mesh_collision", "read_project_file", "replace_in_gdscript"]:
 		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
 			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
 	var edit_path := "res://edit_fixture.gd"
@@ -561,7 +599,7 @@ func _run() -> void:
 	chat.pending_prompt = "Add a rectangular collision shape to Enemy, 32 wide and 48 tall."
 	chat.pending_key = "fixture-key"
 	chat.pending_model = "fixture-model"
-	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 16384)
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 32768)
 	chat._start_answer("code")
 	if chat.submissions.is_empty(): _fail("Registry chat did not submit a payload: " + chat.status.text); return
 	var payload: Dictionary = chat.submissions.back()

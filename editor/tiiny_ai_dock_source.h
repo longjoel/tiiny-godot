@@ -1044,6 +1044,9 @@ func _refresh_registry_availability() -> void:
 	values["import_generated_audio"] = values["import_generated_model"]
 	values["add_sprite_from_image"] = values["import_generated_model"]
 	values["apply_editor_transaction"] = values["import_generated_model"]
+	values["add_particles_2d"] = values["import_generated_model"]
+	values["add_particles_3d"] = values["import_generated_model"]
+	values["add_mesh_collision"] = {"available": saved and not dirty and _scene_has_class(root, "MeshInstance3D"), "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No MeshInstance3D is present for collision generation." if not _scene_has_class(root, "MeshInstance3D") else ""))}
 	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no configured/downloaded image model." if not image_available else ""}
 	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]

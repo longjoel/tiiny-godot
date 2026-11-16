@@ -6,21 +6,21 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | Status | Count |
 | --- | ---: |
-| supported | 25 |
+| supported | 28 |
 | partial | 60 |
-| missing | 15 |
+| missing | 12 |
 
 | Solution class | Count |
 | --- | ---: |
-| native_macro | 15 |
+| native_macro | 18 |
 | composed_primitives | 56 |
 | script_behavior | 14 |
-| specialized_missing | 15 |
+| specialized_missing | 12 |
 
 | Dimension | Supported | Partial | Missing |
 | --- | ---: | ---: | ---: |
-| 2d | 9 | 35 | 6 |
-| 3d | 6 | 25 | 9 |
+| 2d | 10 | 35 | 5 |
+| 3d | 8 | 25 | 7 |
 | project | 10 | 0 | 0 |
 
 > Behavior tasks are script work, not missing editor features. Composed tasks use `apply_editor_transaction`; specialized tasks remain story 17.
@@ -46,7 +46,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 2D-013 | Add a Marker2D spawn point | composed_primitives | partial | apply_editor_transaction |
 | 2D-014 | Add a TileMapLayer | specialized_missing | missing | No TileMap creation/tileset tool. |
 | 2D-015 | Add a ParallaxBackground | composed_primitives | partial | apply_editor_transaction |
-| 2D-016 | Add GPUParticles2D | specialized_missing | missing | No particle creation tool. |
+| 2D-016 | Add GPUParticles2D | native_macro | supported | add_particles_2d |
 | 2D-017 | Add an AnimatedSprite2D | specialized_missing | missing | No SpriteFrames/animated sprite tool. |
 | 2D-018 | Add a PointLight2D glow | composed_primitives | partial | apply_editor_transaction |
 | 2D-019 | Add a CanvasModulate night tint | composed_primitives | partial | apply_editor_transaction |
@@ -110,7 +110,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 3D-062 | Add a Marker3D spawn | composed_primitives | partial | apply_editor_transaction |
 | 3D-063 | Import a generated GLB model | native_macro | supported | import_generated_model |
 | 3D-064 | Generate a 3D model from a reference image | native_macro | supported | append_job, get_job_status, import_generated_model |
-| 3D-065 | Add collision to an imported mesh | specialized_missing | missing | No mesh-to-collision generation tool. |
+| 3D-065 | Add collision to an imported mesh | native_macro | supported | add_mesh_collision |
 | 3D-066 | Scale or rotate an imported mesh | composed_primitives | partial | apply_editor_transaction |
 | 3D-067 | Add an OmniLight3D | composed_primitives | supported | apply_editor_transaction |
 | 3D-068 | Add torch flicker to a 3D light | native_macro | supported | add_torch_flicker |
@@ -143,7 +143,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
-| 3D-082 | Add 3D particles | specialized_missing | missing | No 3D particle creation tool. |
+| 3D-082 | Add 3D particles | native_macro | supported | add_particles_3d |
 | 3D-083 | Add a 3D trail | specialized_missing | missing | No 3D trail/particle tool. |
 | 3D-084 | Add 3D rain or snow | specialized_missing | missing | No 3D weather/particle tool. |
 

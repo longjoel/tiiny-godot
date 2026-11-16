@@ -701,6 +701,59 @@ func _register_default_recipes() -> void:
 		"build": Callable(self, "_build_sprite"),
 	})
 	register_recipe({
+		"name": "add_particles_2d",
+		"title": "Add 2D particle effect",
+		"description": "Create a GPUParticles2D with a configured ParticleProcessMaterial. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"amount": {"type": "integer", "minimum": 1, "maximum": 4096},
+			"lifetime": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+			"gravity": {"type": "number", "minimum": -10000, "maximum": 10000},
+			"initial_velocity": {"type": "number", "minimum": 0, "maximum": 10000},
+			"spread": {"type": "number", "minimum": 0, "maximum": 360},
+			"scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+			"color": {"type": "string", "maxLength": 32},
+		}, "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 15000,
+		"validate": Callable(self, "_validate_particles"),
+		"build": Callable(self, "_build_particles_2d"),
+	})
+	register_recipe({
+		"name": "add_particles_3d",
+		"title": "Add 3D particle effect",
+		"description": "Create a GPUParticles3D with a configured ParticleProcessMaterial. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"amount": {"type": "integer", "minimum": 1, "maximum": 4096},
+			"lifetime": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+			"gravity": {"type": "number", "minimum": -1000, "maximum": 1000},
+			"initial_velocity": {"type": "number", "minimum": 0, "maximum": 1000},
+			"spread": {"type": "number", "minimum": 0, "maximum": 360},
+			"scale": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+			"color": {"type": "string", "maxLength": 32},
+		}, "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 15000,
+		"validate": Callable(self, "_validate_particles"),
+		"build": Callable(self, "_build_particles_3d"),
+	})
+	register_recipe({
+		"name": "add_mesh_collision",
+		"title": "Add collision to imported mesh",
+		"description": "Create a StaticBody3D with a trimesh CollisionShape3D matching an existing MeshInstance3D. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"body_name": {"type": "string", "minLength": 1, "maxLength": 128},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+		"validate": Callable(self, "_validate_mesh_collision"),
+		"build": Callable(self, "_build_mesh_collision"),
+	})
+	register_recipe({
 		"name": "apply_editor_transaction",
 		"title": "Apply typed editor transaction",
 		"description": "Compose bounded typed scene edits: create/set nodes and resources, structure, instantiate, and connect signals. One undo action; no scripts, files, methods, or editor internals.",
@@ -1128,6 +1181,94 @@ func _generic_refs_ok(value: Variant, ids: Dictionary) -> bool:
 		for item in value:
 			if not _generic_refs_ok(item, ids): return false
 	return true
+
+func _validate_particles(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"):
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		return {"ok": false, "code": "read_only_instance", "message": "The particle parent must be owned by the edited scene."}
+	var node_name := str(params.get("node_name", "")).strip_edges()
+	if node_name.is_empty(): node_name = _unique_name(parent, "Particles")
+	elif not _valid_name(node_name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid particle node name."}
+	if parent.get_node_or_null(NodePath(node_name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + node_name + " already exists."}
+	var amount := int(params.get("amount", 24))
+	var lifetime := float(params.get("lifetime", 1.0))
+	var gravity := float(params.get("gravity", 200.0))
+	var velocity := float(params.get("initial_velocity", 60.0))
+	var spread := float(params.get("spread", 45.0))
+	var scale := float(params.get("scale", 4.0))
+	if amount < 1 or amount > 4096 or lifetime <= 0 or lifetime > 60 or not is_finite(gravity) or not is_finite(velocity) or spread < 0 or spread > 360 or scale <= 0 or scale > 1000:
+		return {"ok": false, "code": "invalid_arguments", "message": "Particle amount/lifetime/gravity/velocity/spread/scale are out of range."}
+	var color := Color(1.0, 0.7, 0.3)
+	if params.get("color") is String and not str(params.color).strip_edges().is_empty():
+		color = Color.from_string(str(params.color), color)
+	return {"ok": true, "request": {"parent_path": parent_path, "node_name": node_name, "amount": amount, "lifetime": lifetime, "gravity": gravity, "initial_velocity": velocity, "spread": spread, "scale": scale, "color": color}}
+
+func _particle_ops(request: Dictionary, particle_class: String, is_3d: bool) -> Dictionary:
+	var material_ops: Array = [
+		{"op": "create_resource", "id": "material", "class": "ParticleProcessMaterial", "properties": {
+			"direction": Vector3(0, 1, 0),
+			"gravity": Vector3(0, request.gravity if not is_3d else -request.gravity, 0),
+			"initial_velocity_min": request.initial_velocity,
+			"initial_velocity_max": request.initial_velocity,
+			"spread": request.spread,
+			"scale_min": request.scale,
+			"scale_max": request.scale,
+			"color": request.color,
+		}},
+		{"op": "create_node", "id": "particles", "class": particle_class, "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "particles"},
+		{"op": "set_owner", "node": "particles", "owner": "."},
+		{"op": "set_property", "target": "particles", "property": "amount", "value": request.amount},
+		{"op": "set_property", "target": "particles", "property": "lifetime", "value": request.lifetime},
+		{"op": "set_property", "target": "particles", "property": "emitting", "value": true},
+		{"op": "set_property", "target": "particles", "property": "process_material", "value": {"ref": "material"}},
+	]
+	return {"ok": true, "action_name": "Add " + particle_class, "summary": "Added %s with %d particles, lifetime %.1fs, color %s." % [request.node_name, request.amount, request.lifetime, request.color.to_html(false)], "data": {"particle_class": particle_class, "amount": request.amount, "lifetime": request.lifetime}, "ops": material_ops}
+
+func _build_particles_2d(request: Dictionary) -> Dictionary:
+	return _particle_ops(request, "GPUParticles2D", false)
+
+func _build_particles_3d(request: Dictionary) -> Dictionary:
+	return _particle_ops(request, "GPUParticles3D", true)
+
+func _validate_mesh_collision(params: Dictionary, context: Dictionary) -> Dictionary:
+	var target_path := str(params.get("target_path", "")).strip_edges()
+	if target_path.is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "target_path is required."}
+	var found: Dictionary = inspector.resolve_scene_node(context.root, target_path)
+	if found.has("error"): return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var target: Node = found.node
+	if not target is MeshInstance3D or target.mesh == null:
+		return {"ok": false, "code": "invalid_target", "message": "Choose an owned MeshInstance3D with a mesh."}
+	if target.get_parent() == null or (target.get_parent() != context.root and target.get_parent().get_owner() != context.root):
+		return {"ok": false, "code": "read_only_instance", "message": "The mesh parent must be owned by the edited scene."}
+	var body_name := str(params.get("body_name", "")).strip_edges()
+	if body_name.is_empty(): body_name = _unique_name(target.get_parent(), "MeshBody")
+	elif not _valid_name(body_name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid collision body name."}
+	if target.get_parent().get_node_or_null(NodePath(body_name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + body_name + " already exists."}
+	return {"ok": true, "request": {"target_path": target_path, "body_name": body_name, "parent_path": str(context.root.get_path_to(target.get_parent())) if target.get_parent() != context.root else ".", "mesh": target.mesh}}
+
+func _build_mesh_collision(request: Dictionary) -> Dictionary:
+	var shape: ConcavePolygonShape3D = request.mesh.create_trimesh_shape()
+	if shape == null: return {"ok": false, "code": "invalid_mesh", "message": "The mesh could not produce a trimesh collision shape."}
+	return {"ok": true, "action_name": "Add collision for " + str(request.target_path), "summary": "Created an owned StaticBody3D and trimesh CollisionShape3D for %s." % request.target_path, "data": {"artifact": str(request.target_path)}, "ops": [
+		{"op": "create_resource_value", "id": "shape", "resource": shape},
+		{"op": "create_node", "id": "body", "class": "StaticBody3D", "name": request.body_name},
+		{"op": "create_node", "id": "collision", "class": "CollisionShape3D", "name": "CollisionShape3D"},
+		{"op": "add_child", "parent": request.parent_path, "node": "body"},
+		{"op": "set_owner", "node": "body", "owner": "."},
+		{"op": "add_child", "parent": "body", "node": "collision"},
+		{"op": "set_owner", "node": "collision", "owner": "body"},
+		{"op": "set_property", "target": "collision", "property": "shape", "value": {"ref": "shape"}},
+	]}
 
 func _unique_name(parent: Node, base: String) -> String:
 	var candidate := base

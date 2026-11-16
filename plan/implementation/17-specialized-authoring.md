@@ -1,6 +1,6 @@
 # Story 17 implementation plan — specialized authoring recipes
 
-Status: Queued. Depends on stories 14–16.
+Status: Accepted for the first specialized family (particles and mesh collision); remaining families are follow-ups.
 
 Parent: [17 — Specialized authoring recipes](../work-items/17-specialized-authoring.md).
 
@@ -40,3 +40,9 @@ Each family gets:
 - No generic-script improvisation presented as native support.
 - Complex workflows validate/bake before claiming completion.
 - Unsupported targets fail before mutation with a specialized explanation.
+
+First family verified; see [acceptance evidence](../evidence/17-acceptance.md).
+
+## Handoff
+
+Implemented particles 2D/3D and imported-mesh collision. Remaining specialized tasks (TileMap, GridMap, navigation, AnimationTree, skeleton, audio buses, trails/weather, theme/font, PBR validation) remain explicit follow-ups.

@@ -1,6 +1,6 @@
 # 17 — Specialized authoring recipes
 
-Status: Queued
+Status: Accepted for the first specialized family. 2D/3D particles and imported-mesh collision are implemented and covered; remaining specialized tasks are explicit follow-ups. See [acceptance evidence](../evidence/17-acceptance.md).
 
 Feature: Complex editor authoring beyond composed primitives
 
@@ -30,12 +30,12 @@ Cover the genuinely specialized authoring workflows that should not be forced th
 
 ## Acceptance criteria
 
-- [ ] Each accepted recipe has typed inputs, target/availability validation, one undo action where the editor supports it, and a deterministic fixture.
-- [ ] Recipes preserve existing user animations/resources and explain when an operation cannot be represented safely.
-- [ ] Unsupported combinations fail before mutation with a useful specialized explanation; no generic-script improvisation is presented as native support.
-- [ ] Complex workflows record intermediates, validation, and any unverified quality (topology, PBR, looping, navigation bake).
-- [ ] Catalog tasks move from `specialized_missing` to supported only with a passing test reference.
-- [ ] At least one live/device check per recipe family where a model or asset generator is involved.
+- [x] Each accepted recipe has typed inputs, target/availability validation, one undo action where the editor supports it, and a deterministic fixture.
+- [x] Recipes preserve existing user animations/resources and explain when an operation cannot be represented safely.
+- [x] Unsupported combinations fail before mutation with a useful specialized explanation; no generic-script improvisation is presented as native support.
+- [x] Complex workflows record intermediates, validation, and any unverified quality (topology, PBR, looping, navigation bake).
+- [x] Catalog tasks move from `specialized_missing` to supported only with a passing test reference.
+- [x] At least one live/device check per recipe family where a model or asset generator is involved.
 
 ## Concrete scenarios
 
@@ -43,4 +43,4 @@ Use the remaining specialized catalog tasks and WS-08/WS-10 where asset generati
 
 ## Evidence and handoff
 
-Pending. Record recipe APIs, tests, preserved-resource behavior, unsupported cases, and remeasured catalog coverage. Update [STATUS.md](../STATUS.md).
+Accepted for the first family. Added `add_particles_2d`, `add_particles_3d`, and `add_mesh_collision`; transaction fixture covers structure/undo/redo and validation. Catalog moved 2D-016, 3D-082, and 3D-065 to supported, remeasuring 28 supported / 60 partial / 12 specialized-missing. Remaining specialized tasks are listed in the acceptance evidence. See [acceptance evidence](../evidence/17-acceptance.md).
