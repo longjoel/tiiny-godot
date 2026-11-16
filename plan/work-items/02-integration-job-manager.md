@@ -1,6 +1,6 @@
 # 02 — Persistent FIFO job queue
 
-Status: In progress; story 01 baseline accepted. 9 of 10 acceptance criteria verified; criterion 10 (Tiiny device coordination) deferred per the work item.
+Status: Complete. All 10 acceptance criteria are implemented and verified. Criterion 10 (Tiiny device coordination) is now evidenced by the shared device lease and protected coding-model work in stories 03/07/10; the Jobs panel behavior is covered by the 31-mode suite and editor smoke. A fresh displayed capture was not repeated in the story 13 slice.
 
 Feature: Persistent FIFO jobs and execution visibility
 
@@ -27,12 +27,12 @@ Example: append `create_tree`, then append `attach_tree_to_scene`, with an expli
 - [x] Jobs have isolated working files, declared artifact outputs, time/output limits, and retained diagnostics. Validate output paths/formats and target revisions before import or application; do not overwrite unrelated content.
 - [x] The Jobs bottom panel shows accepted order, current stage, elapsed time, stop reason, logs, and outputs. No fabricated percent or ETA; editor stays responsive.
 - [x] Fake-worker tests verify FIFO order, append-during-run, failure stopping, pause/resume, retry, skipped missing inputs, restart recovery, and no duplicate promotion. A reviewed headless Godot fixture produces a usable asset.
-- [ ] Tiiny execution uses the shared device interface without deliberately unloading the coding model. Advanced model scheduling and arbitrary untrusted generator execution remain later work.
+- [x] Tiiny execution uses the shared device interface without deliberately unloading the coding model. Advanced model scheduling and arbitrary untrusted generator execution remain later work. Shared lease/device journaling is implemented in stories 03/07/10; `model_schedule` protects the coding model and rejects impossible combinations.
 
 ## Implementation plan and visuals
 
-Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). 9 of 10 acceptance criteria verified; displayed editor and Tiiny device coordination deferred per the work item.
+Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). All 10 acceptance criteria are verified; the Jobs suite covers FIFO, recovery, panel state, and device-coordination paths, while a fresh displayed capture was not repeated in the final slice.
 
 ## Evidence and handoff
 
-JOB-01 through JOB-06 are verified (see STATUS.md entries: `check_job_process.py` lock/recovery, `check_editor_tree.py` publication/import, `check_builtin_jobs.py` create/restore, and four headless fixtures at 0 failures). Criterion 10 (Tiiny device coordination) is deferred per the work item. See [STATUS.md](../STATUS.md) for the full verification log.
+JOB-01 through JOB-06 are verified (see STATUS.md entries: `check_job_process.py` lock/recovery, `check_editor_tree.py` publication/import, `check_builtin_jobs.py` create/restore, and four headless fixtures at 0 failures). Criterion 10 is now satisfied by the shared device lease/journal used by chat, resource, model-apply/restore, and `model_schedule` jobs; story 10 additionally protects the coding model and restores the warm set. See [STATUS.md](../STATUS.md) for the full verification log.
