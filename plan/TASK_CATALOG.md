@@ -2,6 +2,8 @@
 
 Catalog of **100** common editor tasks with current native-tool status. `supported` means the required tool exists and has a test reference; `partial` means a fallback or incomplete path exists; `missing` means no dedicated tool.
 
+> **v1 note:** these statuses count dedicated macros, not composition. Story 16 will reclassify every task as `native_macro`, `composed_primitives`, `script_behavior`, or `specialized_missing`. Behavior tasks such as camera follow, jump, spin, and door logic belong in scripts and are not true editor-tool gaps.
+
 ## Coverage
 
 | Status | Count |
