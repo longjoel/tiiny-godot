@@ -21,10 +21,12 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.d
 | --- | --- |
 | Workspace-first prompt and GDScript fallback | Registry prompt fixture asserts `workspace-first`, Tools, user-preference, and editor-context sections. Schema requires a script fallback reason and the handler summary includes it. |
 | Tool schemas and availability | Registry fixture checks schema rejection, unavailable-tool filtering, and payload content. Live run printed the advertised tool list including `add_rectangular_collision_shape`. |
-| Malformed/unknown/duplicate/multiple/limits | Existing editor chat protocol suite covers malformed envelopes, invalid arguments, unknown tools, repeated IDs, multiple calls, round limits, continuation recovery, and unlocked controls. |
-| Structured results and call IDs | Registry/chat fixture checks structured recipe result, `call_id`, `undo_group`, ledger entry, and tool-message round trip. |
+| Malformed/unknown/duplicate/multiple/limits | Editor chat protocol suite covers malformed envelopes, invalid arguments, unknown tools, repeated IDs (including duplicate IDs inside one assistant message), round limits, continuation recovery, and unlocked controls. Well-formed multiple calls now execute sequentially in one round with matched tool results; malformed or duplicate calls are rejected atomically before any execution. |
+| Structured results and call IDs | Registry/chat fixture checks structured recipe result, `call_id`, `undo_group`, ledger entry, and tool-message round trip. Multi-call results preserve assistant order and each `tool_call_id`. |
 | Real model macro + undo | Live run with `ornith-ai/Ornith-1.5-35B-A3B-Turbo`: advertised the recipe, called it, created `Player/CollisionShape2D` with a 32×48 `RectangleShape2D`, recorded the ledger/undo group, and undid it successfully. |
-| Errors/cancellation preserve completed work | Existing chat protocol/Jobs suites cover error recovery, cancellation, completed-effect retention, and subsequent turns. The `chat_protocol` fixture proves a completed HTTP response rejected for multiple tool calls becomes a confirmed `failed` job, not an interrupted device lease. The `chat_empty` fixture proves an empty final model response becomes a clear failure when no tool succeeded, with the confirmed lease released. |
+| Errors/cancellation preserve completed work | Existing chat protocol/Jobs suites cover error recovery, cancellation, completed-effect retention, and subsequent turns. The `chat_protocol` fixture proves a completed HTTP response with two well-formed calls executes both tools, returns two matched results, and continues to a confirmed completion. Malformed/duplicate calls remain confirmed failures rather than interrupted device leases. The `chat_empty` fixture proves an empty final model response becomes a clear failure when no tool succeeded, with the confirmed lease released. |
+| Safe existing-script editing | `read_project_file` returns bounded text plus SHA-256; `replace_in_gdscript` requires that hash, exactly one matching snippet, and a parse-valid result before writing. The transaction fixture covers stale hash, duplicate snippet, and invalid-script rejection with unchanged files; the action-card fixture proves script edits are labeled as file changes with no scene undo. |
+| Live multi-call script edit | A live Ornith turn for “every time it hits the bottom of the window, I want it to pick up some velocity” executed `get_scene_tree`, `read_project_file`, and `replace_in_gdscript` in sequence, edited `bounce_script.gd`, and returned a final explanation. This is one trace, not a success rate. |
 
 ## Runs
 
@@ -32,16 +34,17 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.d
 | --- | --- | --- |
 | Workspace transaction + registry + chat fixture | Passed, including schema, availability, prompt, ledger, fake-HTTP recipe, unknown tool, and undo | `/tmp/transactions-empty-final.log` |
 | Existing editor smoke + restart stages | Passed, 11/11 stages | `/tmp/tiiny-empty-final.json` |
-| Built-in Jobs regression | Passed, all 27 modes including confirmed protocol failure and empty-response failure | `/tmp/jobs-empty.log` |
+| Built-in Jobs regression | Passed, all 31 modes including multi-call success, confirmed protocol failure, and empty-response failure | `/tmp/jobs-multicall-final.log` |
+| Live multi-call script edit | Passed on Ornith; `get_scene_tree` → `read_project_file` → `replace_in_gdscript`; final response returned | `/tmp/chat-multicall-live3.log` |
 | Workspace inspector regression | Passed | `/tmp/inspector-final07.log` |
 | Live workspace recipe | Passed on Ornith; recipe ledger/undo; warm set unchanged | `/tmp/workspace-live-protocol-final.log` |
 | Build | Exit 0, 75.16s | `/tmp/tiiny-empty-build.log` |
 
-Live evaluation note: two earlier attempts did not reach the recipe (one chose `append_job`; one exceeded an intentionally small 8K context budget). A 32K context and an explicit single-recipe instruction produced the successful run. This is one trace, not a statistical success rate.
+Live evaluation note: two earlier attempts did not reach the recipe (one chose `append_job`; one exceeded an intentionally small 8K context budget). A 32K context and an explicit single-recipe instruction produced the successful run. This is one trace, not a statistical success rate. The later multi-call script-edit trace used the user’s configured context and executed three calls in one turn; it is also one trace.
 
 ## Remaining boundaries
 
-- Only one product mutation recipe is exposed; generic mutation, delete/reparent, script attachment, animation, debugger, and composition tools remain later stories.
-- The live evaluation is a single successful trace; broader paraphrases and failure rates remain future evaluation work.
-- Displayed success/failure/cancellation chat review is not part of this deterministic run; story 08 owns richer action history, previews, and recovery UI.
+- Only native mutation recipes plus file read/edit fallbacks are exposed; broad script rewriting and GDScript execution remain out of scope.
+- `replace_in_gdscript` requires a current SHA-256 and one unique snippet; it cannot merge concurrent edits or replace multiple occurrences.
+- The live evaluations are single traces; broader paraphrases and failure rates remain future evaluation work.
 - Live image generation remains unverified.

@@ -680,18 +680,30 @@ func _run() -> void:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 2: _fail("Protocol chat did not dispatch an answer"); return
 		var first := {"id": "one", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
-		var second := {"id": "two", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
+		var second := {"id": "two", "type": "function", "function": {"name": "get_workspace_context", "arguments": "{}"}}
 		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first, second]}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply)
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3 or fake.tool_call_count != 2:
+			_fail("Multi-call did not execute and continue: submissions=" + str(fake.submissions.size()) + " calls=" + str(fake.tool_call_count)); return
+		var tool_messages: Array = fake.turn_messages.slice(-2)
+		if tool_messages.size() != 2 or tool_messages[0].get("tool_call_id") != "one" or tool_messages[1].get("tool_call_id") != "two":
+			_fail("Multi-call tool results were not matched in order: " + str(tool_messages)); return
+		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Multi-call complete."}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final_text)
 		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
 		var final: Dictionary = jobs.get_job_status(id)
-		if final.get("state") != "failed" or final.get("attempts", []).is_empty() or not final.attempts.back().get("device_confirmed", false):
-			_fail("Protocol rejection was not a confirmed failure: " + str(final)); return
-		if not str(final.get("result", {}).get("error", "")).contains("more than one tool call"):
-			_fail("Protocol rejection lost its reason: " + str(final)); return
-		if jobs.device_recovery_pending() or jobs.acquire_device(self, "after protocol failure").is_empty():
-			_fail("Protocol failure retained an uncertain device lease"); return
+		if final.get("state") != "completed" or not final.attempts.back().get("device_confirmed", false):
+			_fail("Multi-call chat did not complete as a confirmed job: " + str(final)); return
+		if not str(final.get("result", {}).get("response", "")).contains("Multi-call complete"):
+			_fail("Multi-call chat lost its final response: " + str(final)); return
+		await get_tree().process_frame
+		var completion_lease: String = jobs.acquire_device(self, "after multi-call completion")
+		if jobs.device_recovery_pending() or completion_lease.is_empty():
+			_fail("Multi-call completion retained an uncertain device lease: pending=" + str(jobs.device_recovery_pending()) + " lease=" + str(not completion_lease.is_empty())); return
+		jobs.release_device(self, completion_lease)
 		print("Built-in Jobs chat_protocol passed")
 		get_tree().quit()
 		return

@@ -343,13 +343,48 @@ func _run() -> void:
 	root = EditorInterface.get_edited_scene_root()
 
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
+	registry.set_handler("read_project_file", Callable(dock, "_registry_read_file"))
+	registry.set_handler("replace_in_gdscript", Callable(dock, "_registry_replace_script"))
 	for definition in registry.definitions():
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
-	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio"]:
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "read_project_file", "replace_in_gdscript"]:
 		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
 			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
+	var edit_path := "res://edit_fixture.gd"
+	var edit_file := FileAccess.open(edit_path, FileAccess.WRITE)
+	if edit_file == null: _fail("Could not create the script-edit fixture"); return
+	edit_file.store_string("extends Node\n\nvar speed := 1\n")
+	edit_file.close()
+	EditorInterface.get_resource_filesystem().scan()
+	var read_result: Dictionary = await registry.execute("read_project_file", {"path": edit_path})
+	if not read_result.get("ok", false) or not str(read_result.get("data", {}).get("content", "")).contains("var speed := 1"):
+		_fail("Project file read failed: " + str(read_result)); return
+	var edit_hash := str(read_result.get("data", {}).get("sha256", ""))
+	var stale_edit: Dictionary = await registry.execute("replace_in_gdscript", {"path": edit_path, "expected_sha256": "0".repeat(64), "old_text": "var speed := 1", "new_text": "var speed := 2", "reason": "fixture"})
+	if str(stale_edit.get("error", {}).get("code", "")) != "execution_failed" or not FileAccess.get_file_as_string(edit_path).contains("var speed := 1"):
+		_fail("Stale script edit was applied: " + str(stale_edit)); return
+	var applied_edit: Dictionary = await registry.execute("replace_in_gdscript", {"path": edit_path, "expected_sha256": edit_hash, "old_text": "var speed := 1", "new_text": "var speed := 2", "reason": "fixture velocity"})
+	if not applied_edit.get("ok", false) or not FileAccess.get_file_as_string(edit_path).contains("var speed := 2"):
+		_fail("Valid script edit failed: " + str(applied_edit)); return
+	if Array(applied_edit.get("affected", [])).is_empty() or str(applied_edit.affected[0].get("kind", "")) != "file":
+		_fail("Script edit did not report a file target"); return
+	var invalid_source := "extends Node\n"
+	edit_file = FileAccess.open(edit_path, FileAccess.WRITE)
+	edit_file.store_string(invalid_source)
+	edit_file.close()
+	var invalid_hash := FileAccess.get_sha256(edit_path)
+	var invalid_edit: Dictionary = await registry.execute("replace_in_gdscript", {"path": edit_path, "expected_sha256": invalid_hash, "old_text": "extends Node", "new_text": "extends Node(", "reason": "fixture invalid"})
+	if invalid_edit.get("ok", false) or FileAccess.get_file_as_string(edit_path) != invalid_source:
+		_fail("Invalid script replacement changed the file: " + str(invalid_edit)); return
+	var duplicate_source := "extends Node\n\nvar a := 1\nvar a := 1\n"
+	edit_file = FileAccess.open(edit_path, FileAccess.WRITE)
+	edit_file.store_string(duplicate_source)
+	edit_file.close()
+	var duplicate_edit: Dictionary = await registry.execute("replace_in_gdscript", {"path": edit_path, "expected_sha256": FileAccess.get_sha256(edit_path), "old_text": "var a := 1", "new_text": "var a := 2", "reason": "fixture duplicate"})
+	if duplicate_edit.get("ok", false) or FileAccess.get_file_as_string(edit_path) != duplicate_source:
+		_fail("Duplicate script snippet was edited: " + str(duplicate_edit)); return
 	var bad_schema: Dictionary = await registry.execute("add_rectangular_collision_shape", {"parent_path": "Enemy", "width": "wide", "height": 1})
 	if _error_code(bad_schema) != "invalid_arguments":
 		_fail("Registry schema accepted a string width: " + str(bad_schema)); return
@@ -462,6 +497,10 @@ func _run() -> void:
 	var image_card: Control = chat.action_cards_state().back().card
 	if image_card == null or image_card.find_child("ActionOpen", true, false) == null or image_card.find_child("ActionUndo", true, false) != null:
 		_fail("Generated image card has no artifact link or falsely offers undo"); return
+	chat._append_action_card({"ok": true, "tool": "replace_in_gdscript", "summary": "Edited res://edit_fixture.gd with one validated snippet replacement.", "affected": [{"kind": "file", "path": "res://edit_fixture.gd"}]}, {"path": "res://edit_fixture.gd"})
+	var edit_card: Control = chat.action_cards_state().back().card
+	if edit_card == null or edit_card.find_child("ActionFileNote", true, false) == null or edit_card.find_child("ActionUndo", true, false) != null:
+		_fail("Script-edit card falsely offered scene undo"); return
 	chat.size = Vector2(320, 600)
 	await get_tree().process_frame
 	await get_tree().process_frame

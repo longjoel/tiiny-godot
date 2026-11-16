@@ -86,7 +86,7 @@ func run(plugin: EditorPlugin) -> String:
 	invalid_json.function.arguments = "{"
 	var wrong_name := _call("bad-name", "res://invalid_call.gd")
 	wrong_name.function.name = 4
-	for calls in [[{}], [1], [empty_id], [wrong_type], [wrong_arguments], [invalid_json], [wrong_name], [_call("long".repeat(40), "res://invalid_call.gd")], [_call("a", "res://invalid_call.gd"), _call("b", "res://invalid_call.gd")], "not an array"]:
+	for calls in [[{}], [1], [empty_id], [wrong_type], [wrong_arguments], [invalid_json], [wrong_name], [_call("long".repeat(40), "res://invalid_call.gd")], [_call("dup", "res://invalid_call.gd"), _call("dup", "res://invalid_call.gd")], "not an array"]:
 		_begin(dock)
 		var before: int = dock.submissions.size()
 		await _tool(dock, calls)
@@ -115,6 +115,16 @@ func run(plugin: EditorPlugin) -> String:
 	await _tool(dock, [_call("normal", "res://normal.gd")])
 	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "Tool completed"}))
 	if not _idle(dock) or dock.conversation.back().get("content") != "Tool completed" or dock.conversation[-2].get("tool_call_id") != "normal": return "Normal tool/result/final-answer flow failed."
+	# Multiple well-formed calls execute sequentially and return matched results.
+	_begin(dock)
+	var multi_a := _call("multi-a", "res://multi_a.gd")
+	var multi_b := _call("multi-b", "res://multi_b.gd")
+	await _tool(dock, [multi_a, multi_b])
+	if not FileAccess.file_exists("res://multi_a.gd") or not FileAccess.file_exists("res://multi_b.gd"): return "Multi-call did not execute both tools."
+	var multi_results: Array = dock.turn_messages.slice(-2)
+	if multi_results.size() != 2 or multi_results[0].get("tool_call_id") != "multi-a" or multi_results[1].get("tool_call_id") != "multi-b": return "Multi-call results were not matched in order."
+	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "Multi completed"}))
+	if not _idle(dock) or dock.conversation.back().get("content") != "Multi completed": return "Multi-call final answer failed."
 	# Successful mutation remains visible and in context after a continuation error.
 	_begin(dock)
 	await _tool(dock, [_call("create", "res://completed.gd")])

@@ -86,7 +86,9 @@ with tempfile.TemporaryDirectory(prefix="tiiny-workspace-transactions-") as dire
         print((error.stderr or b"").decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or "")
         raise
     output = result.stdout + result.stderr
-    if result.returncode or "Workspace transaction editor integration passed." not in output or "SCRIPT ERROR" in output:
+    expected_edit_diagnostic = output.count("SCRIPT ERROR: Parse Error: Expected end of statement after superclass")
+    unexpected_script_errors = output.count("SCRIPT ERROR") - expected_edit_diagnostic
+    if result.returncode or "Workspace transaction editor integration passed." not in output or unexpected_script_errors != 0 or expected_edit_diagnostic > 1:
         print(output)
         raise SystemExit(result.returncode or 1)
     print("Workspace transaction editor integration passed.")

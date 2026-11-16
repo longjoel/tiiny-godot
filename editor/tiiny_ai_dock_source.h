@@ -266,6 +266,8 @@ func _append_action_card(result: Dictionary, arguments: Dictionary) -> void:
 				parts.append("Resource: " + str(entry.get("class", entry.get("path", "resource"))))
 			elif str(entry.get("kind", "")) == "job":
 				parts.append("Job: " + str(entry.get("id", "")))
+			elif str(entry.get("kind", "")) == "file":
+				parts.append("File: " + str(entry.get("path", "")))
 		affected_label.text = " · ".join(parts)
 		affected_label.add_theme_font_size_override("font_size", 11)
 		affected_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -302,7 +304,7 @@ func _append_action_card(result: Dictionary, arguments: Dictionary) -> void:
 		retry.name = "ActionRetry"
 		retry.pressed.connect(_retry_action.bind(str(result.get("tool", "")), arguments.duplicate(true)))
 		buttons.add_child(retry)
-	if str(result.get("undo_group", "")).is_empty() and str(result.get("tool", "")) in ["create_gdscript", "generate_image"]:
+	if str(result.get("undo_group", "")).is_empty() and str(result.get("tool", "")) in ["create_gdscript", "generate_image", "replace_in_gdscript"]:
 		var file_note := Label.new()
 		file_note.name = "ActionFileNote"
 		file_note.text = "File change · not scene-undoable"
@@ -953,6 +955,8 @@ func _ensure_workspace_registry() -> bool:
 	workspace_registry = workspace_registry_script.new(workspace_inspector, workspace_transactions, workspace_debugger)
 	workspace_registry.set_handler("generate_image", Callable(self, "_registry_generate_image"))
 	workspace_registry.set_handler("create_gdscript", Callable(self, "_registry_create_gdscript"))
+	workspace_registry.set_handler("read_project_file", Callable(self, "_registry_read_file"))
+	workspace_registry.set_handler("replace_in_gdscript", Callable(self, "_registry_replace_script"))
 	workspace_registry.set_handler("append_job", Callable(self, "_registry_append_job"))
 	workspace_registry.set_handler("get_job_status", Callable(self, "_registry_job_status"))
 	return true
@@ -979,6 +983,12 @@ func _registry_create_gdscript(arguments: Dictionary, _context: Dictionary) -> D
 	var reason := str(arguments.get("reason", "")).strip_edges()
 	if result.get("ok", false) and not reason.is_empty(): result["summary"] = str(result.summary) + " (fallback: " + reason + ")"
 	return result
+
+func _registry_read_file(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _read_project_file_tool(str(arguments.get("path", "")), int(arguments.get("max_chars", 20000)))
+
+func _registry_replace_script(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _replace_script_tool(str(arguments.get("path", "")), str(arguments.get("expected_sha256", "")), str(arguments.get("old_text", "")), str(arguments.get("new_text", "")), str(arguments.get("reason", "")))
 
 func _registry_append_job(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var text := _append_job_tool(arguments)
@@ -1020,6 +1030,8 @@ func _refresh_registry_availability() -> void:
 	values["add_rectangular_collision_shape"] = {"available": saved and not dirty and model_tools, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
 	values["generate_image"] = {"available": image_available and model_tools, "reason": "Image generation is unavailable: no warm image model." if not image_available else ""}
 	values["create_gdscript"] = {"available": model_tools, "reason": "" if model_tools else "The coding model is not ready or does not support tool use."}
+	values["read_project_file"] = values["create_gdscript"]
+	values["replace_in_gdscript"] = values["create_gdscript"]
 	values["append_job"] = {"available": jobs_available and model_tools, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
 	values["get_job_status"] = values["append_job"]
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
@@ -1188,60 +1200,72 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			return
 		if not calls.is_empty():
 			var protocol_reason := ""
-			if calls.size() != 1:
-				protocol_reason = "The model returned more than one tool call at once; no tool was executed."
-			elif not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or calls[0].get("type") != "function":
-				protocol_reason = "The model returned a malformed tool call; no tool was executed."
-			elif not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128:
-				protocol_reason = "The model returned an invalid tool call ID; no tool was executed."
-			elif tool_call_ids.has(calls[0].id):
-				protocol_reason = "The model repeated a tool call ID; no tool was executed."
-			elif tool_rounds >= 6 or tool_call_count >= 8:
-				protocol_reason = "The tool limit was reached; no further tool was executed."
+			var parsed_calls: Array[Dictionary] = []
+			var seen_calls := {}
+			for call in calls:
+				if not call is Dictionary or not call.get("function") is Dictionary or call.get("type") != "function":
+					protocol_reason = "The model returned a malformed tool call; no tool was executed."
+					break
+				if not call.get("id") is String or call.id.strip_edges().is_empty() or call.id.length() > 128:
+					protocol_reason = "The model returned an invalid tool call ID; no tool was executed."
+					break
+				if seen_calls.has(call.id) or tool_call_ids.has(call.id):
+					protocol_reason = "The model repeated a tool call ID; no tool was executed."
+					break
+				var function: Dictionary = call.function
+				var argument_json := JSON.new()
+				if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
+					protocol_reason = "The model returned invalid tool arguments; no tool was executed."
+					break
+				if tool_rounds >= 6 or tool_call_count + parsed_calls.size() >= 8:
+					protocol_reason = "The tool limit was reached; no further tool was executed."
+					break
+				seen_calls[call.id] = true
+				parsed_calls.append({"id": str(call.id), "name": str(function.name), "arguments": Dictionary(argument_json.data)})
 			if not protocol_reason.is_empty():
 				_protocol_stop(protocol_reason)
 				return
-			var function: Dictionary = calls[0].function
-			var argument_json := JSON.new()
-			if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
-				_protocol_stop("The model returned invalid tool arguments; no tool was executed.")
-				return
-			var arguments: Dictionary = argument_json.data
-			tool_call_ids.append(calls[0].id)
 			tool_rounds += 1
-			tool_call_count += 1
+			tool_call_count += parsed_calls.size()
 			turn_messages.append(choice.message)
-			var tool_result: Dictionary
-			var serialized := ""
-			if _ensure_workspace_registry():
-				tool_result = await workspace_registry.execute(str(function.name), arguments, _turn_context(str(calls[0].id)))
-				var scene: Variant = tool_result.get("data", {}).get("scene", null)
-				if scene is Dictionary: turn_scene_context = scene.duplicate(true)
-				turn_ledger.append(workspace_registry.ledger_entry(tool_result, turn_id))
-				serialized = JSON.stringify(tool_result)
-			else:
-				var fallback := "Error: Unsupported tool or invalid arguments."
-				if function.get("name") == "generate_image" and arguments.size() == 1 and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
-					fallback = await _generate_image_tool(arguments.prompt)
-				elif function.get("name") == "create_gdscript" and arguments.get("path") is String and arguments.get("source") is String:
-					fallback = _create_script_tool(arguments.path, arguments.source)
-				elif function.get("name") == "append_job" and arguments.get("operation") is String:
-					fallback = _append_job_tool(arguments)
-				elif function.get("name") == "get_job_status" and arguments.size() == 1 and arguments.get("id") is String:
-					fallback = _job_status_tool(arguments.id)
-				elif function.get("name") == "get_scene_revision" and arguments.is_empty():
-					fallback = _scene_revision_tool()
-				tool_result = _tool_text_result(fallback)
-				serialized = fallback
-			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": serialized})
-			# Preserve actual tool effects even when the continuation fails.
-			conversation = turn_messages.duplicate(true)
-			_append_action_card(tool_result, arguments)
-			_set_status("Tool finished.")
-			if queued_chat_started and queued_chat_cancel:
-				send_button.disabled = false
-				_set_status("Tiiny request stopped; its remote outcome requires reconciliation.")
-				return
+			for index in parsed_calls.size():
+				var parsed_call: Dictionary = parsed_calls[index]
+				var call_id := str(parsed_call.id)
+				var function_name := str(parsed_call.name)
+				var arguments: Dictionary = parsed_call.arguments
+				tool_call_ids.append(call_id)
+				_set_status("Running tool %d of %d…" % [index + 1, parsed_calls.size()])
+				var tool_result: Dictionary
+				var serialized := ""
+				if _ensure_workspace_registry():
+					tool_result = await workspace_registry.execute(function_name, arguments, _turn_context(call_id))
+					var scene: Variant = tool_result.get("data", {}).get("scene", null)
+					if scene is Dictionary: turn_scene_context = scene.duplicate(true)
+					turn_ledger.append(workspace_registry.ledger_entry(tool_result, turn_id))
+					serialized = JSON.stringify(tool_result)
+				else:
+					var fallback := "Error: Unsupported tool or invalid arguments."
+					if function_name == "generate_image" and arguments.size() == 1 and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
+						fallback = await _generate_image_tool(arguments.prompt)
+					elif function_name == "create_gdscript" and arguments.get("path") is String and arguments.get("source") is String:
+						fallback = _create_script_tool(arguments.path, arguments.source)
+					elif function_name == "append_job" and arguments.get("operation") is String:
+						fallback = _append_job_tool(arguments)
+					elif function_name == "get_job_status" and arguments.size() == 1 and arguments.get("id") is String:
+						fallback = _job_status_tool(arguments.id)
+					elif function_name == "get_scene_revision" and arguments.is_empty():
+						fallback = _scene_revision_tool()
+					tool_result = _tool_text_result(fallback)
+					serialized = fallback
+				turn_messages.append({"role": "tool", "tool_call_id": call_id, "content": serialized})
+				# Preserve actual tool effects even when the continuation fails.
+				conversation = turn_messages.duplicate(true)
+				_append_action_card(tool_result, arguments)
+				if queued_chat_started and queued_chat_cancel:
+					send_button.disabled = false
+					_set_status("Tiiny request stopped; its remote outcome requires reconciliation.")
+					return
+			_set_status("Tools finished.")
 			_continue_agent.call_deferred()
 			return
 	if not choice is Dictionary or not choice.get("message") is Dictionary or not choice["message"].get("content") is String:
@@ -1397,6 +1421,50 @@ func _job_status_tool(id: String) -> String:
 	if result.has("error"):
 		response["error"] = result.error
 	return JSON.stringify(response)
+
+func _read_project_file_tool(path: String, max_chars: int) -> Dictionary:
+	var normalized := path.simplify_path()
+	if not path.begins_with("res://") or ".." in path.split("/") or not normalized.begins_with("res://"):
+		return _tool_text_result("Error: Read requires a res:// project path without traversal.")
+	if not FileAccess.file_exists(normalized):
+		return _tool_text_result("Error: Project file does not exist: " + normalized)
+	var bytes := FileAccess.get_file_as_bytes(normalized)
+	if bytes.size() > 512 * 1024:
+		return _tool_text_result("Error: Project file is too large to read safely: " + normalized)
+	var text := bytes.get_string_from_utf8()
+	var limit := clampi(max_chars if max_chars > 0 else 20000, 100, 40000)
+	var truncated := text.length() > limit
+	return {"ok": true, "summary": "Read %s (%d bytes%s)." % [normalized, bytes.size(), ", truncated" if truncated else ""], "data": {"path": normalized, "sha256": FileAccess.get_sha256(normalized), "size": bytes.size(), "content": text.left(limit), "truncated": truncated}, "affected": []}
+
+func _replace_script_tool(path: String, expected_sha256: String, old_text: String, new_text: String, reason: String) -> Dictionary:
+	var normalized := path.simplify_path()
+	if not path.begins_with("res://") or ".." in path.split("/") or not normalized.begins_with("res://") or not normalized.ends_with(".gd") or old_text.is_empty() or new_text.length() > 100000:
+		return _tool_text_result("Error: Script edit requires an existing res:// .gd path, a non-empty old snippet, and bounded replacement text.")
+	if not expected_sha256.is_valid_hex_number(false) or expected_sha256.length() != 64:
+		return _tool_text_result("Error: A 64-character SHA-256 of the current file is required.")
+	if not FileAccess.file_exists(normalized):
+		return _tool_text_result("Error: Script does not exist: " + normalized)
+	var current_sha := FileAccess.get_sha256(normalized)
+	if current_sha != expected_sha256:
+		return _tool_text_result("Error: Script changed since it was read (current SHA-256 %s); no edit was applied." % current_sha)
+	var source := FileAccess.get_file_as_string(normalized)
+	var matches := source.count(old_text)
+	if matches != 1:
+		return _tool_text_result("Error: The old snippet matched %d times; provide one unique snippet. No edit was applied." % matches)
+	var updated := source.replace(old_text, new_text)
+	var script := GDScript.new()
+	script.source_code = updated
+	if script.reload() != OK:
+		return _tool_text_result("Error: The edited script failed validation; the file was not changed.")
+	var file := FileAccess.open(normalized, FileAccess.WRITE)
+	if file == null:
+		return _tool_text_result("Error: Could not write the script (error %d)." % FileAccess.get_open_error())
+	file.store_string(updated)
+	file.close()
+	EditorInterface.get_resource_filesystem().scan()
+	var summary := "Edited %s with one validated snippet replacement." % normalized
+	if not reason.strip_edges().is_empty(): summary += " Reason: " + reason.strip_edges()
+	return {"ok": true, "summary": summary, "data": {"path": normalized, "before_sha256": current_sha, "after_sha256": FileAccess.get_sha256(normalized), "reason": reason.strip_edges()}, "affected": [{"kind": "file", "path": normalized}]}
 
 func _create_script_tool(path: String, source: String) -> String:
 	var normalized := path.simplify_path()
