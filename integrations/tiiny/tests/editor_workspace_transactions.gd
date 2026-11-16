@@ -339,6 +339,21 @@ func _run() -> void:
 	if not audio_undo[2].redo() or root.get_node_or_null("GeneratedLine") == null:
 		_fail("Generated audio redo failed"); return
 	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before sprite import"); return
+	root = EditorInterface.get_edited_scene_root()
+	var sprite_result: Dictionary = transactions.execute("add_sprite_from_image", {"path": "res://generated/source.png", "parent_path": ".", "node_name": "GeneratedSprite", "scale_x": 2.0, "scale_y": 2.0})
+	if not sprite_result.get("ok", false): _fail("Sprite-from-image recipe failed: " + str(sprite_result)); return
+	var generated_sprite: Sprite2D = root.get_node_or_null("GeneratedSprite")
+	if generated_sprite == null or generated_sprite.texture == null or generated_sprite.scale != Vector2(2.0, 2.0):
+		_fail("Generated Sprite2D has the wrong texture/scale"); return
+	if str(sprite_result.get("data", {}).get("artifact", "")) != "res://generated/source.png":
+		_fail("Sprite result omitted its image artifact"); return
+	var sprite_undo := _history(root)
+	if not sprite_undo[2].undo() or root.get_node_or_null("GeneratedSprite") != null:
+		_fail("Sprite-from-image undo failed"); return
+	if not sprite_undo[2].redo() or root.get_node_or_null("GeneratedSprite") == null:
+		_fail("Sprite-from-image redo failed"); return
+	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after audio import"); return
 	root = EditorInterface.get_edited_scene_root()
 
@@ -349,7 +364,7 @@ func _run() -> void:
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
-	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "read_project_file", "replace_in_gdscript"]:
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "add_sprite_from_image", "read_project_file", "replace_in_gdscript"]:
 		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
 			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
 	var edit_path := "res://edit_fixture.gd"

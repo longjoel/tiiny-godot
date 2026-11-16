@@ -1,6 +1,6 @@
 # 09 — Typed resource recipes and image generation
 
-Status: Accepted. Registry recipe metadata, dock/dialog eligibility, imported-image path reporting, artifact linking, and failure-stage checks are implemented and tested. See [acceptance evidence](../evidence/09-acceptance.md).
+Status: Accepted. Registry recipe metadata, dock/dialog eligibility, imported-image path reporting, artifact linking, on-demand image-model loading, native Sprite2D creation from generated textures, and failure-stage checks are implemented and tested, including live image generation. See [acceptance evidence](../evidence/09-acceptance.md).
 
 Feature: Typed resource recipes and image generation
 
@@ -33,4 +33,4 @@ Use WS-06, WS-07, WS-09 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.m
 
 ## Evidence and handoff
 
-Accepted. Implementation: recipe metadata/accessors in `editor/tiiny/tools/registry.gd`, dock eligibility in `editor/tiiny_ai_dock_source.h`, and dialog integration in `editor/gui/create_dialog.cpp`. Image generation now waits for a loadable import and reports the project path; chat action cards link the generated texture. Deterministic evidence: transaction/registry fixture, loopback resource HTTP fixture, 11-stage editor smoke including failed-import rejection, and all 27 Jobs modes. Live warm-image-model generation remains unverified. See [acceptance evidence](../evidence/09-acceptance.md).
+Accepted. Implementation: recipe metadata/accessors in `editor/tiiny/tools/registry.gd`, dock eligibility in `editor/tiiny_ai_dock_source.h`, and dialog integration in `editor/gui/create_dialog.cpp`. Image generation now loads the configured downloaded image model on demand through the shared device lease/journal, waits for a loadable import, reports the project path, and restores the configured warm set; `add_sprite_from_image` creates a Sprite2D from the generated texture. Live soccer-ball run generated/imported a 512×512 image and created `SoccerBall`; the screenshot is `/tmp/tiiny-live-sprite.png`. Deterministic transaction/registry, loopback HTTP, 11-stage editor smoke, all 31 Jobs modes, debugger, and resource regressions pass. See [acceptance evidence](../evidence/09-acceptance.md).

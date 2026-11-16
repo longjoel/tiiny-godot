@@ -66,6 +66,24 @@ func _run() -> void:
 		_fail("Live spin edit did not update the script: " + edited); return
 	if requested.contains("velocity") and not edited.contains("velocity"):
 		_fail("Live velocity edit did not preserve velocity logic: " + edited); return
+	if requested.contains("sprite") or requested.contains("soccer"):
+		var found_sprite := false
+		var scene_lines: Array[String] = []
+		for child in root.get_children():
+			var texture_path := ""
+			if child is Sprite2D and child.texture != null: texture_path = child.texture.resource_path
+			scene_lines.append("%s [%s] texture=%s" % [child.name, child.get_class(), texture_path])
+			if child is Sprite2D and child.name != "Icon" and texture_path.begins_with("res://tiiny_generated/"): found_sprite = true
+		var scene_capture := FileAccess.open("/tmp/tiiny-live-sprite.txt", FileAccess.WRITE)
+		if scene_capture != null:
+			scene_capture.store_string("\n".join(scene_lines))
+			scene_capture.close()
+		if not found_sprite: _fail("Live generated-sprite scene is wrong: " + " | ".join(scene_lines)); return
+		for child in root.get_children():
+			if child is Sprite2D and child.name != "Icon" and child.texture != null and child.texture.resource_path.begins_with("res://tiiny_generated/"):
+				var sprite_image: Image = child.texture.get_image()
+				if sprite_image != null: sprite_image.save_png("/tmp/tiiny-live-sprite.png")
+				break
 	print("Live edited script saved to /tmp/tiiny-live-edited.gd")
 	print("Live multi-call chat passed.")
 	get_tree().quit(0)

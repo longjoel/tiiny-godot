@@ -970,7 +970,7 @@ func _execute_model_schedule(parameters: Dictionary) -> void:
 	_report("%s scheduled and verified; the configured warm set was restored." % requested)
 	model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log), "requested": requested, "restored": true}}
 
-func _run_scheduled_actions(actions: Array, identity: String, label: String, ignore_cancel := false) -> Dictionary:
+func _run_scheduled_actions(actions: Array, identity: String, label: String, ignore_cancel := false, journal_job_id := "", journal_token := "", journal_owner: Object = null) -> Dictionary:
 	var changed := false
 	for action in actions:
 		if not ignore_cancel and model_job_cancelled:
@@ -982,7 +982,10 @@ func _run_scheduled_actions(actions: Array, identity: String, label: String, ign
 		operation_log.append("%s %s" % [action.verb, action.id])
 		_set_operation(str(action.verb), str(action.id))
 		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
-		if not model_job_id.is_empty() and (service == null or not service.begin_model_operation(self, device_lease, model_job_id, action.verb, action.id, identity)):
+		var active_job := journal_job_id if not journal_job_id.is_empty() else model_job_id
+		var active_token := journal_token if not journal_token.is_empty() else device_lease
+		var active_owner: Object = journal_owner if journal_owner != null else self
+		if not active_job.is_empty() and (service == null or not service.begin_model_operation(active_owner, active_token, active_job, action.verb, action.id, identity)):
 			return {"ok": false, "changed": changed, "uncertain": false, "error": "Could not record the scheduled model operation. Stopped before starting it."}
 		changed = true
 		var exit_code := await _run_cli([action.verb, action.id])
@@ -1001,10 +1004,47 @@ func _run_scheduled_actions(actions: Array, identity: String, label: String, ign
 			var expected_npu := float(observed.models.get(action.id, {}).get("npu", -1))
 			if expected_npu > 0 and float(observed.loaded[action.id]) != expected_npu:
 				return {"ok": false, "changed": changed, "uncertain": true, "error": "Tiiny loaded %s but its NPU allocation does not match the catalog." % str(action.id)}
-		if not model_job_id.is_empty() and not service.queue.verify_device_operation(model_job_id):
+		if not active_job.is_empty() and not service.queue.verify_device_operation(active_job):
 			return {"ok": false, "changed": changed, "uncertain": true, "error": "Could not record scheduled-model verification."}
 		snapshot = observed
 	return {"ok": true, "changed": changed, "uncertain": false, "snapshot": snapshot}
+
+func ensure_model_loaded_for_job(role: String, model: String, job_id: String, owner: Object, token: String) -> Dictionary:
+	if is_model_loaded(model):
+		return {"ok": true, "already_loaded": true}
+	var connection := _connection()
+	if connection.has("error"):
+		return {"ok": false, "error": str(connection.error)}
+	var identity := str(connection.get("identity", ""))
+	var settings := EditorInterface.get_editor_settings()
+	var saved: Dictionary = settings.get_setting("_tiiny_ai/applied_configuration")
+	if not _valid_saved_draft(saved):
+		return {"ok": false, "error": "Apply a model configuration before loading a specialized model on demand."}
+	var active := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	var fresh := await _fetch_snapshot()
+	if fresh.has("error") or fresh.get("connection", "") != identity:
+		return {"ok": false, "error": "The device is unavailable or changed before loading " + model + "."}
+	var plan := Planner.schedule(fresh, saved, role, model, active)
+	if not plan.get("ok", false):
+		return {"ok": false, "error": "Cannot load %s alongside the coding model: %s" % [model, " ".join(plan.errors)]}
+	var executed := await _run_scheduled_actions(plan.temporary, identity, "Loading " + model, false, job_id, token, owner)
+	if not executed.get("ok", false):
+		return {"ok": false, "error": str(executed.get("error", "Could not load " + model)), "uncertain": bool(executed.get("uncertain", false))}
+	return {"ok": true, "already_loaded": false, "identity": identity, "saved": saved, "active": active}
+
+func restore_configured_set_for_job(identity: String, job_id: String, owner: Object, token: String) -> Dictionary:
+	var settings := EditorInterface.get_editor_settings()
+	var saved: Dictionary = settings.get_setting("_tiiny_ai/applied_configuration")
+	if not _valid_saved_draft(saved):
+		return {"ok": false, "error": "The configured warm set is unavailable."}
+	var active := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	var observed := await _fetch_snapshot()
+	if observed.has("error") or observed.get("connection", "") != identity:
+		return {"ok": false, "error": "Could not read the device before restoring the configured warm set.", "uncertain": true}
+	var plan := Planner.check(observed, saved, active)
+	if not plan.get("ok", false):
+		return {"ok": false, "error": "Warm-set restoration is not possible: " + " ".join(plan.errors)}
+	return await _run_scheduled_actions(plan.actions, identity, "Restoring configured warm set", true, job_id, token, owner)
 
 func _restore_scheduled_set(identity: String, saved: Dictionary, active: String, ignore_cancel: bool) -> Dictionary:
 	var connection := _connection()

@@ -457,6 +457,22 @@ func _register_default_recipes() -> void:
 		"validate": Callable(self, "_validate_import_audio"),
 		"build": Callable(self, "_build_import_audio"),
 	})
+	register_recipe({
+		"name": "add_sprite_from_image",
+		"title": "Add Sprite2D from image",
+		"description": "Create a Sprite2D using an imported texture, such as a generated image.",
+		"parameters": {"type": "object", "properties": {
+			"path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"scale_x": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+			"scale_y": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000},
+		}, "required": ["path"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 15000,
+		"validate": Callable(self, "_validate_sprite"),
+		"build": Callable(self, "_build_sprite"),
+	})
 
 func _validate_collision(params: Dictionary, context: Dictionary) -> Dictionary:
 	var parent_path := str(params.get("parent_path", ""))
@@ -706,6 +722,48 @@ func _build_import_audio(request: Dictionary) -> Dictionary:
 		{"op": "set_owner", "node": "player", "owner": "."},
 		{"op": "set_property", "target": "player", "property": "stream", "value": {"ref": "stream"}},
 	]}
+
+func _validate_sprite(params: Dictionary, context: Dictionary) -> Dictionary:
+	var path := str(params.get("path", "")).strip_edges()
+	var lowered := path.to_lower()
+	if not path.begins_with("res://") or ".." in path.split("/") or not (lowered.ends_with(".png") or lowered.ends_with(".jpg") or lowered.ends_with(".jpeg") or lowered.ends_with(".webp") or lowered.ends_with(".svg")):
+		return {"ok": false, "code": "invalid_arguments", "message": "A res:// image path is required."}
+	if not FileAccess.file_exists(path):
+		return {"ok": false, "code": "artifact_missing", "message": "Sprite image is missing: " + path}
+	var texture: Variant = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_REUSE)
+	if not texture is Texture2D:
+		return {"ok": false, "code": "artifact_invalid", "message": "Sprite image did not import as a Texture2D: " + path}
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"):
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		return {"ok": false, "code": "read_only_instance", "message": "The sprite parent must be owned by the edited scene."}
+	var node_name := str(params.get("node_name", "")).strip_edges()
+	if node_name.is_empty(): node_name = _unique_name(parent, "GeneratedSprite")
+	elif not _valid_name(node_name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid sprite node name."}
+	if parent.get_node_or_null(NodePath(node_name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + node_name + " already exists."}
+	var scale_x := float(params.get("scale_x", 1.0))
+	var scale_y := float(params.get("scale_y", 1.0))
+	if scale_x <= 0 or scale_y <= 0 or scale_x > 1000 or scale_y > 1000:
+		return {"ok": false, "code": "invalid_arguments", "message": "Sprite scale must be positive and bounded."}
+	return {"ok": true, "request": {"path": path, "parent_path": parent_path, "node_name": node_name, "texture": texture, "size": texture.get_size(), "scale": Vector2(scale_x, scale_y)}}
+
+func _build_sprite(request: Dictionary) -> Dictionary:
+	var ops: Array = [
+		{"op": "create_resource_value", "id": "texture", "resource": request.texture},
+		{"op": "create_node", "id": "sprite", "class": "Sprite2D", "name": request.node_name},
+		{"op": "add_child", "parent": request.parent_path, "node": "sprite"},
+		{"op": "set_owner", "node": "sprite", "owner": "."},
+		{"op": "set_property", "target": "sprite", "property": "texture", "value": {"ref": "texture"}},
+	]
+	if request.scale != Vector2.ONE:
+		ops.append({"op": "set_property", "target": "sprite", "property": "scale", "value": request.scale})
+	return {"ok": true, "action_name": "Add Sprite2D " + request.node_name, "summary": "Added Sprite2D %s under %s using %s (%s)." % [request.node_name, request.parent_path, request.path, str(request.size)], "data": {"artifact": request.path, "size": [request.size.x, request.size.y], "scale": [request.scale.x, request.scale.y]}, "ops": ops}
 
 func _unique_name(parent: Node, base: String) -> String:
 	var candidate := base

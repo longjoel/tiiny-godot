@@ -1010,7 +1010,9 @@ func _image_model_warm() -> bool:
 	if manager == null or not manager.get("connected"):
 		return false
 	var image_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/image_model"))
-	return not image_id.is_empty() and manager.snapshot.get("loaded", {}).has(image_id)
+	if image_id.is_empty(): return false
+	if manager.snapshot.get("loaded", {}).has(image_id): return true
+	return bool(manager.snapshot.get("models", {}).get(image_id, {}).get("installed", false))
 
 func _scene_has_class(root: Node, type_name: String) -> bool:
 	if root == null: return false
@@ -1036,7 +1038,8 @@ func _refresh_registry_availability() -> void:
 	values["assign_slippery_surface"] = {"available": saved and not dirty and has_physics, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No CollisionObject2D is present for a physics material." if not has_physics else ""))}
 	values["import_generated_model"] = {"available": saved and not dirty, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
 	values["import_generated_audio"] = values["import_generated_model"]
-	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no warm image model." if not image_available else ""}
+	values["add_sprite_from_image"] = values["import_generated_model"]
+	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no configured/downloaded image model." if not image_available else ""}
 	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]
 	values["replace_in_gdscript"] = values["create_gdscript"]
@@ -1540,8 +1543,38 @@ func _generate_image_tool(description: String) -> String:
 	var settings := EditorInterface.get_editor_settings()
 	var image_model := str(settings.get_setting("tiiny_ai/models/image_model")).strip_edges()
 	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
-	if image_model.is_empty() or manager == null or not manager.is_model_loaded(image_model):
-		return "Error: Choose an image model with Keep loaded in Tiiny AI > Models, then Check Config and Apply."
+	if image_model.is_empty() or manager == null:
+		return "Error: Choose an image model in Tiiny AI > Models."
+	var load_info := {}
+	var leased_here := false
+	if not manager.is_model_loaded(image_model):
+		if device_lease.is_empty():
+			if not _acquire_device("image generation"):
+				return "Error: Tiiny is busy; could not acquire the device for image generation."
+			leased_here = true
+		load_info = await manager.ensure_model_loaded_for_job("image_model", image_model, queued_chat_id, self, device_lease)
+		if not bool(load_info.get("ok", false)):
+			if leased_here and not bool(load_info.get("uncertain", false)): _release_device()
+			return "Error: Could not load the image model on demand: " + str(load_info.get("error", "unknown error"))
+		_reset_chat_device_marker()
+	var result := await _generate_image_http(description, image_model)
+	if not load_info.is_empty():
+		var restore: Dictionary = await manager.restore_configured_set_for_job(str(load_info.get("identity", "")), queued_chat_id, self, device_lease)
+		_reset_chat_device_marker()
+		if leased_here: _release_device()
+		if not bool(restore.get("ok", false)):
+			if result.begins_with("Generated image: "):
+				return "Error: The image was generated at %s but restoring the configured warm set failed: %s" % [result.trim_prefix("Generated image: "), str(restore.get("error", "unknown error"))]
+			return result + " Warm-set restoration also failed: " + str(restore.get("error", "unknown error"))
+	return result
+
+func _reset_chat_device_marker() -> void:
+	if queued_chat_started and not queued_chat_id.is_empty() and not device_lease.is_empty() and is_instance_valid(jobs_service) and jobs_service.has_method("begin_device_request"):
+		if jobs_service.has_method("confirm_model_operations"):
+			jobs_service.confirm_model_operations(self, device_lease, queued_chat_id)
+		jobs_service.begin_device_request(self, device_lease, queued_chat_id, str(queued_chat_parameters.get("model", "")), str(queued_chat_parameters.get("connection_hash", "")))
+
+func _generate_image_http(description: String, image_model: String) -> String:
 	_set_status("Generating image with " + image_model + "…")
 	var image_request := HTTPRequest.new()
 	image_request.timeout = _request_timeout()

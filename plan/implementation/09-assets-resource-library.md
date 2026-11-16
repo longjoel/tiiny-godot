@@ -1,6 +1,6 @@
 # Story 09 implementation plan — typed resource recipes and image generation
 
-Status: Accepted. Registry recipe metadata, dialog eligibility, imported-image reporting, artifact linking, and failure-stage checks are implemented.
+Status: Accepted. Registry metadata, dialog eligibility, on-demand image-model loading, imported-image reporting, artifact linking, Sprite2D creation, and failure-stage checks are implemented; live image generation is verified.
 
 Parent: [09 — Typed resource recipes and image generation](../work-items/09-assets-resource-library.md).
 
@@ -69,4 +69,4 @@ All gates verified; see [acceptance evidence](../evidence/09-acceptance.md).
 
 ## Handoff
 
-Accepted. See [acceptance evidence](../evidence/09-acceptance.md). Boundaries: live on-device image generation was not run; planned recipes stay metadata-only; the import wait is bounded at 10 seconds.
+Accepted. See [acceptance evidence](../evidence/09-acceptance.md). Live: `Tongyi-MAI/Z-Image-Turbo` loaded on demand, generated a soccer ball, restored the warm set, and `add_sprite_from_image` created `SoccerBall`; screenshot `/tmp/tiiny-live-sprite.png`. Boundaries: image model must be downloaded; 10s import wait; sprite creation does not replace/animate existing sprites.
