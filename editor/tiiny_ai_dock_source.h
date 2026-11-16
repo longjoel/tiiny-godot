@@ -68,6 +68,17 @@ var queued_chat_started := false
 var queued_chat_cancel := false
 var queued_chat_success := false
 var queued_chat_response := ""
+var asset_job_id := ""
+var asset_job_parameters := {}
+var asset_job_started := false
+var asset_job_cancel := false
+var asset_phase := ""
+var asset_task_id := ""
+var asset_artifact_path := ""
+var asset_error := ""
+var asset_next_poll := 0
+var asset_deadline := 0
+var asset_request: HTTPRequest
 var queued_chat_parameters: Dictionary = {}
 var device_outcome_uncertain := false
 var uncertain_job_id := ""
@@ -625,6 +636,265 @@ func _start_queued_request() -> void:
 	_set_status("Classifying request…")
 	_send_chat(CLASSIFY_PROMPT, pending_prompt)
 
+func poll_asset_job(job: Dictionary) -> Dictionary:
+	if asset_job_id.is_empty():
+		asset_job_id = str(job.id)
+		asset_job_parameters = job.parameters.duplicate(true)
+		asset_job_started = false
+		asset_job_cancel = false
+		asset_phase = ""
+		asset_task_id = ""
+		asset_artifact_path = ""
+		asset_error = ""
+		asset_next_poll = 0
+		asset_deadline = 0
+	if asset_job_id != job.id:
+		return {"state": "running", "stage": "Waiting for asset job"}
+	if asset_job_cancel:
+		_stop_asset_request()
+		return _finish_asset_job("cancelled", "Cancelled by user")
+	if not asset_job_started:
+		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		if manager == null:
+			return _finish_asset_job("failed", "Tiiny device manager is unavailable.")
+		if not manager.is_ready():
+			if not manager.busy and not manager.applying and manager.has_method("refresh_device"):
+				manager.refresh_device(true)
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
+			return {"state": "running", "stage": str(manager.message)}
+		var connection := _inference_connection()
+		if connection.has("error"):
+			return _finish_asset_job("failed", str(connection.error))
+		var model := str(asset_job_parameters.get("model", ""))
+		if not manager.is_model_loaded(model):
+			return _finish_asset_job("failed", "Model is not loaded: " + model + ". Schedule or load it before this asset job.")
+		var connection_hash: String = (connection.url + "|" + connection.host + "|" + connection.key).sha256_text()
+		if connection_hash != str(asset_job_parameters.get("connection_hash", "")):
+			return _finish_asset_job("failed", "The device or model connection changed since submission.")
+		if not _acquire_device("asset generation"):
+			return {"state": "running", "stage": "Waiting for Tiiny"}
+		if not jobs_service.begin_device_request(self, device_lease, job.id, model, connection_hash):
+			device_outcome_uncertain = true
+			uncertain_job_id = str(job.id)
+			return _finish_asset_job("failed", "Could not record device execution")
+		asset_job_started = true
+		pending_url = connection.url
+		pending_key = connection.key
+		pending_host = connection.host
+		asset_deadline = Time.get_ticks_msec() + int(asset_job_parameters.get("timeout_ms", 600000))
+		_set_status("Generating " + str(asset_job_parameters.get("kind", "asset")) + "…")
+		_start_asset_submit()
+		return {"state": "running", "stage": "Contacting Tiiny"}
+	if asset_phase == "done":
+		return _finish_asset_job("completed", "")
+	if asset_phase == "error":
+		return _finish_asset_job("failed", asset_error)
+	if Time.get_ticks_msec() > asset_deadline:
+		return _finish_asset_job("failed", "Asset generation exceeded its time limit.")
+	if asset_phase == "import":
+		if _asset_import_ready():
+			asset_phase = "done"
+			return {"state": "running", "stage": "Asset imported"}
+		return {"state": "running", "stage": "Importing generated asset"}
+	if asset_phase == "poll" and asset_request == null and Time.get_ticks_msec() >= asset_next_poll:
+		_start_asset_poll()
+	return {"state": "running", "stage": "Generating " + str(asset_job_parameters.get("kind", "asset")) + "…"}
+
+func _start_asset_submit() -> void:
+	var kind := str(asset_job_parameters.get("kind", ""))
+	if kind == "image_to_3d":
+		var image_path := str(asset_job_parameters.get("image_path", ""))
+		var image := FileAccess.get_file_as_bytes(image_path)
+		if image.is_empty():
+			asset_phase = "error"
+			asset_error = "Reference image is missing or unreadable: " + image_path
+			return
+		var boundary := "tiiny-" + Crypto.new().generate_random_bytes(8).hex_encode()
+		var body := PackedByteArray()
+		body.append_array(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"stage\"\r\n\r\n" + str(asset_job_parameters.get("stage", "shape")) + "\r\n").to_utf8_buffer())
+		body.append_array(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"image\"; filename=\"reference.png\"\r\nContent-Type: image/png\r\n\r\n").to_utf8_buffer())
+		body.append_array(image)
+		body.append_array(("\r\n--" + boundary + "--\r\n").to_utf8_buffer())
+		var headers := _inference_headers(pending_key, pending_host)
+		headers.append("Content-Type: multipart/form-data; boundary=" + boundary)
+		_asset_http(pending_url + "/3d/tasks", headers, HTTPClient.METHOD_POST, body, "submit_3d")
+	elif kind == "speech":
+		var text := str(asset_job_parameters.get("text", ""))
+		if text.strip_edges().is_empty():
+			asset_phase = "error"
+			asset_error = "Speech text is empty."
+			return
+		var payload := {"model": str(asset_job_parameters.get("model", "")), "input": text, "voice": str(asset_job_parameters.get("voice", ""))}
+		_asset_http(pending_url + "/audio/speech", _inference_headers(pending_key, pending_host), HTTPClient.METHOD_POST, JSON.stringify(payload).to_utf8_buffer(), "submit_speech")
+	else:
+		asset_phase = "error"
+		asset_error = "Unsupported asset kind: " + kind
+
+func _asset_http(url: String, headers: PackedStringArray, method: int, body: PackedByteArray, phase: String) -> void:
+	_stop_asset_request()
+	var request := HTTPRequest.new()
+	request.timeout = _request_timeout()
+	request.body_size_limit = 128 * 1024 * 1024
+	add_child(request)
+	request.request_completed.connect(_on_asset_response.bind(request, phase))
+	var selected_headers: PackedStringArray = headers
+	if method == HTTPClient.METHOD_GET:
+		selected_headers = _inference_headers(pending_key, pending_host)
+	var error := request.request_raw(url, selected_headers, method, body)
+	if error != OK:
+		request.queue_free()
+		asset_phase = "error"
+		asset_error = "Could not start the asset request (error %d)." % error
+		return
+	asset_request = request
+
+func _on_asset_response(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, request: HTTPRequest, phase: String) -> void:
+	if is_instance_valid(request):
+		request.queue_free()
+	if asset_request == request:
+		asset_request = null
+	if asset_job_cancel:
+		return
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		asset_phase = "error"
+		asset_error = "Tiiny asset request failed (connection %d, HTTP %d)." % [result, response_code]
+		return
+	match phase:
+		"submit_3d":
+			var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+			if not parsed is Dictionary or not parsed.get("data") is Dictionary or not parsed.data.get("task_id") is String:
+				asset_phase = "error"
+				asset_error = "Tiiny did not return a 3D task."
+				return
+			asset_task_id = str(parsed.data.task_id)
+			asset_phase = "poll"
+			asset_next_poll = Time.get_ticks_msec() + 2500
+		"submit_speech":
+			var path := _asset_output_path("speech", "wav")
+			if path.is_empty() or _write_asset(path, body) != OK:
+				asset_phase = "error"
+				asset_error = "Could not save the generated speech."
+				return
+			_begin_asset_import(path)
+		"poll_3d":
+			var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+			if not parsed is Dictionary or not parsed.get("data") is Dictionary:
+				asset_phase = "error"
+				asset_error = "Tiiny returned an invalid 3D task response."
+				return
+			var data: Dictionary = parsed.data
+			var status := str(data.get("status", ""))
+			if status in ["failed", "cancelled"]:
+				asset_phase = "error"
+				asset_error = str(data.get("error", "3D generation " + status))
+				return
+			if status != "completed":
+				asset_next_poll = Time.get_ticks_msec() + 2500
+				return
+			if not data.get("result") is Dictionary or not data.result.get("output") is Dictionary or not data.result.output.get("glb") is String:
+				asset_phase = "error"
+				asset_error = "Completed 3D task did not include a GLB artifact."
+				return
+			var bytes := Marshalls.base64_to_raw(data.result.output.glb)
+			if bytes.is_empty() or bytes.slice(0, 4) != PackedByteArray([0x67, 0x6c, 0x54, 0x46]):
+				asset_phase = "error"
+				asset_error = "Completed 3D task returned invalid GLB data."
+				return
+			var path := _asset_output_path("model", "glb")
+			if path.is_empty() or _write_asset(path, bytes) != OK:
+				asset_phase = "error"
+				asset_error = "Could not save the generated 3D model."
+				return
+			_begin_asset_import(path)
+		_:
+			asset_phase = "error"
+			asset_error = "Unexpected asset phase."
+
+func _start_asset_poll() -> void:
+	if asset_task_id.is_empty():
+		asset_phase = "error"
+		asset_error = "3D task ID is missing."
+		return
+	_asset_http(pending_url + "/3d/tasks/" + asset_task_id, _inference_headers(pending_key, pending_host), HTTPClient.METHOD_GET, PackedByteArray(), "poll_3d")
+
+func _asset_output_path(prefix: String, extension: String) -> String:
+	var folder := "res://tiiny_generated"
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(folder)) != OK:
+		return ""
+	return folder.path_join("%s_%d.%s" % [prefix, Time.get_ticks_usec(), extension])
+
+func _write_asset(path: String, bytes: PackedByteArray) -> int:
+	if FileAccess.file_exists(path): return ERR_ALREADY_EXISTS
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null: return FileAccess.get_open_error()
+	file.store_buffer(bytes)
+	file.close()
+	return OK
+
+func _begin_asset_import(path: String) -> void:
+	asset_artifact_path = path
+	asset_phase = "import"
+	asset_deadline = Time.get_ticks_msec() + 30000
+	EditorInterface.get_resource_filesystem().scan()
+
+func _asset_import_ready() -> bool:
+	if asset_artifact_path.is_empty() or not FileAccess.file_exists(asset_artifact_path + ".import"): return false
+	var filesystem := EditorInterface.get_resource_filesystem()
+	if filesystem.is_scanning() or filesystem.is_importing(): return false
+	if not ResourceLoader.exists(asset_artifact_path): return false
+	if str(asset_job_parameters.get("kind", "")) == "speech":
+		return ResourceLoader.load(asset_artifact_path, "", ResourceLoader.CACHE_MODE_REUSE) is AudioStream
+	return ResourceLoader.load(asset_artifact_path, "", ResourceLoader.CACHE_MODE_REUSE) is PackedScene
+
+func _finish_asset_job(state: String, reason: String) -> Dictionary:
+	var result := {"artifact": asset_artifact_path} if state == "completed" else {"error": reason}
+	if asset_job_started:
+		if state == "failed" and not asset_job_cancel and asset_phase == "error" and jobs_service.confirm_device_request(self, device_lease, asset_job_id):
+			_release_device()
+		else:
+			device_outcome_uncertain = true
+			uncertain_job_id = asset_job_id
+	else:
+		_release_device()
+	if state != "completed": _set_status(reason)
+	asset_job_id = ""
+	asset_job_parameters = {}
+	asset_job_started = false
+	asset_job_cancel = false
+	asset_phase = ""
+	asset_task_id = ""
+	asset_artifact_path = ""
+	asset_error = ""
+	send_button.disabled = false
+	return {"state": state, "result": result}
+
+func cancel_asset_job(id: String) -> bool:
+	if asset_job_id != id: return false
+	asset_job_cancel = true
+	_stop_asset_request()
+	_set_status("Stopping asset generation; the remote task may still be running.")
+	return true
+
+func finalize_asset_job(state: String) -> void:
+	if state == "interrupted":
+		return
+	device_outcome_uncertain = false
+	_release_device()
+	asset_job_id = ""
+	asset_job_parameters = {}
+	asset_job_started = false
+	asset_job_cancel = false
+	asset_phase = ""
+	asset_task_id = ""
+	asset_artifact_path = ""
+	asset_error = ""
+
+func _stop_asset_request() -> void:
+	if asset_request != null and is_instance_valid(asset_request):
+		asset_request.cancel_request()
+		asset_request.queue_free()
+	asset_request = null
+
 func cancel_queued_chat(id: String) -> void:
 	if queued_chat_id == id and not queued_chat_success:
 		queued_chat_cancel = true
@@ -1063,6 +1333,37 @@ func _append_job_tool(arguments: Dictionary) -> String:
 		if arguments.has("restore") and not arguments.get("restore") is bool:
 			return "Error: Invalid specialized-model restoration flag."
 		parameters = {"role": arguments.role, "model": arguments.model, "connection": identity, "restore": bool(arguments.get("restore", true))}
+	elif operation == "asset_generate" and arguments.size() in [2, 3, 4]:
+		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		if manager == null:
+			return "Error: Tiiny device manager is unavailable."
+		var connection := _inference_connection()
+		if connection.has("error"):
+			return "Error: " + str(connection.error)
+		var identity: String = (connection.url + "|" + connection.host + "|" + connection.key).sha256_text()
+		var kind := str(arguments.get("kind", ""))
+		var settings := EditorInterface.get_editor_settings()
+		var model := ""
+		if kind == "image_to_3d":
+			model = str(settings.get_setting("tiiny_ai/models/image_to_3d_model")).strip_edges()
+			if not arguments.get("image_path") is String or not arguments.get("stage") is String:
+				return "Error: image_path and stage are required for image-to-3D."
+			parameters = {"kind": kind, "model": model, "image_path": arguments.image_path, "stage": arguments.stage}
+		elif kind == "speech":
+			model = str(settings.get_setting("tiiny_ai/models/speech_model")).strip_edges()
+			if not arguments.get("text") is String:
+				return "Error: text is required for speech."
+			parameters = {"kind": kind, "model": model, "text": arguments.text, "voice": str(arguments.get("voice", ""))}
+		else:
+			return "Error: Unsupported asset kind."
+		if model.is_empty():
+			return "Error: Choose and apply a " + ("Image to 3D" if kind == "image_to_3d" else "Text to speech") + " model first."
+		parameters["connection_hash"] = identity
+		parameters["timeout_ms"] = 1800000 if kind == "image_to_3d" else 300000
+		var accepted: Dictionary = jobs_service.append_job("asset-" + Crypto.new().generate_random_bytes(16).hex_encode(), operation, parameters)
+		if accepted.has("error"):
+			return "Error: " + str(accepted.error)
+		return JSON.stringify({"accepted": true, "id": accepted.id, "sequence": accepted.sequence, "message": "Asset job accepted; completion is not yet known."})
 	else:
 		return "Error: Unsupported job or invalid arguments."
 	parameters["timeout_ms"] = 7200000 if operation == "model_schedule" else 60000

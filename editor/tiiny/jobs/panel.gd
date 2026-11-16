@@ -153,6 +153,38 @@ class ResourceWorker extends RefCounted:
 			if manager != null and manager.has_method("finalize_model_job"):
 				manager.finalize_model_job(job.id, state)
 
+class AssetWorker extends RefCounted:
+	var chat: WeakRef
+	var job: Dictionary
+	var polled := false
+	var cancelled_before_start := false
+	func _init(owner: Node) -> void:
+		chat = weakref(owner)
+	func start(value: Dictionary) -> String:
+		job = value.duplicate(true)
+		return ""
+	func poll() -> Dictionary:
+		var owner: Object = chat.get_ref()
+		if not is_instance_valid(owner):
+			return {"state": "running", "stage": "Asset handler unavailable; outcome requires recovery"}
+		if cancelled_before_start:
+			return {"state": "cancelled", "result": {"error": "Cancelled before device execution"}}
+		polled = true
+		var result: Dictionary = owner.poll_asset_job(job)
+		if result.get("state") == "completed" and not owner.confirm_device_success(job.id):
+			return {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
+		return result
+	func cancel() -> void:
+		var owner: Object = chat.get_ref()
+		if not polled:
+			cancelled_before_start = true
+		elif is_instance_valid(owner):
+			owner.cancel_asset_job(job.id)
+	func committed(state: String) -> void:
+		var owner: Object = chat.get_ref()
+		if is_instance_valid(owner):
+			owner.finalize_asset_job(state)
+
 class ModelWorker extends RefCounted:
 	var manager: WeakRef
 	var job: Dictionary
@@ -329,6 +361,20 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 			return "Invalid specialized-model schedule"
 		if parameters.has("restore") and not parameters.get("restore") is bool:
 			return "Invalid specialized-model restoration flag"
+		return ""
+	if operation == "asset_generate":
+		for key in parameters:
+			if str(key) not in ["kind", "model", "connection_hash", "timeout_ms", "image_path", "stage", "text", "voice"]:
+				return "Invalid asset-generation request"
+		if not parameters.get("kind") in ["image_to_3d", "speech"] or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.connection_hash.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
+			return "Invalid asset-generation request"
+		if parameters.kind == "image_to_3d":
+			if not parameters.get("image_path") is String or str(parameters.image_path).strip_edges().is_empty() or not parameters.get("stage") in ["shape", "both"]:
+				return "Invalid image-to-3D request"
+		elif not parameters.get("text") is String or str(parameters.text).strip_edges().is_empty() or str(parameters.text).length() > 10000:
+			return "Invalid speech request"
+		if parameters.has("voice") and not parameters.get("voice") is String:
+			return "Invalid speech voice"
 		return ""
 	if operation == "resource_shape":
 		if parameters.size() != 4 or not parameters.get("description") is String or parameters.description.strip_edges().is_empty() or parameters.description.length() > 100000 or not parameters.get("model") is String or parameters.model.is_empty() or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 3600000:
@@ -583,6 +629,8 @@ func _make_worker(job: Dictionary) -> RefCounted:
 		return ModelWorker.new(manager) if is_instance_valid(manager) else null
 	if job.operation == "resource_shape":
 		return ResourceWorker.new(chat_service) if is_instance_valid(chat_service) else null
+	if job.operation == "asset_generate":
+		return AssetWorker.new(chat_service) if is_instance_valid(chat_service) else null
 	if job.operation == "chat_turn":
 		return ChatWorker.new(chat_service) if is_instance_valid(chat_service) else null
 	if job.operation == "attach_tree_to_scene":
@@ -675,6 +723,8 @@ func _job_title(job: Dictionary) -> String:
 		return label + " — Restore " + str(job.parameters.get("model", "coding model"))
 	if job.operation == "model_schedule":
 		return label + " — Schedule " + str(job.parameters.get("model", "specialized model"))
+	if job.operation == "asset_generate":
+		return label + " — " + str(job.parameters.get("kind", "asset")) + " " + str(job.parameters.get("model", ""))
 	if job.operation == "chat_turn":
 		return label + " — " + _preview(job.parameters.get("prompt", ""), 90)
 	if job.operation == "resource_shape":
@@ -971,6 +1021,11 @@ func _job_details_text(id: String) -> String:
 		lines.append("Role: " + str(job.parameters.get("role", "")))
 		lines.append("Model: " + str(job.parameters.get("model", "")))
 		lines.append("Restore warm set: " + str(job.parameters.get("restore", true)))
+	elif job.operation == "asset_generate":
+		lines.append("Kind: " + str(job.parameters.get("kind", "")))
+		lines.append("Model: " + str(job.parameters.get("model", "")))
+		if job.parameters.has("image_path"): lines.append("Reference: " + str(job.parameters.image_path))
+		if job.parameters.has("text"): lines.append("Text: " + _preview(job.parameters.text))
 	if _is_abandonable(job):
 		lines.append("Remote outcome: unknown. Skip abandons this job and releases the device lease.")
 	if job.state == "running":

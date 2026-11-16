@@ -65,9 +65,9 @@ const LEGACY_DEFINITIONS := [
 	{
 		"name": "append_job",
 		"title": "Append reviewed job",
-		"description": "Append a reviewed create_tree, attach_tree_to_scene, or model_schedule job. Acceptance is not completion.",
+		"description": "Append a reviewed create_tree, attach_tree_to_scene, model_schedule, or asset_generate job. Acceptance is not completion.",
 		"parameters": {"type": "object", "properties": {
-			"operation": {"type": "string", "enum": ["create_tree", "attach_tree_to_scene", "model_schedule"]},
+			"operation": {"type": "string", "enum": ["create_tree", "attach_tree_to_scene", "model_schedule", "asset_generate"]},
 			"destination": {"type": "string", "maxLength": 512},
 			"followup_destination": {"type": "string", "maxLength": 512},
 			"artifact_id": {"type": "string", "maxLength": 512},
@@ -78,6 +78,11 @@ const LEGACY_DEFINITIONS := [
 			"role": {"type": "string", "enum": ["coding_model", "image_model", "image_to_3d_model", "music_model", "speech_model"]},
 			"model": {"type": "string", "minLength": 1, "maxLength": 512},
 			"restore": {"type": "boolean"},
+			"kind": {"type": "string", "enum": ["image_to_3d", "speech"]},
+			"image_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"stage": {"type": "string", "enum": ["shape", "both"]},
+			"text": {"type": "string", "minLength": 1, "maxLength": 10000},
+			"voice": {"type": "string", "maxLength": 128},
 		}, "required": ["operation"], "additionalProperties": false},
 		"risk": "long_running",
 		"timeout_ms": 15000,

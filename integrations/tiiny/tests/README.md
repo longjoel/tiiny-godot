@@ -93,6 +93,8 @@ Story 12 adds `check_debugger.py`, which starts a real fixture scene, pauses at 
 
 Story 13 adds transaction-fixture coverage for `import_generated_model` (real generated GLB, mesh/material metadata, topology/PBR unverified, undo/redo, missing-downstream artifact preserves the stage-1 PNG hash) and `import_generated_audio` (real WAV, positive duration, loop unverified, undo/redo). It also asserts the registry advertises both import recipes and no sound-effect recipe.
 
+Story 13 also adds `check_asset_generation.py`, a live-device fixture for queued `asset_generate` jobs: real TTS via `/v1/audio/speech`, real shape-only image-to-3D via `/v1/3d/tasks`, imported AudioStream/MeshInstance3D verification, specialized-model unload/reload through `model_schedule` while the coding model stays resident, a confirmed missing-reference failure with lease release and successful retry, and a cancelled 3D job that becomes `interrupted` and requires acknowledgement. It requires the real Tiiny device and installed models.
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.

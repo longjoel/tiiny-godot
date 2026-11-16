@@ -1,6 +1,6 @@
 # 13 — Multi-model 3D and audio recipes
 
-Status: Accepted for the implemented artifact/import path. Real GLB/GLTF and WAV/OGG artifacts import with typed metadata, undo/redo, explicit unverified quality flags, and intermediate preservation on downstream failure. Live generator/device tests remain unverified. See [acceptance evidence](../evidence/13-acceptance.md).
+Status: Accepted. Queued `asset_generate` jobs call the live Tiiny speech/image-to-3D endpoints, import real WAV/GLB artifacts, protect the coding model during queued model swaps, and pass on-device success, failure/retry, and cancellation tests. Shape-only 3D and speech structural checks remain bounded as documented. See [acceptance evidence](../evidence/13-acceptance.md).
 
 Feature: Multi-model 3D and audio recipes
 
@@ -23,7 +23,7 @@ Compose specialized models into useful Godot asset workflows after their APIs an
 - [x] At least one supported speech or music recipe produces and imports a playable Godot audio asset.
 - [x] PBR maps, tileability, topology, and audio loopability are validated or explicitly marked unverified, never inferred from model names.
 - [x] Sound effects remain unavailable until a suitable model/API and tested recipe exist.
-- [x] Device tests cover success, downstream failure, cancellation, model swapping, and retry without duplicate output; model comparisons record evidence. Deterministic success/downstream-failure coverage exists; device cancellation/swapping/retry remain explicitly unverified.
+- [x] Device tests cover success, downstream failure, cancellation, model swapping, and retry without duplicate output; model comparisons record evidence. Live `check_asset_generation.py` passed TTS and 3D success, queued model swaps with the coding model retained, confirmed missing-reference failure with lease release, a successful retry, and interrupted cancellation requiring acknowledgement.
 
 ## Concrete scenarios
 
@@ -31,4 +31,4 @@ Use WS-08, WS-09, WS-10, JOB-01, and JOB-04 from [ACCEPTANCE_SCENARIOS.md](../AC
 
 ## Evidence and handoff
 
-Accepted for the implemented artifact/import path. Added `import_generated_model` (validated GLB/GLTF → instanced MeshInstance3D/material metadata) and `import_generated_audio` (validated WAV/OGG → AudioStreamPlayer with duration/channels), plus the recipe-owned `create_node_value` transaction op. The fixture generates a real GLB and WAV, verifies mesh/material and duration metadata, undo/redo, unverified topology/PBR/loop flags, absence of sound-effect recipes, and preservation of a stage-1 PNG hash when a downstream GLB is missing. Editor smoke, all 31 Jobs modes, debugger, and resource HTTP regressions pass. Live image-to-3D/speech/music generation and device cancellation/model-swapping/retry were not performed. See [acceptance evidence](../evidence/13-acceptance.md).
+Accepted. Added the queued `asset_generate` job (`image_to_3d`, `speech`) with live `/v1/3d/tasks` multipart submission/task polling and `/v1/audio/speech` WAV retrieval, GLB/WAV save/import, device lease/journaling, confirmed failure cleanup, and cancellation acknowledgement. `check_asset_generation.py` passed on-device with TTS, reference-image-to-3D, model swaps through `model_schedule` while retaining the coding model, missing-reference failure/retry, and interrupted cancellation. Deterministic GLB/WAV import, intermediate preservation, unverified quality flags, no sound-effects recipe, editor smoke, all 31 Jobs modes, and debugger regressions pass. Boundaries: shape-only 3D, structural audio validation, no installed music model. See [acceptance evidence](../evidence/13-acceptance.md).

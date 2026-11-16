@@ -1,36 +1,49 @@
 # Story 13 — acceptance evidence
 
-Story 13 is accepted for the implemented artifact/import path. The editor can validate and import real GLB/GLTF 3D artifacts and WAV/OGG audio into typed scene nodes, expose mesh/material and duration metadata, preserve stage-1 artifacts when a downstream import fails, and explicitly mark topology/PBR/loop quality as unverified. Live image-to-3D/speech/music **generator** calls were not performed.
+Story 13 is accepted with both the artifact/import path and the real generator-backed job path. A queued `asset_generate` job now calls the live Tiiny `/v1/audio/speech` and `/v1/3d/tasks` endpoints, saves and imports the resulting WAV/GLB, and is exercised on-device for success, model swapping, downstream failure/retry, and cancellation.
 
 Executable: `bin/godot.linuxbsd.editor.x86_64`, built from the story 13 working tree. No build or test remains running.
+
+## Live device combination
+
+- Device reachable at the configured address; coding model `ornith-ai/Ornith-1.5-35B-A3B-Turbo` (54 NPU units) was kept loaded throughout.
+- Speech model `Supertone/supertonic-3` (Text-to-Speech, 0 NPU).
+- Image-to-3D model `Tencent/Hunyuan3d-2.1` (Image-to-3D, 22 NPU).
+- TTS and 3D coexisted with the coding model at 76 NPU units. The fixture unloaded each specialized model and reloaded it through the queued `model_schedule` job (`restore=false`) before generating, verifying the coding model stayed resident.
+- The 3D run used `stage=shape`; PBR/texture and topology quality were not claimed.
 
 ## Criterion matrix
 
 | Criterion | Evidence |
 | --- | --- |
-| Reference-image-to-3D imports a real generated asset and exposes mesh/material results | `import_generated_model` validates a `res://` GLB/GLTF artifact, loads it as a `PackedScene`, instantiates it, requires at least one `MeshInstance3D`, reports mesh names and material surface classes, and adds the instance with one undo action. The transaction fixture generates a real GLB (box mesh + StandardMaterial3D) with `GLTFDocument`, waits for import, then imports it under `World/GeneratedProp` and verifies mesh presence, metadata, undo, and redo. |
-| Image-generation-to-3D graph passes validated artifacts and preserves intermediates | The fixture writes a real 2×2 PNG stage-1 artifact, records its SHA-256, and attempts `import_generated_model` with a missing downstream GLB. The import fails with `artifact_missing`, creates no node, and the PNG hash is unchanged. The subsequent valid GLB import proves the downstream stage works without regenerating the image. |
-| At least one speech/music recipe produces/imports a playable Godot audio asset | `import_generated_audio` validates a `res://` WAV/OGG asset, loads an `AudioStream`, reports duration (and WAV channel count), creates an `AudioStreamPlayer`, assigns the stream, and supports undo/redo. The fixture writes a real 220 Hz mono WAV, imports it as `GeneratedLine`, verifies a non-null stream and positive duration, and exercises undo/redo. Playback output was not auditioned. |
-| PBR maps, tileability, topology, and audio loopability are validated or explicitly marked unverified | 3D results include `validation: {topology: "unverified", pbr_maps: "unverified"}`. Audio results include `validation: {loop: "unverified"}`. The fixture rejects any result that claims verification. No model name is used to infer quality. |
-| Sound effects remain unavailable until a tested model/API exists | The registry has no `sound_effect`/`sound_effects` recipe; the fixture asserts their absence. Music/speech/image-to-3D remain `planned` generator recipes. |
-| Device tests cover success, downstream failure, cancellation, model swapping, and retry without duplicates | Not performed. No image-to-3D/speech/music device model was available or configured in this slice. The deterministic fixture covers successful 3D/audio import and a downstream missing-artifact failure with the intermediate preserved. Cancellation/model swapping/retry remain story 10/13 hardware follow-ups. |
+| A reference-image-to-3D job imports a real generated asset and exposes mesh/material results | The live fixture submits `asset_generate` with `kind=image_to_3d`, a real 512×512 reference PNG, and `stage=shape`. The queued worker POSTs multipart to `/v1/3d/tasks`, polls `/v1/3d/tasks/{id}`, decodes the returned base64 GLB, saves it under `res://tiiny_generated/`, waits for import, and reports the artifact. The fixture loads the GLB as a `PackedScene` and verifies a `MeshInstance3D`. |
+| An image-generation-to-3D graph passes validated artifacts between stages and preserves usable intermediates | The live run preserved the reference PNG while the 3D stage executed. The deterministic transaction fixture additionally records the stage-1 PNG SHA-256 and verifies it is unchanged when a downstream GLB import fails, then imports a valid GLB without regenerating the image. The generator job itself writes only new timestamped artifacts and never overwrites existing files. |
+| At least one supported speech/music recipe produces and imports a playable Godot audio asset | The live fixture submits `asset_generate` with `kind=speech`; the worker POSTs to `/v1/audio/speech`, saves the returned WAV under `res://tiiny_generated/`, waits for import, and reports the artifact. The fixture verifies `ResourceLoader.load(...) is AudioStream` with a positive duration. Music generation remains unavailable because no Music Generation model is installed; speech is the supported audio recipe. |
+| PBR maps, tileability, topology, and audio loopability are validated or explicitly marked unverified | `import_generated_model` results carry `validation: {topology: "unverified", pbr_maps: "unverified"}`; `import_generated_audio` carries `validation: {loop: "unverified"}`. The 3D device run used the shape-only stage and made no PBR claim. The audio run did not claim seamless looping. No quality was inferred from model names. |
+| Sound effects remain unavailable until a suitable model/API exists | No sound-effects recipe is registered; the transaction fixture asserts `sound_effect`/`sound_effects` are absent. Speech/music/image-to-3D generator roles remain distinct in `RESOURCE_RECIPES`. |
+| Device tests cover success, downstream failure, cancellation, model swapping, and retry without duplicate output | `check_asset_generation.py` passed on-device: TTS and 3D success with imported artifacts; specialized models unloaded and reloaded through `model_schedule` while the coding model stayed loaded; a missing reference image failed with a confirmed error and released the device lease; a following valid 3D job succeeded (retry); a running 3D job was cancelled, became `interrupted`, and required explicit acknowledgement/abandon before dispatch resumed. Submission keys and the persistent queue prevented duplicate jobs. |
 
 ## Runs
 
 | Check | Result | Log/report |
 | --- | --- | --- |
-| Transaction/registry/chat/action-card fixture | Passed real GLB import, mesh/material metadata, unverified flags, undo/redo, PNG intermediate preservation on missing GLB, real WAV import/duration, undo/redo, registry payload, and no sound-effects recipe | `/tmp/transactions-13e.log` |
-| Editor smoke + restart stages | Passed 11/11 stages | `/tmp/tiiny-story13-smoke.json` |
-| Jobs suite | Passed all 31 modes | `/tmp/jobs-13.log` |
-| Debugger fixture | Passed | `/tmp/debugger-13.log` |
-| Loopback resource HTTP fixture | Passed | `/tmp/resource-http-13.log` |
-| Build | Exit 0, `00:00:34.68` final incremental, same binary | `/tmp/tiiny-story13-build2.log` |
+| Live generator-backed asset fixture | Passed TTS, 3D, model swaps, confirmed failure/retry, and cancellation acknowledgement | `/tmp/asset-live3.log` |
+| Deterministic transaction/import fixture | Passed real fixture GLB/WAV import, metadata, undo/redo, unverified flags, intermediate preservation, and registry policy | `/tmp/transactions-13f.log` |
+| Jobs suite | Passed all 31 modes | `/tmp/jobs-13b.log` |
+| Editor smoke + restart stages | Passed 11/11 stages | `/tmp/tiiny-story13b-smoke.json` |
+| Debugger fixture | Passed | `/tmp/debugger-13b.log` |
+| Build | Exit 0, `00:00:29.89` final incremental, same binary | `/tmp/tiiny-asset-job-build2.log` |
+
+## Implementation
+
+- Queued operation `asset_generate` in `editor/tiiny/jobs/panel.gd`, with `AssetWorker` mapping and validation.
+- `poll_asset_job`/cancellation/finalization in `editor/tiiny_ai_dock_source.h`: device lease + `begin_device_request`, multipart 3D submission, task polling, speech POST, GLB/WAV save, import wait, confirmed failure cleanup, and cancellation uncertainty.
+- `append_job` schema and dock arguments expose image-to-3D and speech generation; model roles come from Editor Settings.
+- Existing `import_generated_model`/`import_generated_audio` recipes remain available for artifacts imported later.
 
 ## Remaining boundaries
 
-- The 3D/audio artifacts are real but fixture-generated, not produced by on-device image-to-3D, speech, or music models. Generator/model-quality verification remains open.
-- No device run covered success, cancellation, model swapping, or retry for the multi-model graph.
-- 3D validation checks loadability and mesh presence; topology, PBR maps, scale, and tileability are not inferred as correct.
-- Audio validation checks loadability, duration, and WAV channel count; playback, seamless looping, music/speech classification, and semantic quality are unverified.
-- No sound-effects recipe is exposed.
-- The importer supports GLB/GLTF and WAV/OGG only.
+- 3D device evidence used `stage=shape`. PBR texture generation, topology quality, scale, and tileability were not evaluated.
+- Speech playback was validated structurally (AudioStream + duration); semantic quality, voice cloning, and seamless looping were not auditioned.
+- Music generation has no installed/tested model, so it remains unavailable rather than being simulated.
+- The live fixture requires the real device and leaves the original model set restored (specialized models unloaded at the end).

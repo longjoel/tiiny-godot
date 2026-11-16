@@ -1,6 +1,6 @@
 # Story 13 implementation plan — multi-model 3D and audio recipes
 
-Status: Accepted for the implemented artifact/import path. Generator/device verification remains open.
+Status: Accepted. Queued generator jobs call the live Tiiny speech and image-to-3D endpoints; deterministic import and live device success/failure/retry/cancellation/model-swap checks pass.
 
 Parent: [13 — Multi-model 3D and audio recipes](../work-items/13-assets-composition.md).
 
@@ -46,6 +46,17 @@ A production image-to-3D adapter must use the same artifact path and preserve fa
 - Import recipes are executable transaction tools.
 - No sound-effects recipe is listed.
 - Never infer topology, PBR, tileability, or loopability from a model name; report unverified unless a validator measured it.
+
+## Live generator jobs
+
+New queued `asset_generate` operation:
+
+- `kind=image_to_3d`: validate a reference image and `stage` (`shape`/`both`); POST multipart to `/v1/3d/tasks`; poll `/v1/3d/tasks/{id}`; decode the completed base64 GLB; save a new timestamped file; wait for import.
+- `kind=speech`: validate text; POST JSON to `/v1/audio/speech`; save the returned WAV; wait for import.
+- Both use the shared device lease/journal, confirmed-failure cleanup, cancellation uncertainty, and `model_schedule`-driven specialized-model swaps that retain the coding model.
+- `append_job` schema/dock arguments expose both kinds; model roles come from Editor Settings.
+
+The on-device fixture unloads/reloads TTS and Hunyuan3D through `model_schedule` while Ornith stays loaded, runs TTS and a shape-only 3D task, verifies imported AudioStream/MeshInstance3D, injects a missing-reference failure and retry, and cancels a running 3D task before acknowledging the interrupted outcome.
 
 ## Verification
 
