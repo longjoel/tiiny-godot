@@ -715,7 +715,15 @@ void CreateDialog::select_type(const String &p_type, bool p_center_on_item) {
 	search_options->scroll_to_item(to_select, p_center_on_item);
 
 	help_bit->parse_symbol("class|" + p_type + "|");
-	bool can_generate = ClassDB::is_parent_class(base_type, "Resource") && get_selected_type() == "ConvexPolygonShape2D";
+	bool can_generate = false;
+	if (ClassDB::is_parent_class(base_type, "Resource")) {
+		Node *dock = get_tree()->get_first_node_in_group("tiiny_ai_editor_dock");
+		if (dock && dock->has_method("supports_ai_resource_type")) {
+			can_generate = dock->call("supports_ai_resource_type", get_selected_type()).operator bool();
+		} else {
+			can_generate = get_selected_type() == "ConvexPolygonShape2D";
+		}
+	}
 	ai_prompt->set_editable(can_generate);
 	ai_prompt->set_placeholder(can_generate ? TTR("Describe the resource to generate, or leave blank for normal creation.") : TTR("AI generation is not available for this resource type."));
 

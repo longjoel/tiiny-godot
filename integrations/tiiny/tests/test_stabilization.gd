@@ -279,6 +279,19 @@ func _http(plugin: EditorPlugin, manager: Node, dock: Control) -> String:
 			while (not FileAccess.file_exists(path + ".import") or filesystem.is_scanning() or filesystem.is_importing()) and Time.get_ticks_msec() < deadline:
 				await plugin.get_tree().create_timer(0.05).timeout
 			if not ResourceLoader.load(path) is Texture2D: return "Generated PNG did not import as a Godot texture."
+			if not dock._image_import_ready(path): return "Generated PNG import readiness was not confirmed."
+			var bogus := "res://tiiny_generated/failed_import_fixture.png"
+			var bogus_file := FileAccess.open(bogus, FileAccess.WRITE)
+			if bogus_file == null: return "Could not create the failed-import fixture."
+			bogus_file.store_string("not a png")
+			bogus_file.close()
+			EditorInterface.get_resource_filesystem().scan()
+			var bogus_deadline := Time.get_ticks_msec() + 5000
+			while EditorInterface.get_resource_filesystem().is_scanning() or EditorInterface.get_resource_filesystem().is_importing():
+				if Time.get_ticks_msec() > bogus_deadline: break
+				await plugin.get_tree().create_timer(0.05).timeout
+			if dock._image_import_ready(bogus): return "A failed image import was reported as ready."
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(bogus))
 		else:
 			if not result.begins_with("Error:"): return "Invalid HTTP image accepted."
 	var result: Array = []

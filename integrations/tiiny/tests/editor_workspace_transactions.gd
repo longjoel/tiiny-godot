@@ -218,6 +218,24 @@ func _run() -> void:
 	var ledger: Dictionary = registry.ledger_entry(through_registry, "turn-fixture")
 	if ledger.turn != "turn-fixture" or not ledger.ok or ledger.call != "call-registry":
 		_fail("Ledger entry is wrong: " + str(ledger)); return
+	var recipes: Dictionary = registry.resource_recipes()
+	if str(recipes.get("convex_polygon_shape", {}).get("status", "")) != "available" or str(recipes.get("convex_polygon_shape", {}).get("output", "")) != "ConvexPolygonShape2D":
+		_fail("Convex polygon recipe metadata is wrong: " + str(recipes.get("convex_polygon_shape", {}))); return
+	if str(recipes.get("image_generation", {}).get("status", "")) != "available" or str(recipes.get("image_generation", {}).get("output", "")) != "Texture2D":
+		_fail("Image recipe metadata is wrong: " + str(recipes.get("image_generation", {}))); return
+	for planned in ["image_to_3d", "music_generation", "speech_generation"]:
+		if str(recipes.get(planned, {}).get("status", "")) != "planned":
+			_fail("Planned recipe is not marked planned: " + planned); return
+	if str(recipes.get("image_to_3d", {}).get("output", "")) != "Mesh" or str(recipes.get("music_generation", {}).get("output", "")) != "AudioStream":
+		_fail("Planned recipe output types are wrong: " + str(recipes)); return
+	if not registry.supports_resource_type("ConvexPolygonShape2D") or not registry.supports_resource_type("Texture2D"):
+		_fail("Available recipe resource types are not supported"); return
+	if registry.supports_resource_type("Image") or registry.supports_resource_type("Mesh") or registry.supports_resource_type("AudioStream") or registry.supports_resource_type("StandardMaterial3D"):
+		_fail("Planned or untyped resource was reported supported"); return
+	if Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) in ["image_to_3d", "music_generation", "speech_generation"]):
+		_fail("Planned recipe was exposed as an executable tool"); return
+	if not dock.supports_ai_resource_type("ConvexPolygonShape2D") or dock.supports_ai_resource_type("Image"):
+		_fail("Dock resource eligibility disagrees with the registry"); return
 
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
@@ -279,6 +297,10 @@ func _run() -> void:
 	var file_card: Control = chat.action_cards_state().back().card
 	if file_card == null or file_card.find_child("ActionFileNote", true, false) == null or file_card.find_child("ActionUndo", true, false) != null:
 		_fail("File action card incorrectly offers scene undo"); return
+	chat._append_action_card({"ok": true, "tool": "generate_image", "summary": "Generated and imported res://tiiny_generated/image.png.", "data": {"path": "res://tiiny_generated/image.png"}, "affected": [{"kind": "resource", "path": "res://tiiny_generated/image.png", "class": "Texture2D"}]}, {"prompt": "fixture"})
+	var image_card: Control = chat.action_cards_state().back().card
+	if image_card == null or image_card.find_child("ActionOpen", true, false) == null or image_card.find_child("ActionUndo", true, false) != null:
+		_fail("Generated image card has no artifact link or falsely offers undo"); return
 	chat.size = Vector2(320, 600)
 	await get_tree().process_frame
 	await get_tree().process_frame

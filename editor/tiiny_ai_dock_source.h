@@ -677,13 +677,22 @@ func _ensure_workspace_registry() -> bool:
 	workspace_registry.set_handler("get_job_status", Callable(self, "_registry_job_status"))
 	return true
 
+func supports_ai_resource_type(type: String) -> bool:
+	if _ensure_workspace_registry():
+		return workspace_registry.supports_resource_type(type)
+	return type == "ConvexPolygonShape2D"
+
 func _tool_text_result(text: String) -> Dictionary:
 	if text.begins_with("Error:"):
 		return {"ok": false, "summary": text.trim_prefix("Error:").strip_edges(), "error": {"code": "execution_failed", "message": text.trim_prefix("Error:").strip_edges()}}
 	return {"ok": true, "summary": text, "data": {}}
 
 func _registry_generate_image(arguments: Dictionary, _context: Dictionary) -> Dictionary:
-	return _tool_text_result(await _generate_image_tool(str(arguments.get("prompt", ""))))
+	var text := await _generate_image_tool(str(arguments.get("prompt", "")))
+	if text.begins_with("Generated image: "):
+		var path := text.trim_prefix("Generated image: ")
+		return {"ok": true, "summary": "Generated and imported " + path + ".", "data": {"path": path}, "affected": [{"kind": "resource", "path": path, "class": "Texture2D"}]}
+	return _tool_text_result(text)
 
 func _registry_create_gdscript(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var result := _tool_text_result(_create_script_tool(str(arguments.get("path", "")), str(arguments.get("source", ""))))
@@ -1102,8 +1111,18 @@ func _generate_image_tool(description: String) -> String:
 	var path := folder.path_join("image_%d.png" % Time.get_ticks_usec())
 	if FileAccess.file_exists(path) or image.save_png(path) != OK:
 		return "Error: Could not save the generated image."
-	EditorInterface.get_resource_filesystem().scan()
-	return "Generated image: " + path
+	var filesystem := EditorInterface.get_resource_filesystem()
+	filesystem.scan()
+	var import_deadline := Time.get_ticks_msec() + 10000
+	while Time.get_ticks_msec() < import_deadline:
+		if _image_import_ready(path):
+			return "Generated image: " + path
+		await get_tree().create_timer(0.05).timeout
+	return "Error: The generated image was saved at %s but did not import as a Godot resource." % path
+
+func _image_import_ready(path: String) -> bool:
+	var filesystem := EditorInterface.get_resource_filesystem()
+	return FileAccess.file_exists(path + ".import") and not filesystem.is_scanning() and not filesystem.is_importing() and ResourceLoader.exists(path)
 
 func generate_shape_for_dialog(description: String, callback: Callable) -> void:
 	if not callback.is_valid():
