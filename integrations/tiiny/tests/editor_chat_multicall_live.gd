@@ -35,7 +35,7 @@ func _run() -> void:
 	if icon == null: _fail("Icon fixture is missing"); return
 	EditorInterface.get_selection().clear()
 	EditorInterface.get_selection().add_node(icon)
-	dock.prompt.text = "right now this thing just kind of ping pongs around randomly. every time it hits the bottom of the window, I want it to pick up some velocity."
+	dock.prompt.text = FileAccess.get_file_as_string("res://prompt.txt").strip_edges()
 	await dock._generate()
 	var latest: Dictionary = {}
 	var deadline := Time.get_ticks_msec() + 300000
@@ -49,10 +49,23 @@ func _run() -> void:
 	print("Live chat job state: ", latest.get("state", ""), " result=", JSON.stringify(latest.get("result", {})))
 	print("Live chat ledger: ", JSON.stringify(dock.get("turn_ledger")))
 	print("Live chat history: ", dock.history_text().replace("\n", " | "))
+	print("Live chat messages: ", JSON.stringify(dock.get("turn_messages")))
+	print("Live chat rounds: ", dock.get("tool_rounds"), " calls=", dock.get("tool_call_count"))
 	if latest.get("state") != "completed": _fail("Live multi-call chat failed: " + str(latest)); return
 	if str(latest.get("result", {}).get("error", "")).contains("more than one tool call"):
 		_fail("Multi-call rejection still occurred"); return
 	var result_text := str(latest.get("result", {}).get("response", ""))
 	if result_text.strip_edges().is_empty(): _fail("Live chat completed without a response"); return
+	var edited := FileAccess.get_file_as_string("res://bounce_script.gd")
+	var capture := FileAccess.open("/tmp/tiiny-live-edited.gd", FileAccess.WRITE)
+	if capture != null:
+		capture.store_string(edited)
+		capture.close()
+	var requested := FileAccess.get_file_as_string("res://prompt.txt").strip_edges().to_lower()
+	if requested.contains("spin") and not edited.contains("rotation +="):
+		_fail("Live spin edit did not update the script: " + edited); return
+	if requested.contains("velocity") and not edited.contains("velocity"):
+		_fail("Live velocity edit did not preserve velocity logic: " + edited); return
+	print("Live edited script saved to /tmp/tiiny-live-edited.gd")
 	print("Live multi-call chat passed.")
 	get_tree().quit(0)

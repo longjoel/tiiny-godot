@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
 root = Path(__file__).resolve().parents[3]
@@ -19,9 +20,11 @@ def make_project(project: Path) -> None:
     )
     (addon / "plugin.cfg").write_text('[plugin]\nname="Multicall Live"\ndescription="Fixture"\nauthor="Tests"\nversion="1"\nscript="plugin.gd"\n')
     shutil.copyfile(root / "integrations/tiiny/tests/editor_chat_multicall_live.gd", addon / "plugin.gd")
-    (project / "bounce_script.gd").write_text(
-        'extends Sprite2D\n\nvar velocity := Vector2(80, 110)\n\nfunc _process(delta: float) -> void:\n\tposition += velocity * delta\n\tif position.x < 0 or position.x > 640:\n\t\tvelocity.x = -velocity.x\n\tif position.y < 0 or position.y > 480:\n\t\tvelocity.y = -velocity.y\n'
-    )
+    source = Path("/home/longjoel/new-game-project/bounce_script.gd")
+    script = source.read_text() if source.exists() else 'extends Sprite2D\n\nvar velocity := Vector2(80, 110)\n'
+    (project / "bounce_script.gd").write_text(script)
+    prompt = sys.argv[1] if len(sys.argv) > 1 else "right now this thing just kind of ping pongs around randomly. every time it hits the bottom of the window, I want it to pick up some velocity."
+    (project / "prompt.txt").write_text(prompt)
     (project / "game.tscn").write_text(
         '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://bounce_script.gd" id="1"]\n\n'
         '[node name="Root" type="Node2D"]\n\n'
@@ -43,6 +46,7 @@ with tempfile.TemporaryDirectory(prefix="tiiny-multicall-live-") as directory:
         timeout=420,
     )
     output = result.stdout + result.stderr
+    Path("/tmp/tiiny-chat-live-full.log").write_text(output)
     print(output[-12000:])
     if result.returncode or "Live multi-call chat passed." not in output or "SCRIPT ERROR" in output:
         raise SystemExit(result.returncode or 1)

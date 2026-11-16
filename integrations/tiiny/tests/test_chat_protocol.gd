@@ -93,7 +93,7 @@ func run(plugin: EditorPlugin) -> String:
 		if FileAccess.file_exists("res://invalid_call.gd"): return "Malformed tool call created a file before validation."
 		if dock.submissions.size() != before or not _idle(dock) or not await _recover(dock): return "Malformed tool call continued or prevented recovery."
 	_begin(dock)
-	dock.tool_rounds = 6
+	dock.tool_rounds = 10
 	await _tool(dock, [_call("limit", "res://invalid_call.gd")])
 	if FileAccess.file_exists("res://invalid_call.gd") or not _idle(dock): return "Tool round limit did not stop execution."
 	# A valid unknown tool returns a matched tool error, never a mutation.
@@ -125,6 +125,16 @@ func run(plugin: EditorPlugin) -> String:
 	if multi_results.size() != 2 or multi_results[0].get("tool_call_id") != "multi-a" or multi_results[1].get("tool_call_id") != "multi-b": return "Multi-call results were not matched in order."
 	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "Multi completed"}))
 	if not _idle(dock) or dock.conversation.back().get("content") != "Multi completed": return "Multi-call final answer failed."
+	# Hermes-style text tool calls are parsed only when the whole response is markup.
+	_begin(dock)
+	var text_call := "<tool_call>\n<function=create_gdscript>\n<parameter=path>\nres://text_call.gd\n</parameter>\n<parameter=source>\nextends Node\n</parameter>\n<parameter=reason>\ntext call fixture\n</parameter>\n</function>\n</tool_call>"
+	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": text_call}))
+	if not FileAccess.file_exists("res://text_call.gd"): return "Hermes-style text tool call was not executed."
+	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "Text call completed"}))
+	if not _idle(dock) or dock.conversation.back().get("content") != "Text call completed": return "Text tool-call continuation failed."
+	_begin(dock)
+	await dock._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), _reply({"role": "assistant", "content": "<tool_call>not a valid call</tool_call>"}))
+	if FileAccess.file_exists("res://text_invalid.gd") or not _idle(dock): return "Malformed text tool call was executed or locked controls."
 	# Successful mutation remains visible and in context after a continuation error.
 	_begin(dock)
 	await _tool(dock, [_call("create", "res://completed.gd")])

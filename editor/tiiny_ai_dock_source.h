@@ -46,6 +46,7 @@ var turn_ledger: Array[Dictionary] = []
 var action_cards: Array[Dictionary] = []
 var turn_id := ""
 var tool_call_count := 0
+var turn_failed_calls := {}
 var turn_scene_context: Dictionary = {}
 var device_lease := ""
 var device_lease_owner: Node
@@ -513,7 +514,7 @@ func _check_context_budget(payload: Dictionary) -> bool:
 			for part in content:
 				if part is Dictionary and part.get("type") == "text": text_bytes += str(part.get("text", "")).to_utf8_buffer().size()
 		text_bytes += JSON.stringify(message.get("tool_calls", [])).to_utf8_buffer().size() + 32
-	var output_tokens := mini(1024, budget / 4)
+	var output_tokens := clampi(budget / 8, 1024, 4096)
 	payload["max_tokens"] = output_tokens
 	if text_bytes + output_tokens + 512 <= budget: return true
 	send_button.disabled = false
@@ -1011,6 +1012,11 @@ func _image_model_warm() -> bool:
 	var image_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/image_model"))
 	return not image_id.is_empty() and manager.snapshot.get("loaded", {}).has(image_id)
 
+func _scene_has_class(root: Node, type_name: String) -> bool:
+	if root == null: return false
+	if root.is_class(type_name): return true
+	return not root.find_children("*", type_name, true, false).is_empty()
+
 func _refresh_registry_availability() -> void:
 	if not _ensure_workspace_registry(): return
 	var root := EditorInterface.get_edited_scene_root()
@@ -1019,20 +1025,22 @@ func _refresh_registry_availability() -> void:
 	var workspace_reason := "Open a saved scene to use workspace tools." if not saved else ("Save the dirty scene before mutating." if dirty else "")
 	var jobs_available: bool = jobs_service != null and bool(jobs_service.get("available"))
 	var image_available := _image_model_warm()
-	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
-	var model_tools := true
-	if manager != null and manager.get("connected") and manager.has_method("is_ready"):
-		model_tools = manager.is_ready()
 	var values := {}
 	for name in ["get_workspace_context", "get_scene_tree", "get_selection", "inspect_node", "inspect_resource", "list_signals"]:
-		values[name] = {"available": saved and model_tools, "reason": workspace_reason if not (saved and model_tools) else ""}
-	values["get_scene_revision"] = {"available": saved and not dirty and model_tools, "reason": workspace_reason if not saved else ("Save the scene before requesting its revision." if dirty else "")}
-	values["add_rectangular_collision_shape"] = {"available": saved and not dirty and model_tools, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
-	values["generate_image"] = {"available": image_available and model_tools, "reason": "Image generation is unavailable: no warm image model." if not image_available else ""}
-	values["create_gdscript"] = {"available": model_tools, "reason": "" if model_tools else "The coding model is not ready or does not support tool use."}
+		values[name] = {"available": saved, "reason": workspace_reason if not saved else ""}
+	values["get_scene_revision"] = {"available": saved and not dirty, "reason": workspace_reason if not saved else ("Save the scene before requesting its revision." if dirty else "")}
+	var has_light := _scene_has_class(root, "Light2D") or _scene_has_class(root, "Light3D")
+	var has_physics := _scene_has_class(root, "CollisionObject2D")
+	values["add_rectangular_collision_shape"] = {"available": saved and not dirty and has_physics, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No CollisionObject2D is present for a collision shape." if not has_physics else ""))}
+	values["add_torch_flicker"] = {"available": saved and not dirty and has_light, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No Light2D or Light3D is present for a flicker animation." if not has_light else ""))}
+	values["assign_slippery_surface"] = {"available": saved and not dirty and has_physics, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else ("No CollisionObject2D is present for a physics material." if not has_physics else ""))}
+	values["import_generated_model"] = {"available": saved and not dirty, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
+	values["import_generated_audio"] = values["import_generated_model"]
+	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no warm image model." if not image_available else ""}
+	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]
 	values["replace_in_gdscript"] = values["create_gdscript"]
-	values["append_job"] = {"available": jobs_available and model_tools, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
+	values["append_job"] = {"available": jobs_available, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
 	values["get_job_status"] = values["append_job"]
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
 	var debug_state: Dictionary = {}
@@ -1040,8 +1048,9 @@ func _refresh_registry_availability() -> void:
 		debug_state = debugger_node.call("tiiny_debugger_state")
 	var debug_session := debug_available and bool(debug_state.get("session_active", false))
 	var debug_paused := debug_session and bool(debug_state.get("breaked", false))
+	var debug_visible := debug_session or debug_paused
 	for name in ["get_debugger_state", "get_stack_frames", "get_stack_variables", "select_stack_frame", "get_runtime_tree", "inspect_runtime_node", "set_breakpoint", "remove_breakpoint"]:
-		values[name] = {"available": debug_available, "reason": "" if debug_available else "The editor debugger bridge is unavailable."}
+		values[name] = {"available": debug_available and debug_visible, "reason": "No active debugger session." if debug_available and not debug_visible else ("The editor debugger bridge is unavailable." if not debug_available else "")}
 	values["get_stack_frames"] = {"available": debug_paused, "reason": "Execution is not paused." if debug_available and not debug_paused else ("The editor debugger bridge is unavailable." if not debug_available else "")}
 	values["get_stack_variables"] = values["get_stack_frames"]
 	values["select_stack_frame"] = values["get_stack_frames"]
@@ -1055,6 +1064,7 @@ func _refresh_registry_availability() -> void:
 func _begin_turn() -> void:
 	turn_id = "turn-" + Crypto.new().generate_random_bytes(8).hex_encode()
 	turn_ledger.clear()
+	turn_failed_calls.clear()
 	tool_call_count = 0
 	turn_scene_context = {}
 	if _ensure_workspace_registry():
@@ -1078,6 +1088,7 @@ func _send_chat(system: String, user: String) -> void:
 		tool_rounds = 0
 		tool_call_ids.clear()
 		tool_call_count = 0
+		turn_failed_calls.clear()
 		turn_ledger.clear()
 		messages.append_array(turn_messages)
 	else:
@@ -1198,6 +1209,15 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			send_button.disabled = false
 			_set_status("The response contained malformed tool calls.")
 			return
+		if calls.is_empty() and choice.message.get("content") is String:
+			var text_calls := _text_tool_calls(str(choice.message.content))
+			if not text_calls.is_empty():
+				choice.message["tool_calls"] = text_calls
+				choice.message["content"] = ""
+				calls = text_calls
+			elif str(choice.message.content).contains("<tool_call"):
+				_protocol_stop("The model emitted an unstructured tool call; no action was executed.")
+				return
 		if not calls.is_empty():
 			var protocol_reason := ""
 			var parsed_calls: Array[Dictionary] = []
@@ -1217,7 +1237,7 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
 					protocol_reason = "The model returned invalid tool arguments; no tool was executed."
 					break
-				if tool_rounds >= 6 or tool_call_count + parsed_calls.size() >= 8:
+				if tool_rounds >= 10 or tool_call_count + parsed_calls.size() > 16:
 					protocol_reason = "The tool limit was reached; no further tool was executed."
 					break
 				seen_calls[call.id] = true
@@ -1233,6 +1253,10 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				var call_id := str(parsed_call.id)
 				var function_name := str(parsed_call.name)
 				var arguments: Dictionary = parsed_call.arguments
+				var call_signature := function_name + "\n" + JSON.stringify(arguments)
+				if turn_failed_calls.has(call_signature):
+					_protocol_stop("The model repeated an identical failed tool call; the turn was stopped.")
+					return
 				tool_call_ids.append(call_id)
 				_set_status("Running tool %d of %d…" % [index + 1, parsed_calls.size()])
 				var tool_result: Dictionary
@@ -1258,6 +1282,8 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 					tool_result = _tool_text_result(fallback)
 					serialized = fallback
 				turn_messages.append({"role": "tool", "tool_call_id": call_id, "content": serialized})
+				if not bool(tool_result.get("ok", false)):
+					turn_failed_calls[call_signature] = true
 				# Preserve actual tool effects even when the continuation fails.
 				conversation = turn_messages.duplicate(true)
 				_append_action_card(tool_result, arguments)
@@ -1271,6 +1297,10 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 	if not choice is Dictionary or not choice.get("message") is Dictionary or not choice["message"].get("content") is String:
 		send_button.disabled = false
 		_set_status("The response did not contain text.")
+		return
+	var finish_reason := str(choice.get("finish_reason", ""))
+	if finish_reason == "length":
+		_protocol_stop("The model response was truncated before a final answer or tool call; the turn was stopped.")
 		return
 	var content: String = choice["message"]["content"]
 	if content.strip_edges().is_empty():
@@ -1292,6 +1322,28 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			conversation = turn_messages.duplicate(true)
 		_append_message("assistant", content)
 		_set_status("")
+
+func _text_tool_calls(content: String) -> Array:
+	var text := content.strip_edges()
+	if not text.begins_with("<tool_call") or not text.ends_with("</tool_call>"): return []
+	var block_re := RegEx.new()
+	block_re.compile("(?s)<tool_call>\\s*<function=([A-Za-z0-9_]+)>\\s*(.*?)\\s*</function>\\s*</tool_call>")
+	var parameter_re := RegEx.new()
+	parameter_re.compile("(?s)<parameter=([A-Za-z0-9_]+)>\\s*(.*?)\\s*</parameter>")
+	var calls: Array = []
+	var leftover := text
+	for block in block_re.search_all(text):
+		var function_name := block.get_string(1)
+		var arguments := {}
+		for parameter in parameter_re.search_all(block.get_string(2)):
+			var raw := parameter.get_string(2)
+			var parser := JSON.new()
+			var parsed: Variant = parser.data if parser.parse(raw) == OK else null
+			arguments[parameter.get_string(1)] = parsed if parsed != null else raw
+		calls.append({"id": "text-" + Crypto.new().generate_random_bytes(8).hex_encode(), "type": "function", "function": {"name": function_name, "arguments": JSON.stringify(arguments)}})
+		leftover = leftover.replace(block.get_string(0), "")
+	if calls.is_empty() or not leftover.strip_edges().is_empty(): return []
+	return calls
 
 func _tool_display(name: String, result: String) -> String:
 	if result.begins_with("Error:"):
