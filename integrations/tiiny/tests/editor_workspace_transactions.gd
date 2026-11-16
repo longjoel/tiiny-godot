@@ -187,11 +187,99 @@ func _run() -> void:
 	if _error_code(incompatible) != "type_mismatch" or root.get_node_or_null("Enemy/BadShape") != null or _history_count(root) != conflict_history:
 		_fail("Incompatible resource created partial state: " + str(incompatible)); return
 
+	var torch: Node = root.get_node_or_null("Torch")
+	if torch == null: _fail("Torch fixture node is missing"); return
+	var existing_player := AnimationPlayer.new()
+	existing_player.name = "Existing"
+	torch.add_child(existing_player)
+	existing_player.owner = root
+	var existing_library := AnimationLibrary.new()
+	existing_library.add_animation("idle", Animation.new())
+	existing_player.add_animation_library("user", existing_library)
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save the torch fixture"); return
+	root = EditorInterface.get_edited_scene_root()
+	var torch_history := _history_count(root)
+	var flicker: Dictionary = transactions.execute("add_torch_flicker", {"parent_path": "Torch", "duration": 0.8, "min_energy": 0.3, "max_energy": 1.0, "steps": 4})
+	if not flicker.get("ok", false) or _history_count(root) != torch_history + 1:
+		_fail("Torch flicker recipe failed: " + str(flicker)); return
+	var torch_player: AnimationPlayer = root.get_node_or_null("Torch/AnimationPlayer")
+	if torch_player == null or torch_player.autoplay != &"tiiny/flicker":
+		_fail("Torch flicker did not create an autoplay AnimationPlayer: " + str(torch_player)); return
+	var library: AnimationLibrary = torch_player.get_animation_library("tiiny")
+	if library == null or not library.has_animation("flicker"):
+		_fail("Torch flicker library/animation is missing"); return
+	var animation: Animation = library.get_animation("flicker")
+	if animation == null or animation.get_track_count() != 1 or animation.track_get_key_count(0) != 4:
+		_fail("Torch flicker track/key count is wrong: " + str(animation)); return
+	if str(animation.track_get_path(0)) != "Light2D:energy":
+		_fail("Torch flicker track path is wrong: " + str(animation.track_get_path(0))); return
+	var preserved_player: AnimationPlayer = root.get_node_or_null("Torch/Existing")
+	if preserved_player == null or not preserved_player.has_animation_library("user") or not preserved_player.get_animation_library("user").has_animation("idle"):
+		_fail("Torch flicker did not preserve the existing animation library"); return
+	var torch_undo := _history(root)
+	if not torch_undo[2].undo() or root.get_node_or_null("Torch/AnimationPlayer") != null:
+		_fail("Torch flicker undo did not remove the AnimationPlayer"); return
+	if not torch_undo[2].redo() or root.get_node_or_null("Torch/AnimationPlayer") == null:
+		_fail("Torch flicker redo did not restore the AnimationPlayer"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after torch redo"); return
+	root = EditorInterface.get_edited_scene_root()
+	var no_light: Dictionary = transactions.execute("add_torch_flicker", {"parent_path": "Player"})
+	if _error_code(no_light) != "target_missing" or root.get_node_or_null("Player/AnimationPlayer") != null:
+		_fail("Torch flicker did not reject a target without a light: " + str(no_light)); return
+
+	var platform: StaticBody2D = root.get_node_or_null("Platform")
+	if platform == null: _fail("Platform fixture node is missing"); return
+	platform.physics_material_override = null
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save the physics fixture"); return
+	root = EditorInterface.get_edited_scene_root()
+	platform = root.get_node_or_null("Platform")
+	var slippery_history := _history_count(root)
+	var slippery: Dictionary = transactions.execute("assign_slippery_surface", {"target_path": "Platform", "friction": 0.02, "bounce": 0.1})
+	if not slippery.get("ok", false) or _history_count(root) != slippery_history + 1:
+		_fail("Slippery-surface recipe failed: " + str(slippery)); return
+	var material: PhysicsMaterial = platform.physics_material_override
+	if material == null or absf(material.friction - 0.02) > 0.0001 or absf(material.bounce - 0.1) > 0.0001 or material.rough or material.absorbent:
+		_fail("Slippery PhysicsMaterial values are wrong: " + str(material)); return
+	var slippery_undo := _history(root)
+	if not slippery_undo[2].undo() or platform.physics_material_override != null:
+		_fail("Slippery-surface undo did not restore the previous material"); return
+	if not slippery_undo[2].redo() or not platform.physics_material_override is PhysicsMaterial:
+		_fail("Slippery-surface redo did not restore the material"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before shared-material test"); return
+	root = EditorInterface.get_edited_scene_root()
+	platform = root.get_node_or_null("Platform")
+	var shared := PhysicsMaterial.new()
+	shared.friction = 0.9
+	platform.physics_material_override = shared
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save the shared-material fixture"); return
+	root = EditorInterface.get_edited_scene_root()
+	platform = root.get_node_or_null("Platform")
+	var shared_history := _history_count(root)
+	var replaced: Dictionary = transactions.execute("assign_slippery_surface", {"target_path": "Platform", "friction": 0.03})
+	if not replaced.get("ok", false) or not str(replaced.get("summary", "")).contains("previous PhysicsMaterial") or absf(shared.friction - 0.9) > 0.0001:
+		_fail("Slippery-surface replacement did not preserve/report the previous resource: " + str(replaced)); return
+	if platform.physics_material_override == shared or _history_count(root) != shared_history + 1:
+		_fail("Slippery-surface replacement did not assign an owned material"); return
+	var shared_undo := _history(root)
+	if not shared_undo[2].undo() or platform.physics_material_override != shared:
+		_fail("Slippery-surface undo did not restore the shared material reference"); return
+	var unsupported: Dictionary = transactions.execute("assign_slippery_surface", {"target_path": "Torch"})
+	if _error_code(unsupported) != "invalid_target":
+		_fail("Slippery-surface did not reject a non-physics target: " + str(unsupported)); return
+
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	for definition in registry.definitions():
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface"]:
+		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
+			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
 	var bad_schema: Dictionary = await registry.execute("add_rectangular_collision_shape", {"parent_path": "Enemy", "width": "wide", "height": 1})
 	if _error_code(bad_schema) != "invalid_arguments":
 		_fail("Registry schema accepted a string width: " + str(bad_schema)); return
@@ -247,8 +335,9 @@ func _run() -> void:
 	chat.pending_prompt = "Add a rectangular collision shape to Enemy, 32 wide and 48 tall."
 	chat.pending_key = "fixture-key"
 	chat.pending_model = "fixture-model"
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 16384)
 	chat._start_answer("code")
-	if chat.submissions.is_empty(): _fail("Registry chat did not submit a payload"); return
+	if chat.submissions.is_empty(): _fail("Registry chat did not submit a payload: " + chat.status.text); return
 	var payload: Dictionary = chat.submissions.back()
 	if not payload.get("tools") is Array or not Array(payload.tools).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry chat omitted the recipe tool"); return

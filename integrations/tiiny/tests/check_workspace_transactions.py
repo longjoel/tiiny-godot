@@ -28,7 +28,10 @@ def make_project(project: Path) -> None:
         '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n\n'
         '[node name="Player" type="CharacterBody2D" parent="."]\n\n'
         '[node name="Enemy" type="CharacterBody2D" parent="."]\n\n'
-        '[node name="Tree" type="Node2D" parent="."]\n'
+        '[node name="Tree" type="Node2D" parent="."]\n\n'
+        '[node name="Torch" type="Node2D" parent="."]\n\n'
+        '[node name="Light2D" type="Light2D" parent="Torch"]\n\n'
+        '[node name="Platform" type="StaticBody2D" parent="."]\n'
     )
     (project / "base.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Base" type="Node2D"]\n'

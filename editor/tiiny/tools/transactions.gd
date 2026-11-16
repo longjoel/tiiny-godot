@@ -120,7 +120,7 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 			return _error("invalid_operation", "Operation must be an object with an op.")
 		var kind := str(op.op)
 		var id := str(op.get("id", ""))
-		if kind in ["create_node", "create_resource"]:
+		if kind in ["create_node", "create_resource", "create_resource_value"]:
 			if id.is_empty() or op_by_id.has(id) or id.length() > 64:
 				return _error("invalid_operation", "Operation IDs must be unique and non-empty.")
 			op_by_id[id] = op
@@ -149,6 +149,10 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 					if not _value_compatible(info, properties[property]): return _error("type_mismatch", "Resource property type mismatch: " + str(property))
 					resource.set(str(property), properties[property])
 				resources[str(op.id)] = resource
+			"create_resource_value":
+				var value: Variant = op.get("resource")
+				if not value is Resource: return _error("invalid_operation", "Recipe resource value must be a Resource.")
+				resources[str(op.id)] = value
 			_:
 				pass
 	var error := _validate_references(ops, nodes, resources, op_by_id, root, context)
@@ -194,6 +198,20 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 				if _read_only(target, property, info): return _error("property_not_writable", "Property is not writable: " + property)
 				var value: Variant = _operation_value(op.get("value"), nodes, resources, op_by_id)
 				if not _value_compatible(info, value): return _error("type_mismatch", "Property type mismatch: " + property)
+			"call_method":
+				var target = _target_object(str(op.get("target", "")), root, nodes, resources, op_by_id)
+				if target == null: return _error("target_missing", "call_method target is missing.")
+				var method := str(op.get("method", ""))
+				if method.is_empty() or not target.has_method(method): return _error("method_missing", "Method does not exist: " + method)
+				if not op.get("args", []) is Array or op.args.size() > 8: return _error("invalid_operation", "Method arguments must be a bounded array.")
+				if op.has("undo_method"):
+					var undo_method := str(op.get("undo_method", ""))
+					if undo_method.is_empty() or not target.has_method(undo_method): return _error("method_missing", "Undo method does not exist: " + undo_method)
+					if not op.get("undo_args", []) is Array or op.undo_args.size() > 8: return _error("invalid_operation", "Undo method arguments must be a bounded array.")
+				if op.has("verify_method"):
+					var verify_method := str(op.get("verify_method", ""))
+					if verify_method.is_empty() or not target.has_method(verify_method): return _error("method_missing", "Verify method does not exist: " + verify_method)
+					if not op.get("verify_args", []) is Array or op.verify_args.size() > 8: return _error("invalid_operation", "Verify method arguments must be a bounded array.")
 			_:
 				pass
 	return {}
@@ -243,8 +261,25 @@ func _apply_do(manager: Object, op: Dictionary, nodes: Dictionary, resources: Di
 			var value: Variant = _operation_value(op.value, nodes, resources, op_by_id)
 			manager.add_do_property(target, str(op.property), value)
 			manager.add_undo_property(target, str(op.property), target.get(str(op.property)))
+		"create_resource_value":
+			manager.add_do_reference(resources[str(op.id)])
+		"call_method":
+			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
+			_add_undo_redo_call(manager, true, target, str(op.method), _operation_args(op.get("args", []), nodes, resources, op_by_id))
+			if op.has("undo_method"):
+				_add_undo_redo_call(manager, false, target, str(op.undo_method), _operation_args(op.get("undo_args", []), nodes, resources, op_by_id))
 		_:
 			pass
+
+func _operation_args(value: Variant, nodes: Dictionary, resources: Dictionary, op_by_id: Dictionary) -> Array:
+	var result: Array = []
+	if not value is Array: return result
+	for item in value: result.append(_operation_value(item, nodes, resources, op_by_id))
+	return result
+
+func _add_undo_redo_call(manager: Object, is_do: bool, target: Object, method: String, args: Array) -> void:
+	var adder := Callable(manager, "add_do_method" if is_do else "add_undo_method")
+	adder.callv([target, method] + args)
 
 func _verify(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dictionary, root: Node) -> String:
 	for op in ops:
@@ -264,20 +299,37 @@ func _verify(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dic
 		elif str(op.op) == "set_property":
 			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
 			var value: Variant = _operation_value(op.value, nodes, resources, op_by_id)
-			if target.get(str(op.property)) != value: return "Planned property was not applied."
+			if not _values_equal(target.get(str(op.property)), value): return "Planned property was not applied."
+		elif str(op.op) == "call_method" and op.has("verify_method"):
+			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
+			var args := _operation_args(op.get("verify_args", []), nodes, resources, op_by_id)
+			var actual: Variant = target.callv(str(op.verify_method), args)
+			if actual != op.get("expect", true): return "Planned method postcondition failed: " + str(op.verify_method)
 	for op in ops:
 		if str(op.op) == "create_resource":
 			var resource: Resource = resources[str(op.id)]
 			if not is_instance_valid(resource): return "Created resource became invalid."
 			for property in op.get("properties", {}):
-				if resource.get(str(property)) != op.properties[property]: return "Resource property was not applied: " + str(property)
+				if not _values_equal(resource.get(str(property)), op.properties[property]): return "Resource property was not applied: " + str(property)
 	return ""
+
+func _values_equal(a: Variant, b: Variant) -> bool:
+	if a is float and b is float: return is_equal_approx(float(a), float(b))
+	if a is Vector2 and b is Vector2: return a.is_equal_approx(b)
+	if a is Vector3 and b is Vector3: return a.is_equal_approx(b)
+	if a is Color and b is Color: return a.is_equal_approx(b)
+	return a == b
 
 func _scene_is_clean_after_undo(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dictionary, root: Node) -> bool:
 	for op in ops:
 		if str(op.op) == "create_node":
 			var node: Node = nodes[str(op.id)]
 			if is_instance_valid(node) and node.is_inside_tree(): return false
+		elif str(op.op) == "call_method" and op.has("verify_method"):
+			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
+			var args := _operation_args(op.get("verify_args", []), nodes, resources, op_by_id)
+			var actual: Variant = target.callv(str(op.verify_method), args)
+			if actual != op.get("undo_expect", not op.get("expect", true)): return false
 	return true
 
 ### Property helpers
@@ -331,6 +383,40 @@ func _register_default_recipes() -> void:
 		"validate": Callable(self, "_validate_collision"),
 		"build": Callable(self, "_build_collision"),
 	})
+	register_recipe({
+		"name": "add_torch_flicker",
+		"title": "Add torch flicker animation",
+		"description": "Create a native looping light-energy animation; no script.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"light_path": {"type": "string", "maxLength": 512},
+			"player_name": {"type": "string", "minLength": 1, "maxLength": 128},
+			"duration": {"type": "number", "exclusiveMinimum": 0, "maximum": 60},
+			"min_energy": {"type": "number", "minimum": 0, "maximum": 100},
+			"max_energy": {"type": "number", "minimum": 0, "maximum": 100},
+			"steps": {"type": "integer", "minimum": 2, "maximum": 64},
+		}, "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 15000,
+		"validate": Callable(self, "_validate_torch"),
+		"build": Callable(self, "_build_torch"),
+	})
+	register_recipe({
+		"name": "assign_slippery_surface",
+		"title": "Assign slippery physics material",
+		"description": "Assign an owned low-friction PhysicsMaterial to a 2D physics body.",
+		"parameters": {"type": "object", "properties": {
+			"target_path": {"type": "string", "minLength": 1, "maxLength": 512},
+			"friction": {"type": "number", "minimum": 0, "maximum": 1},
+			"bounce": {"type": "number", "minimum": 0, "maximum": 1},
+			"rough": {"type": "boolean"},
+			"absorbent": {"type": "boolean"},
+		}, "required": ["target_path"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 15000,
+		"validate": Callable(self, "_validate_slippery"),
+		"build": Callable(self, "_build_slippery"),
+	})
 
 func _validate_collision(params: Dictionary, context: Dictionary) -> Dictionary:
 	var parent_path := str(params.get("parent_path", ""))
@@ -368,6 +454,127 @@ func _build_collision(request: Dictionary) -> Dictionary:
 		{"op": "add_child", "parent": request.parent_path, "node": "shape"},
 		{"op": "set_owner", "node": "shape", "owner": "."},
 		{"op": "set_property", "target": "shape", "property": "shape", "value": {"ref": "rectangle"}},
+	]}
+
+func _is_light(node: Node) -> bool:
+	return node is Light2D or node is Light3D
+
+func _find_owned_light(parent: Node, root: Node) -> Node:
+	for child in parent.get_children(true):
+		if _is_light(child) and (child == root or child.get_owner() == root):
+			return child
+		var nested := _find_owned_light(child, root)
+		if nested != null: return nested
+	return null
+
+func _validate_torch(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_path := str(params.get("parent_path", "")).strip_edges()
+	var light_path := str(params.get("light_path", "")).strip_edges()
+	if parent_path.is_empty() and light_path.is_empty():
+		return {"ok": false, "code": "invalid_arguments", "message": "Provide a light_path or a parent_path containing a light."}
+	var root: Node = context.root
+	var light: Node = null
+	var parent: Node = null
+	if not light_path.is_empty():
+		var found: Dictionary = inspector.resolve_scene_node(root, light_path)
+		if found.has("error"):
+			return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+		light = found.node
+		parent = light.get_parent()
+	else:
+		var found: Dictionary = inspector.resolve_scene_node(root, parent_path)
+		if found.has("error"):
+			return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+		parent = found.node
+		light = parent if _is_light(parent) else _find_owned_light(parent, root)
+	if light == null:
+		return {"ok": false, "code": "target_missing", "message": "No owned Light2D or Light3D was found under the target. Add a light or name one explicitly; no script fallback was created."}
+	if not _is_light(light):
+		return {"ok": false, "code": "invalid_target", "message": "The target must be a Light2D or Light3D."}
+	if light != root and light.get_owner() != root:
+		return {"ok": false, "code": "read_only_instance", "message": "The light must be owned by the edited scene."}
+	if parent == null:
+		return {"ok": false, "code": "invalid_parent", "message": "The light has no parent for the AnimationPlayer."}
+	if parent != root and parent.get_owner() != root:
+		return {"ok": false, "code": "read_only_instance", "message": "The AnimationPlayer parent must be owned by the edited scene."}
+	var name := str(params.get("player_name", "")).strip_edges()
+	if name.is_empty(): name = _unique_name(parent, "AnimationPlayer")
+	elif not _valid_name(name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid AnimationPlayer name."}
+	if parent.get_node_or_null(NodePath(name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + name + " already exists."}
+	var duration := float(params.get("duration", 1.2))
+	var min_energy := float(params.get("min_energy", 0.35))
+	var max_energy := float(params.get("max_energy", 1.0))
+	var steps := int(params.get("steps", 8))
+	if duration <= 0 or duration > 60:
+		return {"ok": false, "code": "invalid_arguments", "message": "duration must be greater than zero and at most 60 seconds."}
+	if min_energy < 0 or max_energy > 100 or max_energy <= min_energy:
+		return {"ok": false, "code": "invalid_energy", "message": "Energy values must satisfy 0 <= min_energy < max_energy <= 100."}
+	if steps < 2 or steps > 64:
+		return {"ok": false, "code": "invalid_arguments", "message": "steps must be between 2 and 64."}
+	var property := "energy" if light is Light2D else "light_energy"
+	var parent_path_result := str(root.get_path_to(parent)) if parent != root else "."
+	var light_path_result := str(parent.get_path_to(light))
+	return {"ok": true, "request": {"parent_path": parent_path_result, "light_path": str(root.get_path_to(light)), "track_path": light_path_result, "property": property, "player_name": name, "duration": duration, "min_energy": min_energy, "max_energy": max_energy, "steps": steps, "light_class": light.get_class()}}
+
+func _build_torch(request: Dictionary) -> Dictionary:
+	var animation := Animation.new()
+	animation.length = request.duration
+	animation.loop_mode = Animation.LOOP_LINEAR
+	var track := animation.add_track(Animation.TYPE_VALUE)
+	animation.track_set_path(track, NodePath(request.track_path + ":" + request.property))
+	animation.track_set_interpolation_type(track, Animation.INTERPOLATION_LINEAR)
+	for index in int(request.steps):
+		var time := float(request.duration) * float(index) / float(request.steps)
+		var wave := sin(float(index) * 2.399963 + 0.7)
+		var value := lerpf(float(request.min_energy), float(request.max_energy), 0.5 + 0.45 * wave)
+		animation.track_insert_key(track, time, value)
+	var library := AnimationLibrary.new()
+	if library.add_animation("flicker", animation) != OK:
+		return {"ok": false, "code": "invalid_animation", "message": "Could not add the flicker animation."}
+	return {"ok": true, "action_name": "Add torch flicker animation", "summary": "Added %s with a native flicker animation for %s (%s energy, %.0f–%.0f, %.1fs). No script was generated." % [request.player_name, request.light_path, request.light_class, request.min_energy, request.max_energy, request.duration], "ops": [
+		{"op": "create_node", "id": "player", "class": "AnimationPlayer", "name": request.player_name},
+		{"op": "create_resource_value", "id": "animation", "resource": animation},
+		{"op": "create_resource_value", "id": "library", "resource": library},
+		{"op": "add_child", "parent": request.parent_path, "node": "player"},
+		{"op": "set_owner", "node": "player", "owner": "."},
+		{"op": "set_property", "target": "player", "property": "autoplay", "value": &"tiiny/flicker"},
+		{"op": "call_method", "target": "player", "method": "add_animation_library", "args": ["tiiny", {"ref": "library"}], "undo_method": "remove_animation_library", "undo_args": ["tiiny"], "verify_method": "has_animation_library", "verify_args": ["tiiny"], "expect": true, "undo_expect": false},
+	]}
+
+func _validate_slippery(params: Dictionary, context: Dictionary) -> Dictionary:
+	var target_path := str(params.get("target_path", "")).strip_edges()
+	if target_path.is_empty() or target_path.length() > 512:
+		return {"ok": false, "code": "invalid_arguments", "message": "target_path is required."}
+	var found: Dictionary = inspector.resolve_scene_node(context.root, target_path)
+	if found.has("error"):
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var node: Node = found.node
+	var body: Node = node
+	if node is CollisionShape2D:
+		body = node.get_parent()
+	if not body is CollisionObject2D:
+		return {"ok": false, "code": "invalid_target", "message": "Choose a 2D physics body (StaticBody2D, RigidBody2D, CharacterBody2D, Area2D) or its CollisionShape2D. No script fallback was created."}
+	if body != context.root and body.get_owner() != context.root:
+		return {"ok": false, "code": "read_only_instance", "message": "The physics body must be owned by the edited scene."}
+	var friction := float(params.get("friction", 0.05))
+	var bounce := float(params.get("bounce", 0.0))
+	if friction < 0 or friction > 1 or bounce < 0 or bounce > 1:
+		return {"ok": false, "code": "invalid_arguments", "message": "friction and bounce must be between 0 and 1."}
+	var existing = body.get("physics_material_override")
+	var previous := ""
+	if existing is Resource:
+		previous = existing.get_class() + (" at " + existing.resource_path if not existing.resource_path.is_empty() else "")
+	return {"ok": true, "request": {"body_path": str(context.root.get_path_to(body)) if body != context.root else ".", "target_path": target_path, "friction": friction, "bounce": bounce, "rough": bool(params.get("rough", false)), "absorbent": bool(params.get("absorbent", false)), "previous": previous}}
+
+func _build_slippery(request: Dictionary) -> Dictionary:
+	var summary := "Assigned an owned PhysicsMaterial (friction %.2f, bounce %.2f) to %s." % [request.friction, request.bounce, request.body_path]
+	if not str(request.previous).is_empty():
+		summary += " The previous %s reference was replaced without modifying that resource; Undo restores it." % str(request.previous)
+	return {"ok": true, "action_name": "Make %s slippery" % request.body_path, "summary": summary, "ops": [
+		{"op": "create_resource", "id": "material", "class": "PhysicsMaterial", "properties": {"friction": request.friction, "bounce": request.bounce, "rough": request.rough, "absorbent": request.absorbent}},
+		{"op": "set_property", "target": request.body_path, "property": "physics_material_override", "value": {"ref": "material"}},
 	]}
 
 func _unique_name(parent: Node, base: String) -> String:

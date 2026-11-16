@@ -87,6 +87,8 @@ The resource HTTP fixture also checks story 09's image path: the generated PNG m
 
 Story 10 adds `Planner.schedule` offline assertions for coding-model protection, eligible eviction, restore actions, already-loaded no-op, and capacity/disk/unknown rejection. The Jobs suite adds `model_schedule` (evict → load → restore with four verified operations), `model_schedule_capacity` (no mutation, clear retained-coding error), `model_schedule_restore` (failure and cancellation restoration), and `model_schedule_disconnect` (same-key dedupe, explicit resolve/resume, recovered schedule).
 
+Story 11 adds transaction-fixture coverage for native torch-flicker animation (light discovery, value track path/keys, `tiiny/flicker` library/autoplay, preserved existing animations, undo/redo, missing-light rejection) and slippery PhysicsMaterial assignment (values, shared-material preservation and explicit replacement summary, undo/redo, non-physics rejection). The registry payload must advertise both recipes.
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.
