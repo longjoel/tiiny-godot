@@ -23,12 +23,13 @@ Read [STATUS.md](STATUS.md) first. Each work item records its feature, sequence,
 | 15 | First-class script and behavior workflow | workspace | [15](work-items/15-script-behavior.md) |
 | 16 | Catalog-driven composition and coverage tests | integration | [16](work-items/16-catalog-coverage.md) |
 | 17 | Specialized authoring recipes | workspace | [17](work-items/17-specialized-authoring.md) |
+| 18 | Workspace coding tools and hybrid mode | integration | [18](work-items/18-workspace-coding-tools.md) |
 
 Completion requires recorded evidence for every acceptance criterion. If a criterion proves too broad, split the item and record the changed scope before proceeding. Keep proposed extras in [IDEAS.md](IDEAS.md); do not silently add them to active work.
 
 Use [ACCEPTANCE_SCENARIOS.md](ACCEPTANCE_SCENARIOS.md) for concrete workspace outcomes, [TASK_CATALOG.md](TASK_CATALOG.md) for the 100-task 2D/3D coverage catalog, and [TESTING.md](TESTING.md) for deterministic, editor, device, and model-evaluation layers. The catalog is validated by `integrations/tiiny/tests/check_task_catalog.py`; v2 classifies all tasks by solution path. Current coverage is 40 supported / 60 partial / 0 specialized-missing, with 40/40 supported tasks tied to tests.
 
-Stories 14–17 are accepted: generic typed editor primitives (14), first-class script behavior/attachment/save (15), catalog v2/composed tests (16), and all specialized catalog families (17): TileMap, GridMap, AnimatedSprite, theme/font, audio loop/bus, navigation, AnimationTree/playback, Trail3D, weather, particles, imported-mesh collision, and mesh-quality validation. The 60 partial tasks are composed/script workflows still lacking focused tests.
+Stories 14–17 are accepted: generic typed editor primitives (14), first-class script behavior/attachment/save (15), catalog v2/composed tests (16), and all specialized catalog families (17). Story 18 is planned and ready: workspace coding tools, gated shell/headless execution, git inspection, editor save/reload, and a bake-off against the typed editor tools. It will decide which tool families continue to earn investment.
 
 Story 01 is accepted. Its [implementation plan](implementation/01-stabilize-prototype.md) and [completion evidence](evidence/01-completion.md) record the verified prototype, displayed editor checks, and real Tiiny chat/polygon results. Story 04 is now accepted separately; see its [acceptance evidence](evidence/04-acceptance.md).
 
