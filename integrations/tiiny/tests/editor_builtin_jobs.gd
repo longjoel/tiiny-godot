@@ -281,6 +281,38 @@ func _run() -> void:
 				if fake.calls != expected_calls or not fake.is_ready():
 					_fail("Coding restoration did not verify the saved model: " + str(fake.calls) + " / " + fake.message)
 					return
+	elif mode == "queued_cancel":
+		if not jobs.queue.set_paused(true):
+			_fail("Could not pause queue for cancellation fixture")
+			return
+		var first: Dictionary = jobs.append_job("queued-cancel-first", "create_tree", {"destination": "res://assets/cancel_first.png", "timeout_ms": 30000})
+		var second: Dictionary = jobs.append_job("queued-cancel-second", "create_tree", {"destination": "res://assets/cancel_second.png", "timeout_ms": 30000})
+		if first.has("error") or second.has("error"):
+			_fail("Could not append queued cancellation jobs: " + str(first) + " / " + str(second))
+			return
+		jobs._on_cancel_queued(first.id)
+		var cancelled: Dictionary = jobs.get_job_status(first.id)
+		if cancelled.state != "cancelled" or not cancelled.attempts.is_empty():
+			_fail("Queued cancellation did not produce an empty cancelled job: " + str(cancelled))
+			return
+		if jobs.get_job_status(second.id).get("state") != "queued":
+			_fail("Queued cancellation disturbed the following job")
+			return
+		var third: Dictionary = jobs.append_job("queued-cancel-third", "create_tree", {"destination": "res://assets/cancel_third.png", "timeout_ms": 30000})
+		if third.has("error"):
+			_fail("Could not append third queued cancellation job: " + str(third))
+			return
+		jobs._on_cancel_queued_all()
+		if jobs.get_job_status(second.id).get("state") != "cancelled" or jobs.get_job_status(third.id).get("state") != "cancelled":
+			_fail("Cancel-all did not cancel every queued job")
+			return
+		jobs._on_clear_job(first.id)
+		if not jobs.get_job_status(first.id).get("hidden", false):
+			_fail("Cancelled queued job could not be hidden")
+			return
+		print("Built-in Jobs queued_cancel passed")
+		get_tree().quit()
+		return
 	elif mode == "create":
 		EditorInterface.open_scene_from_path("res://target.tscn")
 		for i in range(200):

@@ -1,6 +1,6 @@
 # Story 03 implementation plan — device binding and protected coding-model lifecycle
 
-Status: In progress. The prior source-inspection smoke test did not establish the behavioral gates below; the acceptance matrix and handoff claims are superseded by the work item and STATUS until verified.
+Status: Accepted. The prior source-inspection smoke test did not establish the behavioral gates; the final evidence is in the work item, STATUS, and [acceptance evidence](../evidence/03-acceptance.md).
 
 Parent: [03 — Device binding and protected coding-model lifecycle](../work-items/03-device-lifecycle.md)
 

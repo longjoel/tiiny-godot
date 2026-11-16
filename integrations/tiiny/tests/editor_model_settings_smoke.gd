@@ -176,17 +176,279 @@ func _test_apply_contract() -> bool:
 	print("Staged Apply contract passed with fake transport; no device mutation.")
 	return true
 
+func _fixture_config(manager: Node) -> Dictionary:
+	var config := {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+	for role in manager.ROLES:
+		config.roles[role] = {"model": "", "context": 0, "warm": false}
+	config.roles.coding_model = {"model": "code", "context": 8192, "warm": true}
+	config.roles.image_model = {"model": "image", "context": 0, "warm": true}
+	return config
+
+func _run_settings_stage(manager: Node, stage: String) -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var applied: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	if stage == "save":
+		var saved := _fixture_config(manager)
+		settings.set_setting("_tiiny_ai/applied_configuration", saved)
+		settings.set_setting("tiiny_ai/models/coding_model", "code")
+		manager.draft = saved.duplicate(true)
+		manager.draft_initialized = true
+		var unsaved: Dictionary = saved.duplicate(true)
+		unsaved.roles.image_model.warm = false
+		manager.update_draft(unsaved)
+		if not manager.has_unapplied_changes(): _fail("Unsaved draft was not marked.")
+		if settings.get_setting("_tiiny_ai/applied_configuration") != saved: _fail("Unsaved draft overwrote applied settings.")
+		print("Settings restart save passed")
+		get_tree().quit()
+		return
+	if stage == "unsaved":
+		if not applied is Dictionary or not applied.roles.image_model.warm: _fail("Applied warm selection did not survive restart.")
+		if manager.draft != applied: _fail("Restart did not restore the applied draft.")
+		if manager.has_unapplied_changes(): _fail("Applied configuration was reported as unsaved after restart.")
+		var edited: Dictionary = manager.draft.duplicate(true)
+		edited.roles.image_model.warm = false
+		manager.update_draft(edited)
+		if not manager.has_unapplied_changes(): _fail("New unsaved edit was not marked.")
+		if settings.get_setting("_tiiny_ai/applied_configuration") != applied: _fail("Unsaved edit overwrote applied settings.")
+		print("Settings restart unsaved passed")
+		get_tree().quit()
+		return
+	if stage == "final":
+		var expected := _fixture_config(manager)
+		if applied != expected: _fail("Applied warm selection changed across restart.")
+		if manager.draft != expected: _fail("Session-only draft leaked into the next restart.")
+		if manager.has_unapplied_changes(): _fail("Restored applied configuration was reported as unsaved.")
+		print("Settings restart final passed")
+		get_tree().quit()
+		return
+	_fail("Unknown settings restart stage: " + stage)
+
+func _run_live_apply(manager: Node) -> void:
+	var settings := EditorInterface.get_editor_settings()
+	await manager.refresh_device()
+	if not manager.connected: _fail("Live Apply refresh failed: " + manager.message)
+	var models: Dictionary = manager.snapshot.get("models", {})
+	var original_warm: Array = manager.snapshot.get("loaded", {}).keys()
+	original_warm.sort()
+	var coding := ""
+	for id in original_warm:
+		if manager.Planner.suitable("coding_model", models.get(id, {})):
+			coding = str(id)
+			break
+	if coding.is_empty(): _fail("Live Apply needs an already-warm compatible coding model.")
+	var target := OS.get_environment("TIINY_TEST_LIVE_APPLY_MODEL").strip_edges()
+	if not target.is_empty():
+		if not models.has(target): _fail("Requested live Apply model is not in the catalog: " + target)
+	else:
+		for id in models:
+			var model: Dictionary = models[id]
+			if str(model.get("type", "")) != "Text-to-Speech" or bool(model.get("installed", false)): continue
+			if float(model.get("npu", -1)) < 0 or float(model.get("bytes", -1)) <= 0: continue
+			if target.is_empty() or float(model.bytes) < float(models[target].bytes): target = str(id)
+	if target.is_empty(): _fail("Live Apply found no downloadable Text-to-Speech model.")
+	settings.set_setting("tiiny_ai/models/coding_model", coding)
+	settings.set_setting("tiiny_ai/models/context_tokens", 8192)
+	if bool(models[target].get("installed", false)):
+		if not manager.is_ready(): _fail("Coding model was not ready before live Apply verification.")
+		print("Live Apply download passed: ", target, "; already installed; warm set unchanged: ", original_warm)
+		get_tree().quit()
+		return
+	var config := {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+	for role in manager.ROLES:
+		config.roles[role] = {"model": "", "context": 0, "warm": false}
+	config.roles.coding_model = {"model": coding, "context": 8192, "warm": true}
+	config.roles.speech_model = {"model": target, "context": 0, "warm": false}
+	manager.draft_initialized = true
+	manager.update_draft(config)
+	await manager.check_config()
+	if not manager.plan.get("ok", false):
+		_fail("Live Apply Check Config failed: " + str(manager.plan.get("errors", [])))
+		return
+	var expected := [{"verb": "download", "id": target}]
+	if manager.plan.get("actions", []) != expected:
+		_fail("Live Apply plan was not a single download: " + str(manager.plan.get("actions", [])))
+		return
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null: _fail("Live Apply Jobs service is unavailable.")
+	print("Live Apply baseline warm set: ", original_warm, "; coding: ", coding, "; download: ", target, " (", int(models[target].bytes), " bytes)")
+	manager.apply_config()
+	if not manager.plan.is_empty(): _fail("Live Apply did not queue: " + manager.message)
+	var job_id := ""
+	var deadline := Time.get_ticks_msec() + 900000
+	while Time.get_ticks_msec() < deadline:
+		if job_id.is_empty():
+			for job in service.queue.snapshot().jobs:
+				if job.operation == "model_apply" and job.state in ["queued", "running", "completed", "failed", "cancelled", "interrupted"]:
+					job_id = str(job.id)
+		if not job_id.is_empty():
+			var status: Dictionary = service.get_job_status(job_id)
+			if status.get("state") == "completed": break
+			if status.get("state") in ["failed", "cancelled", "interrupted", "skipped"]:
+				_fail("Live Apply job stopped: " + str(status.get("state")) + " " + str(status.get("error", "")))
+		await get_tree().create_timer(1.0).timeout
+	if job_id.is_empty(): _fail("Live Apply job was never queued.")
+	var final_status: Dictionary = service.get_job_status(job_id)
+	if final_status.get("state") != "completed": _fail("Live Apply timed out: " + str(final_status.get("state")))
+	await manager.refresh_device()
+	if not manager.connected: _fail("Live Apply final refresh failed: " + manager.message)
+	var final_models: Dictionary = manager.snapshot.get("models", {})
+	if not final_models.has(target) or not final_models[target].get("installed", false):
+		_fail("Device did not report the download as installed: " + target)
+	var final_warm: Array = manager.snapshot.get("loaded", {}).keys()
+	final_warm.sort()
+	if final_warm != original_warm: _fail("Live Apply changed the warm set: " + str(final_warm))
+	if not manager.is_ready(): _fail("Coding model was not ready after the download.")
+	var progress: Array = Array(manager.operation_log).filter(func(line): return "download" in str(line).to_lower() and "%" in str(line))
+	print("Live Apply download passed: ", target, "; installed; warm set unchanged: ", final_warm, "; progress lines: ", progress.size())
+	if not progress.is_empty(): print("Live Apply progress sample: ", progress.back())
+	get_tree().quit()
+
+func _fixture_snapshot(manager: Node, age_ms := 0) -> Dictionary:
+	var models := {
+		"code": {"id": "code", "name": "Code", "type": "Text Generation", "description": "Scripting coordinator", "supported": ["Tool Use"], "npu": 47.0, "bytes": 16 * 1073741824, "max_context": 32768, "installed": true, "loaded": true, "state": "running"},
+		"image": {"id": "image", "name": "Image", "type": "Text-to-Image", "description": "Image generation", "supported": [], "npu": 23.0, "bytes": 10 * 1073741824, "max_context": 0, "installed": true, "loaded": true, "state": "running"},
+		"new_image": {"id": "new_image", "name": "New Image", "type": "Text-to-Image", "description": "Not downloaded yet", "supported": [], "npu": 20.0, "bytes": 8 * 1073741824, "max_context": 0, "installed": false, "loaded": false, "state": "not_downloaded"}
+	}
+	return {"models": models, "loaded": {"code": 47.0, "image": 23.0}, "npu_total": 100.0, "npu_used": 70.0, "disk_total": 200 * 1073741824, "disk_free": 100 * 1073741824, "connection": "f".repeat(64), "time": Time.get_ticks_msec() - age_ms}
+
+func _fixture_plan() -> Dictionary:
+	return {"ok": true, "errors": [], "warnings": ["Context is a client-side request budget.", "SSD includes one staging allowance."], "actions": [{"verb": "download", "id": "new_image"}, {"verb": "load", "id": "new_image"}], "npu_projected": 93.0, "npu_remaining": 7.0, "npu_reserve": 5.0, "download_bytes": 8 * 1073741824, "disk_projected_free": 90 * 1073741824, "disk_peak_free": 82 * 1073741824, "disk_reserve": 2 * 1073741824, "checked_at": Time.get_ticks_msec()}
+
+func _capture_window(window: Window, path: String) -> bool:
+	for count in range(3): await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	var image := window.get_texture().get_image()
+	return image != null and image.save_png(path) == OK
+
+func _capture_panel_states(capture: String) -> void:
+	var fake = load("res://fake_manager.gd").new()
+	get_tree().root.add_child(fake)
+	var settings := EditorInterface.get_editor_settings()
+	var previous_applied: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	settings.set_setting("_tiiny_ai/applied_configuration", _fixture_config(fake))
+	fake.connected = true
+	fake.draft = _fixture_config(fake)
+	fake.draft_initialized = true
+	fake.snapshot = _fixture_snapshot(fake)
+	fake.plan = _fixture_plan()
+	var panel: Control = fake.create_configuration_panel()
+	var window := Window.new()
+	window.title = "Models state capture"
+	window.size = Vector2i(1400, 900)
+	get_tree().root.add_child(window)
+	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	window.add_child(panel)
+	window.popup_centered()
+	var states := ["fresh", "stale", "incompatible", "applying", "failed"]
+	for width in [1400, 600]:
+		window.size = Vector2i(width, 900)
+		for state in states:
+			fake.connected = true
+			fake.applying = false
+			fake.busy = false
+			fake.last_operation_failed = false
+			fake.snapshot = _fixture_snapshot(fake)
+			fake.draft = _fixture_config(fake)
+			fake.plan = _fixture_plan()
+			fake.message = "Review the plan, then Apply."
+			match state:
+				"stale": fake.snapshot = _fixture_snapshot(fake, 78000)
+				"incompatible":
+					fake.draft.roles.coding_model.model = "image"
+					var incompatible: Dictionary = _fixture_plan()
+					incompatible.ok = false
+					incompatible.errors = ["image is not compatible with Scripting."]
+					incompatible.actions = []
+					fake.plan = incompatible
+				"applying":
+					fake.applying = true
+					fake.busy = true
+					fake.current_operation = {"verb": "download", "id": "new_image"}
+					fake.current_progress = 42.5
+					fake.operation_started = Time.get_ticks_msec() - 12000
+				"failed":
+					fake.last_operation_failed = true
+					fake.operation_log = PackedStringArray(["unload image", "load code", "download new_image"])
+					fake.message = "Tiiny did not confirm the requested download. Stopped before the next operation."
+			panel._render()
+			if not await _capture_window(window, capture.path_join("models-%s-%d.png" % [state, width])):
+				_fail("Displayed Models state capture failed: " + state)
+	# Plan details uses the same dialog pattern as model Info.
+	fake.last_operation_failed = false
+	fake.plan = _fixture_plan()
+	panel._render()
+	panel._show_plan_details()
+	await get_tree().process_frame
+	var details: AcceptDialog = panel.find_child("ModelInformation", true, false)
+	if details == null or not await _capture_window(details, capture.path_join("models-plan-details.png")):
+		_fail("Displayed plan-details capture failed.")
+	details.hide()
+	window.hide()
+	window.queue_free()
+	fake.queue_free()
+	if previous_applied != null: settings.set_setting("_tiiny_ai/applied_configuration", previous_applied)
+	await get_tree().process_frame
+	print("Displayed Models state captures saved.")
+
+func _test_coding_adoption() -> bool:
+	var fake = load("res://fake_manager.gd").new()
+	get_tree().root.add_child(fake)
+	var settings := EditorInterface.get_editor_settings()
+	var previous_coding: Variant = settings.get_setting("tiiny_ai/models/coding_model")
+	var previous_applied: Variant = settings.get_setting("_tiiny_ai/applied_configuration") if settings.has_setting("_tiiny_ai/applied_configuration") else null
+	var config := {"roles": {}, "extra_warm": [], "npu_reserve": 5, "disk_reserve_gib": 2}
+	for role in fake.ROLES:
+		config.roles[role] = {"model": "", "context": 0, "warm": false}
+	config.roles.coding_model = {"model": "Qwen/Qwen3.6-35B-A3B", "context": 8192, "warm": true}
+	settings.set_setting("tiiny_ai/models/coding_model", "Qwen/Qwen3.6-35B-A3B")
+	settings.set_setting("_tiiny_ai/applied_configuration", config)
+	fake.snapshot = {"models": {"Qwen/Qwen3.6-35B-A3B": {"id": "Qwen/Qwen3.6-35B-A3B", "name": "Qwen3.6", "type": "Image-Text-to-Text", "supported": ["Tool Use"], "npu": 47.0, "bytes": 100, "max_context": 262144, "installed": true, "loaded": false}, "ornith-ai/Ornith-1.5-35B-A3B-Turbo": {"id": "ornith-ai/Ornith-1.5-35B-A3B-Turbo", "name": "Ornith", "type": "Image-Text-to-Text", "supported": ["Tool Use"], "npu": 54.0, "bytes": 100, "max_context": 262144, "installed": true, "loaded": true}}, "loaded": {"ornith-ai/Ornith-1.5-35B-A3B-Turbo": 54.0}, "npu_total": 100.0, "npu_used": 54.0, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824, "time": Time.get_ticks_msec()}
+	fake.draft = config.duplicate(true)
+	fake.draft_initialized = true
+	fake.connected = true
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	var stale_id := ""
+	if service != null:
+		var stale: Dictionary = service.append_job("adopt-stale-restore", "model_restore", {"model": "Qwen/Qwen3.6-35B-A3B", "connection": "b".repeat(64), "timeout_ms": 7200000})
+		stale_id = str(stale.get("id", ""))
+	fake._adopt_loaded_coding_model("ornith-ai/Ornith-1.5-35B-A3B-Turbo")
+	var adopted: bool = str(settings.get_setting("tiiny_ai/models/coding_model")) == "ornith-ai/Ornith-1.5-35B-A3B-Turbo"
+	var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	var persisted: bool = saved is Dictionary and saved.roles.coding_model.model == "ornith-ai/Ornith-1.5-35B-A3B-Turbo"
+	var drafted: bool = fake.draft.roles.coding_model.model == "ornith-ai/Ornith-1.5-35B-A3B-Turbo"
+	var stale_cancelled: bool = stale_id.is_empty() or (service != null and service.get_job_status(stale_id).get("state") == "cancelled")
+	var before: int = service.queue.snapshot().jobs.size() if service != null else 0
+	fake._schedule_coding_restore()
+	var queued: bool = service != null and service.queue.snapshot().jobs.size() != before
+	var reported: bool = fake.message.contains("Adopted already-loaded coding model")
+	if previous_coding != null: settings.set_setting("tiiny_ai/models/coding_model", previous_coding)
+	if previous_applied != null: settings.set_setting("_tiiny_ai/applied_configuration", previous_applied)
+	fake.queue_free()
+	await get_tree().process_frame
+	if not adopted or not persisted or not drafted or queued or not reported or not stale_cancelled:
+		return false
+	print("Already-loaded coding-model adoption passed; no restore was queued.")
+	return true
+
 func _run() -> void:
 	for count in range(10): await get_tree().process_frame
 	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
 	if manager == null:
 		_fail("Tiiny settings manager did not initialize.")
 		return
+	var settings_stage := OS.get_environment("TIINY_TEST_SETTINGS_STAGE")
+	if not settings_stage.is_empty():
+		await _run_settings_stage(manager, settings_stage)
+		return
+	if OS.get_environment("TIINY_TEST_LIVE_APPLY") == "1":
+		await _run_live_apply(manager)
+		return
 	if OS.get_environment("TIINY_TEST_LIVE_READONLY") == "1":
 		await manager.refresh_device()
 		if not manager.connected:
 			_fail("Live read-only refresh failed: " + manager.message)
 			return
+		print("Live coding model after refresh: ", EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/coding_model"), "; loaded: ", manager.snapshot.get("loaded", {}).keys())
 		var find_model := OS.get_environment("TIINY_TEST_FIND_MODEL").strip_edges().to_lower()
 		if not find_model.is_empty():
 			for id in manager.snapshot.models:
@@ -250,6 +512,9 @@ func _run() -> void:
 			return
 		if not await _test_apply_contract():
 			_fail("Staged Apply contract failed.")
+			return
+		if not await _test_coding_adoption():
+			_fail("Loaded coding-model adoption failed.")
 			return
 		var assistant := get_tree().get_first_node_in_group("tiiny_ai_editor_dock")
 		# Check the script embedded in the binary as well as the extracted fixture.
@@ -352,6 +617,7 @@ func _run() -> void:
 			_fail("Displayed editor capture failed.")
 			return
 		print("Displayed editor/settings captures saved.")
+		await _capture_panel_states(capture)
 	print("Editor Models section smoke check passed (device mutations disabled).")
 	dialog.hide()
 	get_tree().quit()

@@ -3,7 +3,7 @@ extends SceneTree
 class SettingsFixture extends RefCounted:
 	var values := {"tiiny_ai/connection/api_url": "fixture-url", "tiiny_ai/connection/api_key": "fixture-key", "tiiny_ai/device/address": "fixture-address", "tiiny_ai/device/cli_path": "old-cli", "tiiny_ai/advanced/cli_path": "chosen-cli"}
 	func has_setting(key: String) -> bool: return values.has(key)
-	func get_setting(key: String) -> Variant: return values[key]
+	func get_setting(key: String) -> Variant: return values.get(key)
 	func set_setting(key: String, value: Variant) -> void: values[key] = value
 	func erase(key: String) -> void: values.erase(key)
 
@@ -46,6 +46,22 @@ func _initialize() -> void:
 	invalid_approved = approved.duplicate(true)
 	invalid_approved.connection = "wrong"
 	assert(not script._valid_approved_configuration(invalid_approved))
+	# Startup status must come from the last accepted catalog, not a missing cache.
+	var cache: Dictionary = script._catalog_cache({"code": {"name": "Code", "type": "Text Generation", "supported": ["Tool Use"]}})
+	assert(cache.code.type == "Text Generation" and cache.code.supported == ["Tool Use"])
+	assert(script._coding_model_status("", cache, null).contains("No coding model"))
+	assert(script._coding_model_status("code", {}, null).contains("Refresh device data"))
+	assert(script._coding_model_status("missing", cache, null).contains("not in the current catalog"))
+	assert(script._coding_model_status("code", cache, null).contains("stable"))
+	assert(script._coding_model_status("code", {"code": {"type": "Text-to-Image", "supported": []}}, null).contains("no longer compatible"))
+	assert(script._coding_model_status("code", {"code": {"type": "Text Generation", "supported": []}}, null).contains("Tool Use"))
+	settings.set_setting("tiiny_ai/models/coding_model", "code")
+	settings.set_setting("_tiiny_ai/catalog_cache", cache)
+	script._verify_coding_model_stability(settings)
+	assert(str(settings.values["_tiiny_ai/coding_model_status"]).contains("stable"))
+	settings.set_setting("_tiiny_ai/catalog_cache", {})
+	script._verify_coding_model_stability(settings)
+	assert(str(settings.values["_tiiny_ai/coding_model_status"]).contains("Refresh device data"))
 	var result: Dictionary = planner.check(state, config, "code")
 	assert(result.ok and result.actions.is_empty())
 	assert(result.npu_projected == 70 and result.npu_remaining == 30)
@@ -63,6 +79,14 @@ func _initialize() -> void:
 	var bad := config.duplicate(true)
 	bad.roles.coding_model.model = "image"
 	assert(not planner.check(state, bad, "code").ok)
+	# DEV-03: an image-only catalog cannot satisfy scripting and plans no mutation.
+	var image_only := {"models": {"image": state.models.image.duplicate(true)}, "loaded": {"image": 23}, "npu_total": 100, "npu_used": 23, "disk_free": 100 * 1073741824, "disk_total": 200 * 1073741824}
+	var image_draft := config.duplicate(true)
+	image_draft.roles.coding_model.model = "image"
+	image_draft.roles.image_model.model = "image"
+	var dev03: Dictionary = planner.check(image_only, image_draft, "code")
+	assert(not dev03.ok and dev03.actions.is_empty())
+	assert(Array(dev03.errors).any(func(error): return "not compatible" in error))
 	bad = config.duplicate(true)
 	bad.roles.coding_model.context = 65536
 	assert(not planner.check(state, bad, "code").ok)
@@ -125,7 +149,38 @@ func _initialize() -> void:
 	await process_frame
 	var info: AcceptDialog = panel.find_child("ModelInformation", true, false)
 	assert(info != null and info.visible)
+	var info_text: TextEdit = panel.find_child("ModelInformationText", true, false)
+	assert(info_text != null and not info_text.editable and info_text.text.contains("State: Loaded"))
+	assert(not info.unresizable)
 	info.hide()
+	await process_frame
+	var panel_state: Dictionary = panel.panel_state()
+	assert(panel_state.connected and panel_state.fresh)
+	assert(panel_state.rows.size() == manager.ROLES.size() + 1)
+	assert(panel_state.rows.filter(func(row): return row.id == "code").size() == 1)
+	assert(panel_state.rows.filter(func(row): return row.id == "code")[0].state == "Loaded")
+	assert(panel_state.rows.filter(func(row): return row.id == "image")[0].state == "Loaded")
+	assert(panel_state.role_hints.has("image_to_3d_model") and panel_state.role_hints.has("music_model"))
+	assert(panel_state.capacity.npu_total == 100 and panel_state.capacity.npu_free == 30)
+	var music_picker: OptionButton = panel.find_child("RolePicker_music_model", true, false)
+	assert(music_picker != null and music_picker.get_item_text(music_picker.item_count - 1) == "No compatible model" and music_picker.is_item_disabled(music_picker.item_count - 1))
+	assert(panel.find_child("RoleUnavailableHints", true, false) != null)
+	manager.snapshot.time = Time.get_ticks_msec() - 61000
+	panel._process(0)
+	panel_state = panel.panel_state()
+	assert(not panel_state.fresh and panel_state.controls.check_disabled and panel_state.controls.apply_disabled)
+	assert(panel.age_label.text.contains("Stale"))
+	manager.snapshot.time = Time.get_ticks_msec()
+	manager.connected = false
+	manager.last_error_type = ""
+	panel._render()
+	assert(panel.find_child("ConnectionState", true, false).text == "Not connected")
+	manager.last_error_type = "auth"
+	panel._render()
+	assert(panel.find_child("ConnectionState", true, false).text == "Authentication failed")
+	manager.connected = true
+	manager.last_error_type = ""
+	panel._render()
 	await process_frame
 	var table: GridContainer = panel.find_child("ModelTable", true, false)
 	var table_scroll: ScrollContainer = panel.find_child("ModelTableScroll", true, false)
@@ -142,8 +197,33 @@ func _initialize() -> void:
 			if cell is Label: assert(cell.autowrap_mode == TextServer.AUTOWRAP_OFF)
 		if width == 600: assert(table_scroll.get_h_scroll_bar().visible)
 	manager.plan = {"ok": true, "checked_at": Time.get_ticks_msec() - 61000}
+	panel._render()
+	await process_frame
 	panel._process(0)
 	assert(panel.apply_button.disabled and panel.apply_button.text == "Check expired")
+	assert(panel.plan_expiry_label != null and panel.plan_expiry_label.text.contains("expired"))
+	manager.plan.checked_at = Time.get_ticks_msec()
+	panel._process(0)
+	assert(panel.plan_expiry_label.text.begins_with("expires in "))
+	manager.plan.ok = false
+	manager.plan.npu_remaining = -1
+	manager.plan.npu_projected = 101
+	panel._render()
+	await process_frame
+	var capacity_labels: Array = panel.find_children("*", "Label", true, false).map(func(label): return label.text).filter(func(text): return "free" in str(text) or "reserved" in str(text) or "insufficient" in str(text))
+	assert(capacity_labels.any(func(text): return str(text).contains("Projected · insufficient by 1")))
+	manager.plan.ok = true
+	manager.plan.npu_remaining = 7
+	manager.plan.npu_projected = 93
+	panel._render()
+	await process_frame
+	manager.last_operation_failed = true
+	manager.operation_log = PackedStringArray(["load code", "unload image"])
+	panel._process(0)
+	assert(panel.failure_label.visible and panel.failure_label.text.contains("unload image") and panel.failure_label.text.contains("No preferences were saved"))
+	manager.last_operation_failed = false
+	panel._process(0)
+	assert(not panel.failure_label.visible)
 	var edited: Dictionary = manager.draft.duplicate(true)
 	edited.roles.image_model.warm = false
 	manager.update_draft(edited)

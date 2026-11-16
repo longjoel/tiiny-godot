@@ -34,6 +34,9 @@ var model_job_result: Dictionary = {}
 var model_job_cancelled := false
 var model_job_checkpoint_failed := false
 var next_restore_check_msec := 0
+var current_operation: Dictionary = {}
+var current_progress := 0.0
+var last_operation_failed := false
 
 # The SDK emits a terminal UI. Keep only reported percentages, never terminal
 # escape sequences or arbitrary CLI text, when forwarding progress to Output.
@@ -232,25 +235,36 @@ static func _valid_approved_configuration(value: Variant) -> bool:
 # Verify the saved coding model catalog stability without triggering device mutations.
 # If the coding model is no longer in the catalog or incompatible, warn without unloading.
 # This preserves user configuration while preventing silent degradation.
-static func _verify_coding_model_stability(settings: EditorSettings) -> void:
+static func _coding_model_status(coding_id: String, catalog: Dictionary, saved_draft: Variant) -> String:
+	if coding_id.is_empty(): return "No coding model configured."
+	if catalog.is_empty(): return "Refresh device data to verify the saved coding model."
+	if not catalog.has(coding_id): return "Saved coding model is not in the current catalog. Apply will restore it when available."
+	var entry: Variant = catalog[coding_id]
+	if not entry is Dictionary or str(entry.get("type", "")).is_empty():
+		return "Coding model catalog entry is invalid. Apply will verify capabilities."
+	if not ROLE_TYPES.coding_model.has(str(entry.get("type", ""))):
+		return "Saved coding model is no longer compatible with scripting. Choose a compatible model in Models."
+	if not entry.get("supported", []) is Array or not entry.get("supported", []).has("Tool Use"):
+		return "Saved coding model does not declare Tool Use. Choose a scripting model with Tool Use in Models."
+	if _valid_saved_draft(saved_draft) and saved_draft.roles.get("coding_model", {}).get("model", "") != coding_id:
+		return "Coding model changed since last Apply. Re-check and re-apply to verify capabilities."
+	return "Coding model stable; apply to verify on-device state."
+
+static func _verify_coding_model_stability(settings) -> void:
 	var coding_id := str(settings.get_setting("tiiny_ai/models/coding_model"))
-	var coding_type := str(settings.get_setting("tiiny_ai/models/coding_model_type"))
 	var cached: Variant = settings.get_setting("_tiiny_ai/catalog_cache")
 	var catalog: Dictionary = cached if cached is Dictionary else {}
-	if coding_id.is_empty() or not catalog.has(coding_id):
-		if coding_id.is_empty():
-			settings.set_setting("_tiiny_ai/coding_model_status", "No coding model configured.")
-		else:
-			settings.set_setting("_tiiny_ai/coding_model_status", "Saved coding model is not in the current catalog. Apply will restore it when available.")
-		return
-	if coding_type.is_empty() and (not catalog[coding_id] is Dictionary or catalog[coding_id].get("type", "").is_empty()):
-		settings.set_setting("_tiiny_ai/coding_model_status", "Coding model catalog entry missing type. Apply will verify capabilities.")
-		return
 	var saved_draft: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
-	if _valid_saved_draft(saved_draft) and saved_draft.roles.get("coding_model", {}).get("model", "") != coding_id:
-		settings.set_setting("_tiiny_ai/coding_model_status", "Coding model changed since last Apply. Re-check and re-apply to verify capabilities.")
-		return
-	settings.set_setting("_tiiny_ai/coding_model_status", "Coding model stable; apply to verify on-device state.")
+	settings.set_setting("_tiiny_ai/coding_model_status", _coding_model_status(coding_id, catalog, saved_draft))
+
+# Keep the last observed capability shape so startup can explain when a saved
+# coding model disappeared or lost Tool Use without contacting the device.
+static func _catalog_cache(models: Dictionary) -> Dictionary:
+	var cache := {}
+	for id in models:
+		var model: Dictionary = models[id] if models[id] is Dictionary else {}
+		cache[str(id)] = {"name": str(model.get("name", id)), "type": str(model.get("type", "")), "supported": model.get("supported", []) if model.get("supported", []) is Array else []}
+	return cache
 
 func create_configuration_panel() -> Control:
 	var panel := ConfigurationPanel.new()
@@ -273,6 +287,25 @@ func is_model_loaded(id: String) -> bool:
 	if Time.get_ticks_msec() - int(snapshot.get("time", -100000)) > SNAPSHOT_LIFETIME * 1000: return false
 	var current := _connection()
 	return not current.has("error") and current.identity == connection_identity and snapshot.get("connection", "") == connection_identity and snapshot.get("loaded", {}).has(id)
+
+# Read-only state for the Models panel. The UI must not parse status messages.
+func operation_state() -> Dictionary:
+	var age := -1
+	if not snapshot.is_empty(): age = maxi(0, int((Time.get_ticks_msec() - int(snapshot.get("time", 0))) / 1000))
+	var tail: Array = []
+	for index in range(maxi(0, operation_log.size() - 8), operation_log.size()): tail.append(operation_log[index])
+	return {"busy": busy, "applying": applying, "connected": connected, "error_type": last_error_type, "snapshot_age": age, "fresh": connected and age >= 0 and age * 1000 <= SNAPSHOT_LIFETIME * 1000, "verb": str(current_operation.get("verb", "")), "model": str(current_operation.get("id", "")), "progress": current_progress, "elapsed": 0 if operation_started == 0 else maxi(0, int((Time.get_ticks_msec() - operation_started) / 1000)), "log_tail": tail, "failed": last_operation_failed, "status": message}
+
+func has_unapplied_changes() -> bool:
+	if not Engine.is_editor_hint(): return false
+	var settings := EditorInterface.get_editor_settings()
+	if not settings.has_setting("_tiiny_ai/applied_configuration"): return false
+	var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+	return _valid_saved_draft(saved) and saved != draft
+
+func _set_operation(verb: String, id: String) -> void:
+	current_operation = {"verb": verb, "id": id}
+	current_progress = 0.0
 
 static func _classify_error(text: String) -> String:
 	var lower := text.to_lower()
@@ -300,6 +333,9 @@ func _accept_snapshot(value: Dictionary) -> bool:
 	snapshot["connection_identity"] = connection_identity
 	connected = true
 	last_error_type = ""
+	var settings := EditorInterface.get_editor_settings()
+	settings.set_setting("_tiiny_ai/catalog_cache", _catalog_cache(value.get("models", {})))
+	_verify_coding_model_stability(settings)
 	return true
 
 func _initialize_draft_from_snapshot() -> void:
@@ -460,9 +496,56 @@ func _saved_coding_model() -> String:
 	var id := str(saved.roles.coding_model.model)
 	return id if not id.is_empty() and id == str(settings.get_setting("tiiny_ai/models/coding_model")) else ""
 
+func _loaded_coding_model() -> String:
+	var ids: Array = snapshot.get("loaded", {}).keys()
+	ids.sort()
+	for id in ids:
+		if Planner.suitable("coding_model", snapshot.get("models", {}).get(id, {})):
+			return str(id)
+	return ""
+
+# The device may already run a different compatible coding model (for example
+# after another application or a manual load). Adopt it instead of evicting it
+# to restore an older saved selection.
+func _adopt_loaded_coding_model(id: String) -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var previous := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	if id.is_empty() or id == previous or not snapshot.get("loaded", {}).has(id): return
+	var model: Dictionary = snapshot.get("models", {}).get(id, {})
+	if not Planner.suitable("coding_model", model): return
+	settings.set_setting("tiiny_ai/models/coding_model", id)
+	settings.set_setting("tiiny_ai/models/coding_model_type", str(model.get("type", "")))
+	var context := int(draft.roles.coding_model.get("context", 8192))
+	var max_context := int(model.get("max_context", 0))
+	if max_context > 0: context = mini(context, max_context)
+	draft.roles.coding_model = {"model": id, "context": maxi(context, 2048), "warm": true}
+	draft_initialized = true
+	if settings.has_setting("_tiiny_ai/applied_configuration"):
+		var saved: Variant = settings.get_setting("_tiiny_ai/applied_configuration")
+		if _valid_saved_draft(saved):
+			saved.roles.coding_model = draft.roles.coding_model.duplicate(true)
+			settings.set_setting("_tiiny_ai/applied_configuration", saved)
+	_verify_coding_model_stability(settings)
+	_report("Adopted already-loaded coding model %s (previously %s). No model was unloaded or switched." % [str(model.get("name", id)), previous if not previous.is_empty() else "unselected"])
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service != null and service.get("available"):
+		var changed := false
+		for job in service.queue.snapshot().jobs:
+			if job.state == "queued" and job.operation == "model_restore" and str(job.parameters.get("model", "")) != id:
+				if service.queue.cancel_queued(job.id): changed = true
+		if changed and service.has_method("refresh_board"): service.refresh_board()
+
 func _schedule_coding_restore() -> void:
+	var settings := EditorInterface.get_editor_settings()
+	var configured := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	if not connected: return
+	var loaded_coding := _loaded_coding_model()
+	if not configured.is_empty() and snapshot.get("loaded", {}).has(configured): return
+	if not loaded_coding.is_empty():
+		_adopt_loaded_coding_model(loaded_coding)
+		return
 	var id := _saved_coding_model()
-	if id.is_empty() or not connected or snapshot.get("loaded", {}).has(id): return
+	if id.is_empty(): return
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 	if service == null or not service.get("available"): return
 	for job in service.queue.snapshot().jobs:
@@ -647,6 +730,7 @@ func poll_model_preflight(job: Dictionary) -> Dictionary:
 func _execute_model_restoration(parameters: Dictionary) -> void:
 	busy = true
 	applying = true
+	last_operation_failed = false
 	operation_log.clear()
 	var id := str(parameters.get("model", ""))
 	var identity := str(parameters.get("connection", ""))
@@ -673,6 +757,23 @@ func _execute_model_restoration(parameters: Dictionary) -> void:
 		await _apply_failed("The saved coding model is unavailable or no longer supports tool use. Choose a compatible model in Models.")
 		return
 	if not fresh.loaded.has(id):
+		# A queued restore from an older selection must not evict a coding model
+		# that is already running. Adopt the loaded model and finish this job
+		# without any device operation.
+		if not _accept_snapshot(fresh):
+			await _apply_failed("The device changed while checking coding-model restoration.")
+			return
+		var loaded_coding := _loaded_coding_model()
+		if not loaded_coding.is_empty() and loaded_coding != id:
+			_adopt_loaded_coding_model(loaded_coding)
+			busy = false
+			applying = false
+			current_operation = {}
+			current_progress = 0.0
+			plan = {}
+			_report("Coding-model restoration skipped: adopted already-loaded %s instead. No model was switched." % loaded_coding)
+			model_job_result = {"state": "completed", "result": {"message": message}}
+			return
 		var settings := EditorInterface.get_editor_settings()
 		var saved: Dictionary = settings.get_setting("_tiiny_ai/applied_configuration")
 		var allocation := float(model.get("npu", -1))
@@ -704,10 +805,12 @@ func _execute_model_restoration(parameters: Dictionary) -> void:
 		return
 	busy = false
 	applying = false
+	current_operation = {}
+	current_progress = 0.0
+	last_operation_failed = false
 	plan = {}
 	_report("Coding model restored and verified.")
 	model_job_result = {"state": "completed", "result": {"message": message, "operations": Array(operation_log)}}
-
 func _restore_model_command(verb: String, id: String, identity: String) -> Dictionary:
 	if model_job_cancelled: return {"error": "Coding-model restoration cancelled."}
 	var connection := _connection()
@@ -718,6 +821,7 @@ func _restore_model_command(verb: String, id: String, identity: String) -> Dicti
 		return {"error": "Could not record coding-model restoration before starting it."}
 	_report("%s coding model %s…" % [verb.capitalize(), id])
 	operation_log.append("%s %s" % [verb, id])
+	_set_operation(verb, id)
 	var code := await _run_cli([verb, id])
 	if code != 0 or model_job_cancelled or model_job_checkpoint_failed:
 		return {"error": "Coding-model %s did not finish; check device state before retrying." % verb}
@@ -737,6 +841,7 @@ func _restore_model_command(verb: String, id: String, identity: String) -> Dicti
 func _execute_model_configuration(approved: Dictionary) -> void:
 	busy = true
 	applying = true
+	last_operation_failed = false
 	if not _valid_approved_configuration(approved):
 		await _apply_failed("The queued model configuration is invalid. Check Config again.")
 		return
@@ -795,6 +900,7 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 			return
 		_report("%s %s…" % [str(action.verb).capitalize(), action.id])
 		operation_log.append("%s %s" % [action.verb, action.id])
+		_set_operation(str(action.verb), str(action.id))
 		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 		if not model_job_id.is_empty() and (service == null or not service.begin_model_operation(self, device_lease, model_job_id, action.verb, action.id, approved.connection)):
 			await _apply_failed("Could not record the model operation. Stopped before starting it.")
@@ -849,6 +955,9 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 	busy = false
 	applying = false
 	if model_job_id.is_empty(): _release_device()
+	current_operation = {}
+	current_progress = 0.0
+	last_operation_failed = false
 	plan = {}
 	_report("Configuration applied and verified. Chat uses the selected scripting model and request context budget.")
 	if not model_job_id.is_empty():
@@ -868,6 +977,9 @@ func _apply_failed(reason: String) -> void:
 	busy = false
 	applying = false
 	if model_job_id.is_empty(): _release_device()
+	current_operation = {}
+	current_progress = 0.0
+	last_operation_failed = true
 	plan = {}
 	_report(reason)
 	if not model_job_id.is_empty():
@@ -882,6 +994,7 @@ func _record_progress(arguments: Array, percent: float, source: String) -> void:
 	var previous: Dictionary = progress_reports.get(source, {})
 	if not previous.is_empty() and int(previous.percent) == int(percent) and now - int(previous.time) < 10000: return
 	progress_reports[source] = {"percent": percent, "time": now}
+	if source == "device" and not current_operation.is_empty(): current_progress = percent
 	if source == "device" and not model_job_id.is_empty():
 		var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 		if service == null or not service.queue.device_operation_progress(model_job_id, percent):
@@ -1001,6 +1114,42 @@ class ConfigurationPanel extends VBoxContainer:
 	var rebuilding := false
 	var age_label: Label
 	var apply_button: Button
+	var check_button: Button
+	var capacity_row: HBoxContainer
+	var operation_label: Label
+	var operation_bar: ProgressBar
+	var plan_expiry_label: Label
+	var failure_label: Label
+	var role_hints: Dictionary = {}
+
+	# Testable rendered semantics; avoids parsing control text in fixtures.
+	func panel_state() -> Dictionary:
+		var age := -1
+		var fresh := false
+		if not manager.snapshot.is_empty():
+			age = maxi(0, int((Time.get_ticks_msec() - int(manager.snapshot.time)) / 1000))
+			fresh = manager.connected and age * 1000 <= manager.SNAPSHOT_LIFETIME * 1000
+		var rows: Array = []
+		var models: Dictionary = manager.snapshot.get("models", {})
+		var assigned: Array[String] = []
+		for role in ROLES:
+			var selection: Dictionary = manager.draft.roles.get(role, {})
+			var id := str(selection.get("model", ""))
+			assigned.append(id)
+			var model: Dictionary = models.get(id, {})
+			rows.append({"task": ROLES[role], "role": role, "id": id, "installed": bool(model.get("installed", false)), "loaded": bool(model.get("loaded", false)), "warm": role == "coding_model" or bool(selection.get("warm", false)), "state": "Unavailable" if not id.is_empty() and model.is_empty() else "Loaded" if bool(model.get("loaded", false)) else "Downloaded" if bool(model.get("installed", false)) else "Not downloaded" if not id.is_empty() else "—", "hint": ""})
+		for id in models:
+			if models[id].get("installed", false) and not assigned.has(id):
+				rows.append({"task": "Other installed", "role": "", "id": id, "installed": true, "loaded": bool(models[id].get("loaded", false)), "warm": manager.draft.extra_warm.has(id), "state": "Loaded" if bool(models[id].get("loaded", false)) else "Downloaded", "hint": ""})
+		var capacity := {}
+		if not manager.snapshot.is_empty():
+			var snapshot: Dictionary = manager.snapshot
+			capacity = {"npu_used": float(snapshot.get("npu_used", -1)), "npu_total": float(snapshot.get("npu_total", -1)), "npu_free": float(snapshot.get("npu_total", -1)) - float(snapshot.get("npu_used", -1)), "disk_free": float(snapshot.get("disk_free", -1)), "disk_total": float(snapshot.get("disk_total", -1))}
+		var plan_state := {}
+		if not manager.plan.is_empty():
+			var plan: Dictionary = manager.plan
+			plan_state = {"ok": bool(plan.get("ok", false)), "actions": plan.get("actions", []), "errors": Array(plan.get("errors", [])), "warnings": Array(plan.get("warnings", [])), "expired": Time.get_ticks_msec() - int(plan.get("checked_at", 0)) > int(manager.PLAN_LIFETIME * 1000), "npu_projected": float(plan.get("npu_projected", -1)), "npu_remaining": float(plan.get("npu_remaining", -1)), "disk_projected_free": float(plan.get("disk_projected_free", -1)), "download_bytes": float(plan.get("download_bytes", -1))}
+		return {"connected": manager.connected, "fresh": fresh, "age": age, "error_type": manager.last_error_type, "unapplied": manager.has_unapplied_changes(), "rows": rows, "role_hints": role_hints.duplicate(true), "capacity": capacity, "plan": plan_state, "operation": manager.operation_state(), "controls": {"refresh_disabled": manager.busy, "check_disabled": check_button.disabled if is_instance_valid(check_button) else true, "apply_disabled": apply_button.disabled if is_instance_valid(apply_button) else true}, "status": manager.message}
 
 	func _ready() -> void:
 		name = "Tiiny Model Management"
@@ -1013,13 +1162,45 @@ class ConfigurationPanel extends VBoxContainer:
 		if manager.snapshot.is_empty() and not manager.busy: manager.refresh_device.call_deferred()
 
 	func _process(_delta: float) -> void:
-		if is_instance_valid(age_label) and not manager.snapshot.is_empty():
-			age_label.text = "Device snapshot age: %ds%s" % [int((Time.get_ticks_msec() - int(manager.snapshot.time)) / 1000), " · stale/unavailable" if not manager.connected else ""]
+		var age := -1
+		var fresh := false
+		if not manager.snapshot.is_empty():
+			age = maxi(0, int((Time.get_ticks_msec() - int(manager.snapshot.time)) / 1000))
+			fresh = manager.connected and age * 1000 <= SNAPSHOT_LIFETIME * 1000
+		if is_instance_valid(age_label):
+			if manager.snapshot.is_empty():
+				age_label.text = "Device unavailable · Refresh to load capacity"
+			elif not manager.connected:
+				age_label.text = "Device unavailable · showing last data from %ds ago" % age
+			elif not fresh:
+				age_label.text = "Stale · %ds old · Refresh to continue" % age
+			else:
+				age_label.text = "Updated %ds ago · stale after %ds" % [age, int(SNAPSHOT_LIFETIME)]
+		if is_instance_valid(capacity_row): capacity_row.modulate.a = 1.0 if fresh else 0.5
 		if is_instance_valid(status_label): status_label.text = manager.message
+		var expired := Time.get_ticks_msec() - int(manager.plan.get("checked_at", 0)) > PLAN_LIFETIME * 1000
+		if is_instance_valid(check_button): check_button.disabled = manager.busy or not fresh
 		if is_instance_valid(apply_button):
-			var expired := Time.get_ticks_msec() - int(manager.plan.get("checked_at", 0)) > PLAN_LIFETIME * 1000
-			apply_button.disabled = manager.busy or not manager.plan.get("ok", false) or expired
+			apply_button.disabled = manager.busy or not fresh or not manager.plan.get("ok", false) or expired
 			apply_button.text = "Check expired" if manager.plan.get("ok", false) and expired else "Apply"
+		if is_instance_valid(plan_expiry_label) and not manager.plan.is_empty():
+			var remaining := int(ceil((int(manager.plan.get("checked_at", 0)) + PLAN_LIFETIME * 1000 - Time.get_ticks_msec()) / 1000.0))
+			plan_expiry_label.text = "expired · Check Config again" if remaining <= 0 else "expires in %ds" % remaining
+			plan_expiry_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45) if remaining <= 0 else Color(0.7, 0.75, 0.83))
+		if is_instance_valid(failure_label):
+			var state: Dictionary = manager.operation_state()
+			failure_label.visible = bool(state.failed) and not bool(state.applying)
+			if failure_label.visible:
+				var tail: Array = state.log_tail
+				failure_label.text = "Apply stopped. Attempted operations:\n" + "\n".join(tail.slice(maxi(0, tail.size() - 6))) + "\nNo preferences were saved. Fix the issue, then Check Config again."
+		if is_instance_valid(operation_label):
+			var operation: Dictionary = manager.operation_state()
+			var active := bool(operation.applying) and not str(operation.verb).is_empty()
+			operation_label.visible = bool(operation.applying)
+			operation_bar.visible = bool(operation.applying)
+			if operation_label.visible:
+				operation_label.text = ("%s %s · %.1f%% · %ds elapsed" % [str(operation.verb).capitalize(), operation.model, operation.progress, operation.elapsed]) if active else "Starting model operation…"
+				operation_bar.value = operation.progress if active else 0.0
 
 	func _label(text: String, parent: Node = content) -> Label:
 		var label := Label.new()
@@ -1050,12 +1231,15 @@ class ConfigurationPanel extends VBoxContainer:
 		return label
 
 	func _capacity(text: String, used: float, total: float, parent: Node) -> void:
-		_label(text, parent)
+		var label := _label(("NPU capacity unknown" if "NPU" in text else "SSD capacity unknown") if total < 0 else text, parent)
+		label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		label.name = "CapacityLabel"
 		var bar := ProgressBar.new()
+		bar.name = "CapacityBar"
 		bar.show_percentage = false
 		bar.custom_minimum_size.y = 12
 		bar.max_value = maxf(total, 1)
-		bar.value = maxf(used, 0)
+		bar.value = maxf(used, 0) if total >= 0 else 0
 		parent.add_child(bar)
 
 	static func _size(bytes: float) -> String:
@@ -1064,6 +1248,7 @@ class ConfigurationPanel extends VBoxContainer:
 	func _render() -> void:
 		if not is_inside_tree() or rebuilding: return
 		rebuilding = true
+		role_hints.clear()
 		for child in content.get_children():
 			content.remove_child(child)
 			child.queue_free()
@@ -1075,14 +1260,27 @@ class ConfigurationPanel extends VBoxContainer:
 		var title := _label("Tiiny Model Management", header)
 		title.add_theme_font_size_override("font_size", 18)
 		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var connection := _label("Connected" if manager.connected else "Not connected", header)
+		var connection_text := "Connected" if manager.connected else "Not connected"
+		if not manager.connected:
+			match manager.last_error_type:
+				"auth": connection_text = "Authentication failed"
+				"capacity": connection_text = "Capacity unavailable"
+				"disconnect": connection_text = "Device unavailable"
+		var connection := _label(connection_text, header)
+		connection.name = "ConnectionState"
 		connection.autowrap_mode = TextServer.AUTOWRAP_OFF
 		connection.add_theme_color_override("font_color", Color(0.65, 0.85, 0.7) if manager.connected else Color(0.9, 0.7, 0.5))
 		_button("Refresh", manager.refresh_device, header)
+		if manager.has_unapplied_changes():
+			var unsaved := _label("Unapplied changes · Check Config and Apply to save", content)
+			unsaved.name = "UnappliedChanges"
+			unsaved.add_theme_color_override("font_color", Color(0.95, 0.8, 0.45))
 		if not snapshot.is_empty():
 			var capacity_row := HBoxContainer.new()
+			capacity_row.name = "CapacityRow"
 			capacity_row.add_theme_constant_override("separation", 24)
 			content.add_child(capacity_row)
+			self.capacity_row = capacity_row
 			var npu_box := VBoxContainer.new()
 			npu_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			capacity_row.add_child(npu_box)
@@ -1094,8 +1292,14 @@ class ConfigurationPanel extends VBoxContainer:
 			_capacity("SSD · %s free / %s" % [_size(snapshot.disk_free), _size(snapshot.disk_total)], float(snapshot.disk_total) - float(snapshot.disk_free), snapshot.disk_total, ssd_box)
 			if not manager.plan.is_empty():
 				var forecast: Dictionary = manager.plan
-				_capacity("After Apply · %.0f free / %.0f reserved" % [forecast.npu_remaining, forecast.npu_reserve], forecast.npu_projected, total, npu_box)
-				_capacity("After downloads · %s free" % _size(forecast.disk_projected_free), float(snapshot.disk_total) - forecast.disk_projected_free, snapshot.disk_total, ssd_box)
+				var projected := float(forecast.get("npu_projected", -1))
+				var remaining := float(forecast.get("npu_remaining", -1))
+				var reserved := float(forecast.get("npu_reserve", 0))
+				var projected_disk := float(forecast.get("disk_projected_free", -1))
+				var free_text := ("%.0f free" % remaining) if remaining >= 0 else ("insufficient by %.0f" % absf(remaining))
+				var prefix := "After Apply" if bool(forecast.get("ok", false)) else "Projected"
+				_capacity("%s · %s / %.0f reserved" % [prefix, free_text, reserved], projected, total, npu_box)
+				_capacity("After downloads · %s free" % _size(projected_disk), float(snapshot.disk_total) - projected_disk, snapshot.disk_total, ssd_box)
 			age_label = _label("")
 		content.add_child(HSeparator.new())
 		var scroll := ScrollContainer.new()
@@ -1117,8 +1321,12 @@ class ConfigurationPanel extends VBoxContainer:
 			var selection: Dictionary = manager.draft.roles[role]
 			var id := str(selection.model)
 			var model: Dictionary = models.get(id, {})
-			_cell(ROLES[role], 0, grid)
+			var task_cell := _cell(ROLES[role], 0, grid)
+			var required: Array = ROLE_TYPES[role]
+			var required_text := " or ".join(required) + (" with Tool Use" if role == "coding_model" else "")
+			task_cell.tooltip_text = "Requires " + required_text + "."
 			var picker := OptionButton.new()
+			picker.name = "RolePicker_" + role
 			picker.custom_minimum_size.x = 240
 			picker.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			picker.clip_text = true
@@ -1128,12 +1336,27 @@ class ConfigurationPanel extends VBoxContainer:
 			picker.set_item_metadata(0, "")
 			var candidates: Array = models.keys()
 			candidates.sort()
+			var matching := 0
 			for candidate in candidates:
 				if not Planner.suitable(role, models[candidate]): continue
+				matching += 1
 				picker.add_item(models[candidate].name + (" · installed" if models[candidate].installed else " · download"))
 				picker.set_item_metadata(picker.item_count - 1, candidate)
 				picker.set_item_tooltip(picker.item_count - 1, candidate + "\n" + str(models[candidate].description).left(1200))
 				if candidate == id: picker.select(picker.item_count - 1)
+			var hint := ""
+			if models.is_empty():
+				hint = "No catalog models loaded. Refresh the device."
+			elif matching == 0:
+				hint = "No %s model available in the current catalog." % required_text
+			if not hint.is_empty():
+				picker.add_item("No compatible model")
+				picker.set_item_disabled(picker.item_count - 1, true)
+				picker.select(0)
+				role_hints[role] = {"required": required_text, "message": hint}
+			else:
+				role_hints.erase(role)
+			picker.tooltip_text = required_text + ("" if hint.is_empty() else "\n" + hint)
 			picker.disabled = manager.busy
 			picker.item_selected.connect(func(index: int): _choose_model(role, str(picker.get_item_metadata(index))))
 			grid.add_child(picker)
@@ -1164,7 +1387,7 @@ class ConfigurationPanel extends VBoxContainer:
 			warm.tooltip_text = "Scripting is always kept loaded." if role == "coding_model" else "Desired state after Apply. Actual loaded state is shown separately."
 			warm.toggled.connect(func(value: bool): _choose_warm(role, value))
 			grid.add_child(warm)
-			_cell("Loaded" if model.get("loaded", false) else "Installed" if model.get("installed", false) else "Not installed" if not id.is_empty() else "—", 7, grid)
+			_cell("Unavailable" if not id.is_empty() and model.is_empty() else "Loaded" if model.get("loaded", false) else "Downloaded" if model.get("installed", false) else "Not downloaded" if not id.is_empty() else "—", 7, grid)
 			var info_button := _button("Info", _show_model_info.bind(id), grid)
 			info_button.disabled = id.is_empty()
 			info_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1186,9 +1409,17 @@ class ConfigurationPanel extends VBoxContainer:
 			extra.disabled = manager.busy
 			extra.toggled.connect(func(value: bool): _choose_extra(id, value))
 			grid.add_child(extra)
-			_cell("Loaded" if models[id].loaded else "Installed", 7, grid)
+			_cell("Loaded" if models[id].loaded else "Downloaded", 7, grid)
 			var info_button := _button("Info", _show_model_info.bind(id), grid)
 			info_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		if not role_hints.is_empty():
+			var hints := VBoxContainer.new()
+			hints.name = "RoleUnavailableHints"
+			content.add_child(hints)
+			for role in ROLES:
+				if role_hints.has(role):
+					var hint_label := _label("%s: %s" % [ROLES[role], str(role_hints[role].message)], hints)
+					hint_label.add_theme_color_override("font_color", Color(0.9, 0.75, 0.5))
 		var advanced := FoldableContainer.new()
 		advanced.name = "AdvancedHeadroom"
 		advanced.title = "Advanced headroom"
@@ -1223,36 +1454,51 @@ class ConfigurationPanel extends VBoxContainer:
 			var plan: Dictionary = manager.plan
 			var plan_header := HBoxContainer.new()
 			plan_box.add_child(plan_header)
-			var heading := _label("Change plan · %d operations" % plan.actions.size(), plan_header)
+			var heading := _label("Change plan · %d operations" % Array(plan.get("actions", [])).size(), plan_header)
 			heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			plan_expiry_label = _label("", plan_header)
+			plan_expiry_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 			_button("Details", _show_plan_details, plan_header)
-			for error in plan.errors:
+			for error in plan.get("errors", []):
 				_label(error, plan_box).add_theme_color_override("font_color", Color(1.0, 0.55, 0.45))
-			if plan.actions.is_empty():
+			if Array(plan.get("actions", [])).is_empty():
 				_label("No model operations. Apply saves the checked configuration.", plan_box)
 			else:
 				var operations := Tree.new()
 				operations.name = "PendingOperations"
 				operations.columns = 2
 				operations.hide_root = true
-				operations.custom_minimum_size.y = clampi(plan.actions.size() * 28 + 8, 64, 160)
+				operations.custom_minimum_size.y = clampi(Array(plan.get("actions", [])).size() * 28 + 8, 64, 160)
 				operations.set_column_custom_minimum_width(0, 100)
 				operations.set_column_expand(0, false)
 				var root := operations.create_item()
-				for action in plan.actions:
+				for action in plan.get("actions", []):
 					var item := operations.create_item(root)
 					item.set_text(0, str(action.verb).capitalize())
 					item.set_text(1, str(action.id))
 				plan_box.add_child(operations)
+		operation_label = _label("")
+		operation_label.name = "OperationStatus"
+		operation_label.visible = false
+		operation_bar = ProgressBar.new()
+		operation_bar.name = "OperationProgress"
+		operation_bar.max_value = 100
+		operation_bar.show_percentage = false
+		operation_bar.visible = false
+		content.add_child(operation_bar)
+		failure_label = _label("")
+		failure_label.name = "PartialResult"
+		failure_label.visible = false
 		status_label = _label(manager.message)
 		status_label.name = "ConfigurationStatus"
 		var actions := HBoxContainer.new()
 		content.add_child(actions)
 		actions.add_spacer(false)
-		_button("Check Config", manager.check_config, actions)
+		var check := _button("Check Config", manager.check_config, actions)
+		check_button = check
 		var apply := _button("Apply", manager.apply_config, actions)
 		apply_button = apply
-		apply.disabled = manager.busy or not manager.plan.get("ok", false)
+		apply.disabled = manager.busy or manager.snapshot.is_empty() or not manager.connected or not manager.plan.get("ok", false)
 		apply.tooltip_text = "Apply rechecks the device before executing the reviewed plan. Any draft edit invalidates the check."
 		rebuilding = false
 
@@ -1260,25 +1506,30 @@ class ConfigurationPanel extends VBoxContainer:
 		var dialog := AcceptDialog.new()
 		dialog.name = "ModelInformation"
 		dialog.title = title
-		var body := RichTextLabel.new()
-		body.bbcode_enabled = false
+		dialog.ok_button_text = "Close"
+		dialog.min_size = Vector2i(620, 420)
+		dialog.unresizable = false
+		var body := TextEdit.new()
+		body.name = "ModelInformationText"
+		body.editable = false
+		body.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 		body.text = text
-		body.custom_minimum_size = Vector2(480, 300)
 		dialog.add_child(body)
 		add_child(dialog)
 		dialog.visibility_changed.connect(func():
 			if not dialog.visible: dialog.queue_free())
-		dialog.popup_centered_clamped(Vector2i(600, 420), 0.8)
+		dialog.popup_centered_clamped(Vector2i(660, 440), 0.8)
 
 	func _show_model_info(id: String) -> void:
 		var model: Dictionary = manager.snapshot.get("models", {}).get(id, {})
 		if model.is_empty(): return
-		_show_information(str(model.name), "%s\n%s\nCapabilities: %s\nMaximum context: %s\n\n%s\n\nContext in this screen limits chat requests; it does not reconfigure Tiiny memory. Token/s is shown only when measured." % [id, model.type, ", ".join(model.supported), model.max_context, model.description])
+		var state := "Loaded" if model.get("loaded", false) else "Downloaded" if model.get("installed", false) else "Not downloaded"
+		_show_information(str(model.name), "%s\nType: %s\nCapabilities: %s\nState: %s\nMaximum context: %s\nDownload size: %s\nNPU units: %s\n\n%s\n\nContext in this screen limits chat requests; it does not reconfigure Tiiny memory. Token/s is shown only when measured." % [id, model.type, ", ".join(model.supported), state, model.max_context, _size(float(model.get("bytes", -1))), str(model.get("npu", -1)), model.description])
 
 	func _show_plan_details() -> void:
 		var plan: Dictionary = manager.plan
 		if plan.is_empty(): return
-		_show_information("Plan details", "NPU after Apply: %.0f units used / %.0f free (%.0f left unused)\nDownloads: %s\nSSD after downloads: %s free\nSSD at peak staging: %s free\nSSD reserve: %s\n\n%s" % [plan.npu_projected, plan.npu_remaining, plan.npu_reserve, _size(plan.download_bytes), _size(plan.disk_projected_free), _size(plan.disk_peak_free), _size(plan.disk_reserve), "\n\n".join(plan.warnings)])
+		_show_information("Plan details", "NPU after Apply: %.0f units used / %.0f free (%.0f left unused)\nDownloads: %s\nSSD after downloads: %s free\nSSD at peak staging: %s free\nSSD reserve: %s\n\n%s" % [float(plan.get("npu_projected", -1)), float(plan.get("npu_remaining", -1)), float(plan.get("npu_reserve", 0)), _size(float(plan.get("download_bytes", -1))), _size(float(plan.get("disk_projected_free", -1))), _size(float(plan.get("disk_peak_free", -1))), _size(float(plan.get("disk_reserve", -1))), "\n\n".join(plan.get("warnings", []))])
 
 	func _choose_model(role: String, id: String) -> void:
 		var config: Dictionary = manager.draft.duplicate(true)

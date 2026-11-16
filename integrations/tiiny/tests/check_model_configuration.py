@@ -22,9 +22,10 @@ parser.add_argument("--http-smoke", action="store_true", help="Exercise real HTT
 parser.add_argument("--display-driver", choices=("x11", "wayland"), default="x11", help="Native display backend for displayed checks")
 parser.add_argument("--displayed", action="store_true", help="Run editor checks on the attached display and capture windows")
 parser.add_argument("--live-inference", action="store_true", help="Run real chat and polygon inference without changing model residency")
+parser.add_argument("--live-apply", action="store_true", help="Run one approved real download-only model Apply and verify device state")
 parser.add_argument("--report", type=Path, help="Write sanitized baseline identity and per-stage results as JSON")
 args = parser.parse_args()
-report = {"created_utc": datetime.now(timezone.utc).isoformat(), "mode": "live-inference" if args.live_inference else "live-readonly" if args.live_readonly else "offline", "stages": [], "sources": {}}
+report = {"created_utc": datetime.now(timezone.utc).isoformat(), "mode": "live-apply" if args.live_apply else "live-inference" if args.live_inference else "live-readonly" if args.live_readonly else "offline", "stages": [], "sources": {}}
 
 def git_output(*arguments):
     return subprocess.run(["git", *arguments], cwd=root, check=True, text=True, capture_output=True).stdout.strip()
@@ -95,10 +96,11 @@ with tempfile.TemporaryDirectory(prefix="tiiny-model-config-") as directory:
     (fixture / "invalid_script.gd").write_text((Path(__file__).parent / "test_invalid_script.gd").read_text())
     run_stage("invalid_generated_script", [str(args.godot.resolve()), "--headless", "--path", directory, "--script", "invalid_script.gd"], offline_environment, 30, "Invalid generated script rejected before file creation (expected parse diagnostic).", expected_script_errors=1)
 
-    if args.editor_smoke or args.live_readonly or args.http_smoke or args.live_inference or args.displayed:
-        if args.live_readonly or args.live_inference:
+    if args.editor_smoke or args.live_readonly or args.http_smoke or args.live_inference or args.live_apply or args.displayed:
+        if args.live_readonly or args.live_inference or args.live_apply:
             environment["TIINY_TEST_LIVE_READONLY"] = "1"
             if args.live_inference: environment["TIINY_TEST_LIVE_INFERENCE"] = "1"
+            if args.live_apply: environment["TIINY_TEST_LIVE_APPLY"] = "1"
         (fixture / "fixture.gd").write_text('extends Node2D\nfunc _ready():\n\tprint("Tiiny fixture scene running")\n')
         (fixture / "fixture.tscn").write_text('[gd_scene load_steps=2 format=3]\n[ext_resource type="Script" path="res://fixture.gd" id="1"]\n[node name="Fixture" type="Node2D"]\nscript = ExtResource("1")\n')
         addon = fixture / "addons" / "models_smoke"
@@ -116,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="tiiny-model-config-") as directory:
         (addon / "plugin.gd").write_text((Path(__file__).parent / "editor_model_settings_smoke.gd").read_text())
         with (fixture / "project.godot").open("a") as project:
             project.write('\n[editor_plugins]\nenabled=PackedStringArray("res://addons/models_smoke/plugin.cfg")\n')
-        editor_environment = environment if args.live_readonly or args.live_inference else offline_environment
+        editor_environment = environment if args.live_readonly or args.live_inference or args.live_apply else offline_environment
         if args.http_smoke:
             from http_fixture import start
             server = start()
@@ -130,6 +132,11 @@ with tempfile.TemporaryDirectory(prefix="tiiny-model-config-") as directory:
             capture.mkdir(parents=True, exist_ok=True)
             editor_environment["TIINY_TEST_CAPTURE_DIR"] = str(capture.resolve())
         options = ["--display-driver", args.display_driver] if args.displayed else ["--headless"]
-        run_stage("editor_smoke", [str(args.godot.resolve()), *options, "--editor", "--path", directory, "--rendering-method", "gl_compatibility"], editor_environment, 480 if args.live_inference else 90, "Editor Models section smoke check passed")
+        run_stage("editor_smoke", [str(args.godot.resolve()), *options, "--editor", "--path", directory, "--rendering-method", "gl_compatibility"], editor_environment, 1200 if args.live_apply else 480 if args.live_inference else 90, "Live Apply download passed" if args.live_apply else "Editor Models section smoke check passed")
+        if args.editor_smoke:
+            for stage, marker in (("save", "Settings restart save passed"), ("unsaved", "Settings restart unsaved passed"), ("final", "Settings restart final passed")):
+                restart_environment = offline_environment.copy()
+                restart_environment["TIINY_TEST_SETTINGS_STAGE"] = stage
+                run_stage("editor_settings_" + stage, [str(args.godot.resolve()), "--headless", "--editor", "--path", directory, "--rendering-method", "gl_compatibility"], restart_environment, 90, marker)
         if args.http_smoke and (server.request_count == 0 or other_server.request_count != 0):
             raise SystemExit("Two-device binding fixture contacted an unexpected endpoint")

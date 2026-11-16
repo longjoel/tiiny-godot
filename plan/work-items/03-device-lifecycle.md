@@ -1,6 +1,6 @@
 # 03 — Device binding and protected coding-model lifecycle
 
-Status: In progress — user prioritized this item while story 02 remains unfinished. The prior source-text smoke test does not establish acceptance. See [implementation plan](../implementation/03-device-lifecycle.md).
+Status: Accepted (deterministic/fake-device, live inference, and a download-only real Apply). Real warm-set-changing load/unload and restoration were not run because the device’s kept set needs 101 NPU units plus the 5-unit reserve; no model was evicted. Those hardware checks are carried into story 04’s gated Apply (download-only) and later story 10 scheduling. See [acceptance evidence](../evidence/03-acceptance.md). The prior source-text smoke test is not acceptance evidence.
 
 Feature: Device binding and protected coding-model lifecycle
 
@@ -18,11 +18,11 @@ Bind management and inference to the same device. Restore the coding model first
 
 ## Acceptance criteria
 
-- [ ] Test discovery or explicit address binding and verify that management and inference reach the intended device.
-- [ ] Validate and persist the selected coding model; reject incompatible capabilities before changing device state.
-- [ ] Confirm downloads and load completion from device state rather than process exit alone.
-- [ ] When a connection is available, restore the coding model on startup/reconnect; never deliberately evict it for another job.
-- [ ] Disconnect, authentication failure, and capacity failure leave a clear recoverable state without reporting readiness.
+- [x] Test discovery or explicit address binding and verify that management and inference reach the intended device.
+- [x] Validate and persist the selected coding model; reject incompatible capabilities before changing device state.
+- [x] Confirm downloads and load completion from device state rather than process exit alone.
+- [x] When a connection is available, restore the coding model on startup/reconnect; never deliberately evict it for another job.
+- [x] Disconnect, authentication failure, and capacity failure leave a clear recoverable state without reporting readiness.
 
 ## Concrete scenarios
 
@@ -30,4 +30,4 @@ Use DEV-01, DEV-02 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.md). F
 
 ## Evidence and handoff
 
-See [verification in progress](../evidence/03-progress.md) and [STATUS.md](../STATUS.md) for current evidence and remaining gates. This item is not accepted.
+See [acceptance evidence](../evidence/03-acceptance.md) and [STATUS.md](../STATUS.md). Story 03 gates story 04; story 04 implements the Models UI and carries the gated real-device Apply.

@@ -1,5 +1,7 @@
 # Story 03 — verification in progress
 
+> Superseded by [acceptance evidence](03-acceptance.md). Story 03 is accepted on deterministic/fake-device and live read-only evidence; real mutating restoration and live coding inference are explicitly skipped.
+
 This is progress evidence, not acceptance. Story 02 remains incomplete and is a dependency. The current implementation and Linux editor build have not been accepted for real mutating device operations.
 
 | Parent criterion | Evidence so far | Remaining proof |

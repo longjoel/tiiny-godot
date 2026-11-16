@@ -122,16 +122,17 @@ func _valid_store(value: Variant) -> bool:
 					return false
 				if attempt.state == "completed" and not attempt.device_operations.is_empty() and attempt.device_operations.back().state != "verified":
 					return false
-		if job.state in ["running", "completed", "failed", "cancelled", "interrupted"]:
+		var prestart_cancelled: bool = job.state == "cancelled" and job.attempts.is_empty()
+		if job.state in ["running", "completed", "failed", "cancelled", "interrupted"] and not prestart_cancelled:
 			if job.attempts.is_empty() or job.attempts.back().state != job.state:
 				return false
-		if pending_seen and job.state != "queued":
+		if pending_seen and job.state != "queued" and not prestart_cancelled:
 			return false
-		if job.state in ["queued", "running", "failed", "cancelled", "interrupted"]:
+		if job.state in ["queued", "running", "failed", "cancelled", "interrupted"] and not prestart_cancelled:
 			pending_seen = true
 		if job.state == "running":
 			running += 1
-		if job.state in ["failed", "cancelled", "interrupted"]:
+		if job.state in ["failed", "interrupted"] or (job.state == "cancelled" and not prestart_cancelled):
 			stopped += 1
 		ids[job.id] = true
 		keys[job.submission_key] = true
@@ -287,7 +288,7 @@ func start_next() -> Dictionary:
 	if error.is_empty() and not _data.is_empty() and not _data.paused and _data.stop_reason.is_empty():
 		var can_start := true
 		for job in _data.jobs:
-			if job.state in ["running", "failed", "cancelled", "interrupted"]:
+			if job.state in ["running", "failed", "interrupted"]:
 				can_start = false
 				break
 		if can_start:
@@ -577,11 +578,28 @@ func resolve(id: String, decision: String) -> bool:
 			if job.id == id and job.state in ["failed", "cancelled"]:
 				job.state = "queued" if decision == "retry" else "skipped"
 				job["resolution"] = {"decision": decision, "at": Time.get_unix_time_from_system()}
-				job.attempts.back()["resolution"] = job.resolution.duplicate(true)
+				if not job.attempts.is_empty():
+					job.attempts.back()["resolution"] = job.resolution.duplicate(true)
 				_data.stop_reason = ""
 				# Resolving the stopped position and resuming dispatch are separate
 				# explicit user actions.
 				_data.paused = true
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
+# Cancelling a job that has not started is terminal and does not stop later
+# queued work: no worker or remote effect exists yet.
+func cancel_queued(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id == id and job.state == "queued" and job.attempts.is_empty():
+				job.state = "cancelled"
+				job.result = {"error": "Cancelled before start"}
+				job["cancelled_at"] = Time.get_unix_time_from_system()
 				ok = _save()
 				break
 	_mutex.unlock()
@@ -618,7 +636,7 @@ func hide(id: String) -> bool:
 	var ok := false
 	if error.is_empty():
 		for job in _data.jobs:
-			if job.id == id and job.state in ["completed", "skipped"] and not job.get("hidden", false):
+			if job.id == id and (job.state in ["completed", "skipped"] or (job.state == "cancelled" and job.attempts.is_empty())) and not job.get("hidden", false):
 				job["hidden"] = true
 				ok = _save()
 				break

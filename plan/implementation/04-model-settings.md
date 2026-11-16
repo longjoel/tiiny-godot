@@ -1,6 +1,6 @@
 # Story 04 implementation plan — model roles, installed inventory, and warm selections
 
-Status: Planning complete. Implementation starts only after story 03's device binding, coding-model protection, and error-state gates pass. This plan changes documentation only.
+Status: Accepted. Story 03 is accepted. Slices A–G are implemented and verified: manager/panel state accessors, freshness gating, role explanations, one-table vocabulary, copyable Info, operation progress, plan-expiry countdown, bounded partial results, displayed 1400/600 px captures, and a three-process restart fixture. One real download-only Tiiny Apply verified progress/completion and an unchanged warm set.
 
 Parent: [04 — Model roles, installed inventory, and warm selections](../work-items/04-ui-model-settings.md). Visuals: [interactive Models mockup](../mockups/04-model-settings.html), [state diagrams](../mockups/04-model-settings-diagrams.md).
 
@@ -224,7 +224,7 @@ Build the review and regression base before polishing the panel.
 ## Dependencies and risks
 
 - **Story 03 gate:** binding, protected switching, download/load verification, and error states must pass before story 04 acceptance. UI slices can be built against fixtures earlier, but cannot be accepted.
-- **Catalog cache gap:** `_verify_coding_model_stability` reads `_tiiny_ai/catalog_cache`, but nothing currently writes it. Story 03 should populate it or the status will always report "not in the current catalog". Confirm during 03 handoff.
+- **Catalog cache gap:** resolved in story 03. `_accept_snapshot` now stores the last observed type/capabilities in `_tiiny_ai/catalog_cache` and the startup status distinguishes missing catalog data, a removed model, a non-scripting type, and missing Tool Use.
 - **Device variability:** real catalogs may omit sizes, NPU units, or capabilities. Every unknown value must render as unknown, not zero.
 - **Capacity semantics:** NPU units are allocation units, not RAM; SSD forecasts include one staging allowance. Keep the wording consistent with the planner.
 - **UI width:** the table is wide; horizontal scroll and clipped text must be reviewed at 600 px.
@@ -232,4 +232,4 @@ Build the review and regression base before polishing the panel.
 
 ## Handoff
 
-Planning only. No build or device operation was performed. Implementation starts after story 03's gates. Record changed files, checks, displayed captures, device runs, and remaining limitations in the work item and STATUS.
+Accepted. See [acceptance evidence](../evidence/04-acceptance.md) for the criterion matrix, final build/tests, displayed captures, restart fixture, live inference result, and the real download-only Apply. Remaining warm-set-changing load/unload and restoration move to story 10 or a separately approved run.

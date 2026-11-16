@@ -271,6 +271,9 @@ func _build_ui() -> void:
 		clear.add_theme_font_size_override("font_size", 11)
 		header.add_child(clear)
 		match spec.key:
+			"queued":
+				clear.text = "Cancel all"
+				clear.pressed.connect(_on_cancel_queued_all)
 			"completed": clear.pressed.connect(_on_clear_completed)
 			"failed": clear.pressed.connect(_on_clear_failed)
 			_: clear.visible = false
@@ -730,6 +733,8 @@ func _make_card(job: Dictionary) -> PanelContainer:
 	content.add_child(buttons)
 	if job.state == "running":
 		buttons.add_child(_card_button("Cancel", func(): executor.cancel_current()))
+	elif job.state == "queued":
+		buttons.add_child(_card_button("Cancel", func(): _on_cancel_queued(str(job.id))))
 	elif job.state in ["failed", "cancelled"]:
 		buttons.add_child(_card_button("Retry", func(): _on_retry_job(str(job.id))))
 		buttons.add_child(_card_button("Clear", func(): _on_clear_job(str(job.id))))
@@ -781,11 +786,27 @@ func _on_retry_job(id: String) -> void:
 	if queue.resolve(id, "retry"):
 		_refresh()
 
+func _on_cancel_queued(id: String) -> void:
+	if available and queue.cancel_queued(id):
+		_refresh()
+
+func _on_cancel_queued_all() -> void:
+	if not available:
+		return
+	for job in queue.snapshot().jobs:
+		if job.state == "queued":
+			queue.cancel_queued(job.id)
+	_refresh()
+
 func _on_clear_job(id: String) -> void:
 	if not available:
 		return
 	var job := get_job_status(id)
 	if job.has("error") or job.state == "interrupted":
+		return
+	if job.state == "cancelled" and job.attempts.is_empty():
+		if queue.hide(id):
+			_refresh()
 		return
 	if job.state in ["failed", "cancelled"] and not queue.resolve(id, "skip"):
 		return
@@ -803,7 +824,9 @@ func _on_clear_failed() -> void:
 	if not available:
 		return
 	for job in queue.snapshot().jobs:
-		if job.state in ["failed", "cancelled"]:
+		if job.state == "cancelled" and job.attempts.is_empty():
+			queue.hide(job.id)
+		elif job.state in ["failed", "cancelled"]:
 			queue.resolve(job.id, "skip")
 	queue.hide_state("skipped")
 	_refresh()
@@ -873,6 +896,9 @@ func _on_check_job(id: String) -> void:
 	recovery_dialog.dialog_text = message
 	recovery_dialog.popup_centered()
 	log_message.emit("Job recovery: " + message, 0)
+	_refresh()
+
+func refresh_board() -> void:
 	_refresh()
 
 func _refresh() -> void:
