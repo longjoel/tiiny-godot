@@ -1,6 +1,6 @@
 # 06 — Typed scene edits with grouped undo/redo
 
-Status: Planning complete; implementation is gated on story 05 (saved-scene identity, path/ownership inspection).
+Status: Accepted. The class-agnostic executor and recipe registry are implemented; the product rectangular collision-shape recipe and test-only Marker2D/Capsule recipes pass through the same undo path. See [acceptance evidence](../evidence/06-acceptance.md).
 
 Feature: Typed scene edits with grouped undo/redo
 
@@ -20,12 +20,12 @@ Design constraint: the collision shape is the first **recipe** of a class-agnost
 
 ## Acceptance criteria
 
-- [ ] Validate target scene, parent, classes, ownership, writable properties, and value/resource compatibility before committing.
-- [ ] An invalid parent, incompatible resource, stale target, or invalid property produces no partial scene mutation.
-- [ ] The successful macro appears correctly in the editor and persists correctly when the scene is saved/reopened.
-- [ ] One normal editor undo removes the operation; redo restores nodes, properties, and resource assignments.
-- [ ] Group scene changes through Godot undo/redo; document separate recovery for filesystem or imported-asset operations.
-- [ ] Focused executor tests and a running-editor test pass independently of model inference.
+- [x] Validate target scene, parent, classes, ownership, writable properties, and value/resource compatibility before committing.
+- [x] An invalid parent, incompatible resource, stale target, or invalid property produces no partial scene mutation.
+- [x] The successful macro appears correctly in the editor and persists correctly when the scene is saved/reopened.
+- [x] One normal editor undo removes the operation; redo restores nodes, properties, and resource assignments.
+- [x] Group scene changes through Godot undo/redo; document separate recovery for filesystem or imported-asset operations.
+- [x] Focused executor tests and a running-editor test pass independently of model inference.
 
 ## Concrete scenarios
 
@@ -33,4 +33,4 @@ Use WS-01, WS-02, WS-13 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.m
 
 ## Evidence and handoff
 
-Pending. Record changed files, validation commands and results, editor/device observations, remaining limitations, and the next action. Update [STATUS.md](../STATUS.md) when handing off.
+Accepted. Implementation: `editor/tiiny/tools/transactions.gd`, build/dock injection as `workspace_transactions_script`, product rectangular-collision recipe, and test-only Marker2D/Capsule recipes in `editor_workspace_transactions.gd`. Final build `da3b7c67a` (PID 797629) passed the transaction editor fixture and the existing 11-stage editor smoke. See [acceptance evidence](../evidence/06-acceptance.md). Story 07 consumes the recipe provider and remains the model-facing registry.

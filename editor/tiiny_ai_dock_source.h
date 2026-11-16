@@ -33,6 +33,16 @@ var history_box: VBoxContainer
 var history_scroll: ScrollContainer
 var status: Label
 var jobs_service: Node
+var workspace_inspector_script: Script
+var workspace_inspector: RefCounted
+var workspace_transactions_script: Script
+var workspace_transactions: RefCounted
+var workspace_registry_script: Script
+var workspace_registry: RefCounted
+var turn_ledger: Array[Dictionary] = []
+var turn_id := ""
+var tool_call_count := 0
+var turn_scene_context: Dictionary = {}
 var device_lease := ""
 var device_lease_owner: Node
 var request: HTTPRequest
@@ -428,6 +438,85 @@ func release_uncertain_device(id: String) -> bool:
 	_release_device()
 	return true
 
+func _ensure_workspace_registry() -> bool:
+	if workspace_registry != null: return true
+	if workspace_inspector_script == null or workspace_transactions_script == null or workspace_registry_script == null:
+		return false
+	workspace_inspector = workspace_inspector_script.new()
+	workspace_transactions = workspace_transactions_script.new(workspace_inspector)
+	workspace_registry = workspace_registry_script.new(workspace_inspector, workspace_transactions)
+	workspace_registry.set_handler("generate_image", Callable(self, "_registry_generate_image"))
+	workspace_registry.set_handler("create_gdscript", Callable(self, "_registry_create_gdscript"))
+	workspace_registry.set_handler("append_job", Callable(self, "_registry_append_job"))
+	workspace_registry.set_handler("get_job_status", Callable(self, "_registry_job_status"))
+	return true
+
+func _tool_text_result(text: String) -> Dictionary:
+	if text.begins_with("Error:"):
+		return {"ok": false, "summary": text.trim_prefix("Error:").strip_edges(), "error": {"code": "execution_failed", "message": text.trim_prefix("Error:").strip_edges()}}
+	return {"ok": true, "summary": text, "data": {}}
+
+func _registry_generate_image(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _tool_text_result(await _generate_image_tool(str(arguments.get("prompt", ""))))
+
+func _registry_create_gdscript(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	var result := _tool_text_result(_create_script_tool(str(arguments.get("path", "")), str(arguments.get("source", ""))))
+	var reason := str(arguments.get("reason", "")).strip_edges()
+	if result.get("ok", false) and not reason.is_empty(): result["summary"] = str(result.summary) + " (fallback: " + reason + ")"
+	return result
+
+func _registry_append_job(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _tool_text_result(_append_job_tool(arguments))
+
+func _registry_job_status(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _tool_text_result(_job_status_tool(str(arguments.get("id", ""))))
+
+func _image_model_warm() -> bool:
+	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+	if manager == null or not manager.get("connected"):
+		return false
+	var image_id := str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/models/image_model"))
+	return not image_id.is_empty() and manager.snapshot.get("loaded", {}).has(image_id)
+
+func _refresh_registry_availability() -> void:
+	if not _ensure_workspace_registry(): return
+	var root := EditorInterface.get_edited_scene_root()
+	var saved := root != null and not root.scene_file_path.is_empty()
+	var dirty := saved and root.scene_file_path in EditorInterface.get_unsaved_scenes()
+	var workspace_reason := "Open a saved scene to use workspace tools." if not saved else ("Save the dirty scene before mutating." if dirty else "")
+	var jobs_available: bool = jobs_service != null and bool(jobs_service.get("available"))
+	var image_available := _image_model_warm()
+	var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+	var model_tools := true
+	if manager != null and manager.get("connected") and manager.has_method("is_ready"):
+		model_tools = manager.is_ready()
+	var values := {}
+	for name in ["get_workspace_context", "get_scene_tree", "get_selection", "inspect_node", "inspect_resource", "list_signals"]:
+		values[name] = {"available": saved and model_tools, "reason": workspace_reason if not (saved and model_tools) else ""}
+	values["get_scene_revision"] = {"available": saved and not dirty and model_tools, "reason": workspace_reason if not saved else ("Save the scene before requesting its revision." if dirty else "")}
+	values["add_rectangular_collision_shape"] = {"available": saved and not dirty and model_tools, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
+	values["generate_image"] = {"available": image_available and model_tools, "reason": "Image generation is unavailable: no warm image model." if not image_available else ""}
+	values["create_gdscript"] = {"available": model_tools, "reason": "" if model_tools else "The coding model is not ready or does not support tool use."}
+	values["append_job"] = {"available": jobs_available and model_tools, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
+	values["get_job_status"] = values["append_job"]
+	workspace_registry.set_availability(values)
+
+func _begin_turn() -> void:
+	turn_id = "turn-" + Crypto.new().generate_random_bytes(8).hex_encode()
+	turn_ledger.clear()
+	tool_call_count = 0
+	turn_scene_context = {}
+	if _ensure_workspace_registry():
+		var current: Dictionary = workspace_registry.current_scene_context({})
+		if not current.has("error"):
+			turn_scene_context = current.get("scene", {}).duplicate(true)
+
+func _turn_context(call_id: String) -> Dictionary:
+	var context := turn_scene_context.duplicate(true)
+	context["call_id"] = call_id
+	context["undo_group"] = "tiiny:" + turn_id + ":" + call_id
+	return context
+
 func _send_chat(system: String, user: String) -> void:
 	request.timeout = float(queued_chat_parameters.timeout_ms) / 1000.0 if queued_chat_started else _request_timeout()
 	var messages: Array = [{"role": "system", "content": system}]
@@ -437,13 +526,18 @@ func _send_chat(system: String, user: String) -> void:
 		turn_messages.append({"role": "user", "content": user})
 		tool_rounds = 0
 		tool_call_ids.clear()
+		tool_call_count = 0
+		turn_ledger.clear()
 		messages.append_array(turn_messages)
 	else:
 		messages.append({"role": "user", "content": user})
 	var payload := {"model": pending_model, "messages": messages, "stream": false}
 	if request_stage == "answer":
-		payload["tools"] = ResourceToolLibrary.definitions()
-		payload["tool_choice"] = "auto"
+		_refresh_registry_availability()
+		var tools: Array = workspace_registry.tools_payload() if workspace_registry != null else ResourceToolLibrary.definitions()
+		if not tools.is_empty():
+			payload["tools"] = tools
+			payload["tool_choice"] = "auto"
 	if not _check_context_budget(payload): return
 	var error := _submit_chat(payload)
 	if error != OK:
@@ -453,12 +547,19 @@ func _send_chat(system: String, user: String) -> void:
 func _start_answer(kind: String) -> void:
 	request_stage = "answer"
 	_set_status("Answering…")
-	var instructions := SYSTEM_PROMPT + " Request category: " + kind + "."
+	_begin_turn()
 	var custom_prompt := str(queued_chat_parameters.get("custom_prompt", "")) if queued_chat_started else str(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/system_prompt_extra")).strip_edges()
-	if not custom_prompt.is_empty():
-		instructions += "\nAdditional user instructions:\n" + custom_prompt
 	var context := str(queued_chat_parameters.get("context", "")) if queued_chat_started else _editor_context()
-	_send_chat(instructions, pending_prompt + context)
+	var instructions: String
+	var user_text := pending_prompt
+	if _ensure_workspace_registry():
+		instructions = workspace_registry.build_system_prompt(custom_prompt, context)
+	else:
+		instructions = SYSTEM_PROMPT
+		if not custom_prompt.is_empty(): instructions += "\nAdditional user instructions:\n" + custom_prompt
+		user_text += context
+	instructions += "\n\nRequest category: " + kind + "."
+	_send_chat(instructions, user_text)
 
 func _node_properties(node: Node) -> String:
 	var parts: Array[String] = []
@@ -543,7 +644,7 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			_set_status("The response contained malformed tool calls.")
 			return
 		if not calls.is_empty():
-			if calls.size() != 1 or not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128 or calls[0].get("type") != "function" or tool_call_ids.has(calls[0].id) or tool_rounds >= 4:
+			if calls.size() != 1 or not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128 or calls[0].get("type") != "function" or tool_call_ids.has(calls[0].id) or tool_rounds >= 6 or tool_call_count >= 8:
 				send_button.disabled = false
 				_set_status("The model requested invalid, repeated, or unsupported tool calls, or exceeded the tool limit.")
 				return
@@ -556,22 +657,34 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			var arguments: Dictionary = argument_json.data
 			tool_call_ids.append(calls[0].id)
 			tool_rounds += 1
+			tool_call_count += 1
 			turn_messages.append(choice.message)
-			var tool_result := "Error: Unsupported tool or invalid arguments."
-			if function.get("name") == "generate_image" and arguments.size() == 1 and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
-				tool_result = await _generate_image_tool(arguments.prompt)
-			elif function.get("name") == "create_gdscript" and arguments.size() == 2 and arguments.get("path") is String and arguments.get("source") is String:
-				tool_result = _create_script_tool(arguments.path, arguments.source)
-			elif function.get("name") == "append_job" and arguments.get("operation") is String:
-				tool_result = _append_job_tool(arguments)
-			elif function.get("name") == "get_job_status" and arguments.size() == 1 and arguments.get("id") is String:
-				tool_result = _job_status_tool(arguments.id)
-			elif function.get("name") == "get_scene_revision" and arguments.is_empty():
-				tool_result = _scene_revision_tool()
-			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": tool_result})
+			var tool_result: Dictionary
+			var serialized := ""
+			if _ensure_workspace_registry():
+				tool_result = await workspace_registry.execute(str(function.name), arguments, _turn_context(str(calls[0].id)))
+				var scene: Variant = tool_result.get("data", {}).get("scene", null)
+				if scene is Dictionary: turn_scene_context = scene.duplicate(true)
+				turn_ledger.append(workspace_registry.ledger_entry(tool_result, turn_id))
+				serialized = JSON.stringify(tool_result)
+			else:
+				var fallback := "Error: Unsupported tool or invalid arguments."
+				if function.get("name") == "generate_image" and arguments.size() == 1 and arguments.get("prompt") is String and not arguments.prompt.strip_edges().is_empty():
+					fallback = await _generate_image_tool(arguments.prompt)
+				elif function.get("name") == "create_gdscript" and arguments.get("path") is String and arguments.get("source") is String:
+					fallback = _create_script_tool(arguments.path, arguments.source)
+				elif function.get("name") == "append_job" and arguments.get("operation") is String:
+					fallback = _append_job_tool(arguments)
+				elif function.get("name") == "get_job_status" and arguments.size() == 1 and arguments.get("id") is String:
+					fallback = _job_status_tool(arguments.id)
+				elif function.get("name") == "get_scene_revision" and arguments.is_empty():
+					fallback = _scene_revision_tool()
+				tool_result = _tool_text_result(fallback)
+				serialized = fallback
+			turn_messages.append({"role": "tool", "tool_call_id": calls[0].id, "content": serialized})
 			# Preserve actual tool effects even when the continuation fails.
 			conversation = turn_messages.duplicate(true)
-			_append_message("tool", _tool_display(str(function.get("name")), tool_result))
+			_append_message("tool", str(tool_result.get("summary", "Tool finished.")))
 			_set_status("Tool finished.")
 			if queued_chat_started and queued_chat_cancel:
 				send_button.disabled = false
@@ -621,7 +734,12 @@ func _tool_display(name: String, result: String) -> String:
 func _continue_agent() -> void:
 	var messages: Array = [{"role": "system", "content": turn_system}]
 	messages.append_array(turn_messages)
-	var payload := {"model": pending_model, "messages": messages, "tools": ResourceToolLibrary.definitions(), "tool_choice": "auto", "stream": false}
+	var payload := {"model": pending_model, "messages": messages, "stream": false}
+	_refresh_registry_availability()
+	var tools: Array = workspace_registry.tools_payload() if workspace_registry != null else ResourceToolLibrary.definitions()
+	if not tools.is_empty():
+		payload["tools"] = tools
+		payload["tool_choice"] = "auto"
 	if not _check_context_budget(payload): return
 	var error := _submit_chat(payload)
 	if error != OK:

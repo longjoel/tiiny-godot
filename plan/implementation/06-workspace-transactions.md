@@ -1,6 +1,6 @@
 # Story 06 implementation plan — typed scene edits with grouped undo/redo
 
-Status: Planning. Implementation depends on story 05 (saved-scene identity, path/ownership inspection). No code changes in this planning task.
+Status: Accepted. Slices A–E are implemented and verified. See [acceptance evidence](../evidence/06-acceptance.md).
 
 Parent: [06 — Typed scene edits with grouped undo/redo](../work-items/06-workspace-transactions.md). Visuals: [transaction diagrams](../mockups/06-workspace-transactions-diagrams.md). Contract: [story 07 tool orchestration](../implementation/07-orchestrator.md).
 
@@ -235,4 +235,4 @@ Record the operation contract, recipe examples, error matrix, undo/redo evidence
 
 ## Handoff
 
-Planning only. No build, test, or device operation was performed. Implementation starts with the generic executor (slice A), then the recipe interface and first recipe (B), followed by no-partial/undo/persistence (C) and the genericity fixture/integration (D). Record the operation contract, recipe examples, error matrix, undo/redo cycles, save/reopen result, and remaining recipe gaps in the work item and STATUS.
+Accepted. The executor and product recipe are verified in `editor_workspace_transactions.gd`; the existing editor smoke passes. Story 07 now composes the recipe into the model-facing registry and prompt. See [acceptance evidence](../evidence/06-acceptance.md).

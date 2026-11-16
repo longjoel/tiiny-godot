@@ -13,6 +13,10 @@ python3 integrations/tiiny/tests/check_job_process.py
 python3 integrations/tiiny/tests/check_editor_tree.py
 python3 integrations/tiiny/tests/check_builtin_jobs.py
 python3 integrations/tiiny/tests/check_resource_http.py
+python3 integrations/tiiny/tests/check_workspace_inspector.py
+python3 integrations/tiiny/tests/check_workspace_transactions.py
+python3 integrations/tiiny/tests/check_workspace_live.py
+bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_workspace_inspector.gd
 ```
 
 The process test owns its temporary directory, kills its own fixture processes,
@@ -71,6 +75,10 @@ Without flags, the runner extracts the exact embedded manager/chat scripts, chec
 Planner/panel fixtures cover incompatible capabilities, unknown metadata, allocation/SSD headroom, staging/reserves, protected coding replacement, duplicates, context limits, stale checks, compact cells at 600/1400 pixels, horizontal overflow, Info popups, and a single inventory table. Story 04 adds `operation_state()`/`panel_state()` assertions for fresh, stale, and unavailable states, unknown capacity, disabled no-compatible role entries, role explanations, downloaded/loaded vocabulary, plan-expiry text, a bounded partial-result view after a stopped Apply, and a resizable copyable Info dialog. A further fixture proves that an already-loaded compatible coding model is adopted, stale queued restores are cancelled, and no replacement restore is queued. The Jobs suite adds queued-card cancellation, cancel-all, hiding a cancelled queued card, and queue restart retention. DEV-03 covers an image-only catalog rejecting scripting with no planned mutation. A three-process editor restart fixture proves applied warm selections and context survive while an unapplied draft is session-only. Settings migration preserves existing Advanced values. Progress fixtures cover terminal chunking/escapes, device percentages, CLI percentages, and duplicate suppression.
 
 The editor fixture covers invalid/empty catalogs and capacity errors, fake Apply verification/failure, missing/slow SDK commands, cancellation, manager exit, and owned child cleanup. Native resource tests exercise Image/material/blank polygon creation, malformed/degenerate/oversized/nonfinite polygon responses, valid save/reopen, wrong resource types, selection changes away and back, cancellation/reopen and late callbacks. Ordinary node creation uses the native Add Node flow and confirms the dock context reports the edited scene, selected node, and its basic properties.
+
+The provider and editor fixtures cover story 05's read-only workspace tools. Pure checks use an injectable `EditorApi` and cover scene identity, bounds, errors, value encoding, property filtering, resources, signals, turn-context staleness, deleted targets, and a 16 KiB result budget. The editor fixture opens authored, instanced, inherited, dirty, and running-scene cases; verifies real undo `get_version()` changes and dirty state; checks that inspection leaves the scene hash, node count, and undo version unchanged; and confirms the inspector script is injected into the dock without being advertised to the model.
+
+The transaction fixture covers the class-agnostic executor, one-undo recipe, save/reload, stale/dirty rejection, conflict and incompatible-resource rollback, and test-only Marker2D/Capsule recipes. It also exercises the tool registry: schema rejection, availability filtering, prompt sections, ledger entries, chat tool dispatch, structured call IDs, unknown-tool errors, and a recipe through the chat path. The live mode is explicitly gated and uses the real warm coding model plus undo.
 
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects

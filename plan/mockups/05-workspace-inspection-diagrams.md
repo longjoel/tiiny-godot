@@ -136,7 +136,7 @@ flowchart LR
     A -. forbidden .-> E[ResourceSaver / FileAccess write]
     A -. forbidden .-> F[UndoRedo commit]
     A -. forbidden .-> G[EditorInterface play/stop or debugger]
-    C --> H[Verify hash, node count, values, undo history unchanged]
+    C --> H[Verify hash, node count, values, session_revision unchanged]
 ```
 
 Story 05 reports the edited scene. It does not inspect the running remote scene, set breakpoints, or change editor state.

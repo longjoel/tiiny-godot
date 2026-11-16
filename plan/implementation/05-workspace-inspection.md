@@ -1,6 +1,6 @@
 # Story 05 implementation plan — read-only Godot workspace tools
 
-Status: Planning. Implementation can start immediately; it depends only on story 01. No code changes in this planning task.
+Status: Accepted. Slices A–F are implemented and verified. The provider uses the scene-specific undo `get_version()` for session revisions and is injected into the dock without being advertised to the model. See [acceptance evidence](../evidence/05-acceptance.md).
 
 Parent: [05 — Read-only Godot workspace tools](../work-items/05-workspace-inspection.md). Visuals: [inspection diagrams](../mockups/05-workspace-inspection-diagrams.md). Contract: [story 07 tool orchestration](../implementation/07-orchestrator.md).
 
@@ -23,10 +23,29 @@ Today the chat builds a text context in `_editor_context()` (scene path/name, se
 The editor already provides the APIs needed:
 
 - `EditorInterface.get_edited_scene_root()`, `get_selection().get_selected_nodes()`, `get_unsaved_scenes()`, `is_playing_scene()`.
-- `Node.get_path_to()`, `get_class()`, `get_property_list()`, `get()`, `get_owner()`, `get_scene_file_path()`, `get_scene_instance_load_placeholder()`, `is_editable_instance()`.
+- `Node.get_path_to()`, `get_class()`, `get_property_list()`, `get()`, `get_owner()`, `get_scene_file_path()`, `get_scene_instance_load_placeholder()`, `is_editable_instance()`. `is_editable_instance()` errors when passed the root or a non-descendant, so call it only after `root.is_ancestor_of(node)`.
 - `Object.get_signal_list()`, `get_signal_connection_list()`.
 - `PROPERTY_USAGE_EDITOR`, `STORAGE`, `READ_ONLY`, `INTERNAL`, `CATEGORY`, `GROUP`, `SUBGROUP`, `SECRET` for filtering.
-- `EditorInterface.get_editor_undo_redo().get_history_undo_redo(0).get_history_count()` for read-only verification.
+- Scene history and revision: `EditorInterface.get_editor_undo_redo().get_object_history_id(root)`, then `get_history_undo_redo(id).get_version()`; use `get_unsaved_scenes()` for dirty state. Do not use history 0 or `get_history_count()` for revision identity.
+
+### Runtime API verification
+
+A disposable editor probe on this checkout verified:
+
+```text
+history_id=1 version=1 count=0
+after_commit version=2 count=1 unsaved=["res://test.tscn"]
+after_undo   version=1 count=1 unsaved=[]
+after_redo   version=2 count=1 unsaved=["res://test.tscn"]
+editable_self=false (is_editable_instance(root) emitted an ancestor error)
+signal_connections=[]
+```
+
+Consequences for the provider:
+
+- `session_revision` is `"undo:<version>"` from the scene-specific history; it changes on commit, undo, and redo.
+- `get_unsaved_scenes()` returns `res://` paths, so `root.scene_file_path in get_unsaved_scenes()` is a valid dirty check.
+- `editable` is false for the root; for other nodes it is true only when `root.is_ancestor_of(node)` and `root.is_editable_instance(node)`.
 
 ## Tool contract
 
@@ -50,10 +69,11 @@ Each tool follows the story 07 definition shape:
   },
   "risk": "read",
   "availability": Callable,
-  "timeout_ms": 5000,
-  "handler": Callable
+  "timeout_ms": 5000
 }
 ```
+
+Story 07 attaches its registry handler; the provider exposes the canonical `execute(name, arguments, turn_context)` entry point.
 
 ### Result
 
@@ -64,7 +84,7 @@ Each tool follows the story 07 definition shape:
   "ok": true,
   "summary": "Inspected Player [CharacterBody2D] with 34 editor properties.",
   "data": {
-    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "session_revision": "history:42", "dirty": false, "root": "."},
+    "scene": {"path": "res://player.tscn", "revision": "sha256:...", "session_revision": "undo:2", "dirty": false, "root": "."},
     "node": {"path": "Player", "class": "CharacterBody2D", "owner": ".", "scene_file_path": "", "instance_placeholder": false, "script": "res://player.gd", "child_count": 2, "groups": ["player"]},
     "properties": [{"name": "position", "type": "Vector2", "value": "(0, 0)", "usage": ["storage", "editor"], "writable": true}],
     "truncated": {"properties": false}
@@ -83,12 +103,14 @@ Read-only results never include `undo_group`. The provider echoes `call_id` when
 | --- | --- | --- |
 | `no_scene` | No edited scene | Error with a clear message |
 | `scene_not_saved` | No `scene_file_path` (never saved) | Error; save the scene once first |
-| `stale_scene` | File revision or session revision changed | Error; re-inspect |
+| `scene_dirty` | Compatibility `get_scene_revision` on a dirty scene | Error; save before requesting an attachment revision |
+| `scene_unreadable` | Saved scene hash cannot be read | Error; do not substitute an empty revision |
+| `history_unavailable` | Scene has no positive editor history ID | Error; do not invent a session revision |
+| `stale_scene` | Root identity, file revision, session revision, or scene path changed since the turn context | Error; caller must re-inspect |
 | `no_selection` | Selection tool with nothing selected | `ok: true`, empty `nodes`, summary "No nodes selected" |
 | `target_missing` | Node path no longer exists | Error; no substitution |
 | `outside_scene` | Node is not under the edited scene root | Error |
 | `invalid_path` | Absolute path, `..`, empty, or traversal | Error |
-| `stale_scene` | Scene identity/revision changed since the turn context | Error; caller must re-inspect |
 | `invalid_arguments` | Schema failure | Error with field |
 | `not_found` | Resource path missing | Error |
 | `not_a_resource` | Node property is not a Resource | Error |
@@ -101,14 +123,20 @@ Empty selection is not an error. A missing scene is not an empty scene. A delete
 `get_workspace_context` and every result include:
 
 - `scene_path`: `root.scene_file_path` (required; a never-saved scene is rejected).
-- `revision`: SHA-256 of the saved scene file (the base revision).
-- `session_revision`: the edited scene's undo-history version, for example `"history:42"`. It changes after edits, undo, and redo, including Tiiny recipes.
-- `dirty`: whether the path is in `EditorInterface.get_unsaved_scenes()`.
+- `revision`: `"sha256:<hex>"` for the saved scene file (the base revision). The compatibility `get_scene_revision` keeps its older bare `scene_sha256` field and rejects dirty scenes.
+- `session_revision`: the edited scene's scene-specific undo-history version, for example `"undo:2"`. It changes after commit, undo, and redo, including Tiiny recipes. Resolve it with `get_object_history_id(root)` and `get_history_undo_redo(id).get_version()`; do not use history 0 or `get_history_count()`. If the scene has no positive history ID, return `history_unavailable` rather than inventing a revision.
+- `dirty`: whether `root.scene_file_path` is in `EditorInterface.get_unsaved_scenes()`; the probe confirmed this returns `res://` paths.
 - `root_instance_id`: session-local identity.
 - `playing`: `EditorInterface.is_playing_scene()`.
 - `edited_scene_only`: always true, with a note that runtime/debugger values require story 12.
 
-Tools accept an optional `turn_context` containing the expected scene path, file revision, session revision, and root instance ID. If the current edited root differs, the saved file hash changed, or the undo-history version changed, the tool returns `stale_scene` before resolving paths. This is what lets 06/07 reject a plan after a scene switch, an unsaved edit, or an external file change (WS-13).
+Every tool accepts an optional `turn_context` with this shape:
+
+```json
+{"scene_path": "res://player.tscn", "revision": "sha256:...", "session_revision": "undo:2", "root_instance_id": 1234}
+```
+
+Validate in this order: edited root instance identity, scene path, saved file hash, then scene history ID plus version. If an expected field is present and differs, return `stale_scene` before resolving any node path. Omitted fields skip only their own check; malformed fields return `invalid_arguments`. After a Tiiny mutation, the caller adopts the result's `session_revision` so a follow-up inspection is not rejected; story 07 owns that turn-context update.
 
 The file hash catches on-disk changes; the session revision catches in-memory edits, undo, and redo. Manual changes that bypass the undo history are the residual gap; file saves still update the base revision.
 
@@ -116,25 +144,26 @@ The file hash catches on-disk changes; the session revision catches in-memory ed
 
 - Scene-relative paths come from `root.get_path_to(node)`; the root is `"."`.
 - `owner` is the scene-relative path of `node.get_owner()`, or `null` for the root.
-- `scene_file_path` is the source scene path for an instanced node; empty for nodes authored in the edited scene.
+- `scene_file_path` is the source scene path for an instanced node; empty for nodes authored in the edited scene. `get_scene_instance_state()` and `get_scene_inherited_state()` are not exposed to GDScript in this build, so do not rely on them for extra scene-state fields.
 - `instance_placeholder` is `node.get_scene_instance_load_placeholder()`.
-- `editable` reflects `root.is_editable_instance()` for an instance root, where applicable.
+- `internal` is not exposed to GDScript; `get_children(false)` and `get_child_count(false)` exclude internal children by default. `include_internal: true` uses the corresponding true-argument forms.
+- `editable`: false for the root; for other nodes, true only when `root.is_ancestor_of(node)` and `root.is_editable_instance(node)`. Never call `is_editable_instance()` with the root itself.
 - Instance IDs are included only as session diagnostics; paths are the stable identifiers.
 
-For inherited scenes, the edited root's `scene_file_path` is the inherited scene path; ownership follows the inherited root. For instanced children, the instance root's `scene_file_path` identifies the source and its `owner` identifies the edited scene owner. Tests must cover both.
+For inherited scenes, the edited root's `scene_file_path` is the inherited scene path; the base source path is not exposed through scripting, so do not invent one. For instanced children, the instance root's `scene_file_path` identifies the source and its `owner` identifies the edited scene owner. Tests must cover both.
 
 ### Property inspection
 
-Include properties with `PROPERTY_USAGE_EDITOR` or `PROPERTY_USAGE_STORAGE`, excluding `INTERNAL`, `CATEGORY`, `GROUP`, `SUBGROUP`, `SECRET`, and editor-only metadata. For each property return:
+Include properties with `PROPERTY_USAGE_EDITOR` or `PROPERTY_USAGE_STORAGE`, excluding `INTERNAL`, `CATEGORY`, `GROUP`, `SUBGROUP`, `SECRET`, names beginning `metadata/`, and editor-only metadata. For each property return:
 
-- `name`, `type` (Variant type name), `hint`, `hint_string`, `class_name`;
+- `name`, `type` (Variant type name via `type_string`), `hint`, `hint_string`, `class_name`;
 - `usage` as a short list;
-- `writable`: not `READ_ONLY`, not a category/group, and a setter exists where the class or script exposes one. This is a hint; story 06 revalidates before writing;
-- `value`: a bounded, JSON-safe summary.
+- `writable`: not `READ_ONLY`, not a category/group, and a `set_<name>` method is present where discoverable. This is a hint; story 06 revalidates before writing;
+- `value`: a bounded, JSON-safe summary read best-effort; a getter failure must not abort the whole result, and any observable failure is reported alongside the value.
 
-Values encode as primitives, strings, vectors/colors/rects as strings, arrays/dictionaries with element caps, `Node` as `{class, path}`, `Resource` as `{class, path, name}`, and unsupported objects as `{class, "<unserializable>"}`. Cycles and depth are capped.
+Values encode primitives and strings, vectors/colors/rects/transforms as strings, arrays/dictionaries with element caps, `StringName`/`NodePath` as strings, `Packed*Array` as bounded arrays, `Node` as `{class, path}`, `Resource` as `{class, path, name, embedded}`, `Callable`/`RID` as class markers, and unsupported objects as `{class, "<unserializable>"}`. Dictionary keys are stringified; cycles and depth are capped.
 
-`inspect_node` also returns the attached script path, groups, child count, and a bounded property list. `inspect_resource` returns the resource class, path, name, bounded properties, and shallow sub-resources.
+`inspect_node` also returns the attached script path, groups, child count, and a bounded property list. `inspect_resource` returns the resource class, path, name, embedded flag, bounded properties, and shallow sub-resources. An embedded resource with an empty path is valid when reached through a node property; a direct `res://` path must exist.
 
 ### Signals
 
@@ -142,24 +171,24 @@ Values encode as primitives, strings, vectors/colors/rects as strings, arrays/di
 
 ### Bounds
 
-- `get_scene_tree`: `max_depth` 0–8 (default 4), `max_nodes` 1–500 (default 200); breadth-first; `truncated` flag.
+- `get_scene_tree`: `max_depth` 0–8 (default 4), `max_nodes` 1–500 (default 200), `include_internal?` false; breadth-first, child order preserved; `truncated` object with per-list flags.
 - `inspect_node`: `max_properties` 1–200 (default 80).
 - `inspect_resource`: `max_properties` 1–120 (default 60), depth 1–2.
 - `list_signals`: `max_connections` 1–100 (default 50).
-- String values 512 chars; arrays/dictionaries 64 entries; overall result under the story 07 cap (16 KiB).
-- Truncation is reported, never silent.
+- Strings 512 chars; arrays/dictionaries 64 entries; encoded result target under the story 07 16 KiB cap.
+- Truncation is reported, never silent; stop appending before the encoded budget is exceeded rather than dropping nested values without a flag.
 
 ## Tool set
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `get_workspace_context` | none | Scene identity/revision, root, selection summary, playing/edited-only note |
-| `get_scene_tree` | `max_depth?`, `max_nodes?` | Bounded nodes with path, class, owner, scene_file_path, instance_placeholder, child_count |
+| `get_scene_tree` | `max_depth?`, `max_nodes?`, `include_internal?` | Bounded nodes with path, class, owner, scene_file_path, instance_placeholder, child_count |
 | `get_selection` | none | Selected nodes with path/class/owner/editable, or an empty state |
 | `inspect_node` | `path`, `max_properties?` | Class, ownership, script, groups, bounded properties |
-| `inspect_resource` | `path` or `node_path` + `property`, `max_properties?` | Resource class/path/name, bounded properties, shallow sub-resources |
+| `inspect_resource` | `path` or `node_path` + `property`, `max_properties?` | Resource class/path/name/embedded, bounded properties, shallow sub-resources |
 | `list_signals` | `path`, `max_connections?` | Signals, arguments, bounded connections |
-| `get_scene_revision` | none | Saved scene path and SHA-256; compatibility with the existing attachment tool |
+| `get_scene_revision` | none | Clean saved scene path and bare SHA-256; compatibility with the existing attachment tool; `scene_dirty` if dirty |
 
 No search-by-class/name, no write tools, and no debugger tools in 05. Those belong to later stories.
 
@@ -167,17 +196,24 @@ No search-by-class/name, no write tools, and no debugger tools in 05. Those belo
 
 ### Slice A — tool provider foundation
 
-Create `editor/tiiny/tools/inspector.gd` (embedded through a generated source header, injected into the dock like the jobs scripts) with the definition list, `execute()`, the structured result envelope, scene identity/revision, JSON-safe value encoding, bounds, and error codes. Define `definitions()` so story 07 can compose the registry without duplicating schemas.
+Create `editor/tiiny/tools/inspector.gd` with the definition list, `execute()`, the structured result envelope, scene identity/revision, JSON-safe value encoding, bounds, and error codes. Define `definitions()` so story 07 can compose the registry without duplicating schemas.
 
-Gate: unit fixtures call every definition with valid and invalid arguments; the result envelope, error codes, bounds, and scene identity are stable. No model or device.
+Use two layers so fixtures are deterministic:
 
-Deliverables: inspector script, embedded source wiring, result/error helpers.
+- `Inspector` (provider logic) consumes a small `EditorApi` adapter exposing the current root, selected nodes, unsaved scene paths, playing state, and `history_version(root)`.
+- The production adapter wraps `EditorInterface` and the editor undo manager; fixture adapters supply a controlled root/selection/version without requiring a full editor session.
+
+Wire the script into the build: add it to the generated source list in `editor/SCsub`, load the generated constant in `editor_node.cpp`, and inject the script into the chat dock through a new property. The dock stores the script; the provider is instantiated on demand by story 07 or fixtures and is not added to the model tool list in story 05.
+
+Gate: unit fixtures call every definition with valid and invalid arguments; the result envelope, error codes, bounds, scene identity, undo/redo revision behavior, and read-only guarantees are stable. No model or device.
+
+Deliverables: inspector script, editor adapter, fixture adapter, generated-source build wiring, result/error helpers, and a focused runner/fixture scaffold.
 
 ### Slice B — scene, selection, and tree
 
 Implement `get_workspace_context`, `get_selection`, and `get_scene_tree`, including edited-scene-only labeling, base/session revision checks, dirty state, selection filtering, ownership, instanced-node metadata, and truncation.
 
-Gate: a fixture scene returns correct paths/classes/owners; depth/node limits truncate; no scene and no selection produce distinct states; a scene switch produces `stale_scene`.
+Gate: a fixture scene returns correct paths/classes/owners; depth/node limits truncate; internal children are skipped unless requested; no scene and no selection produce distinct states; a scene switch, file change, or undo/redo revision change produces `stale_scene`.
 
 Deliverables: scene/tree/selection handlers and fixtures.
 
@@ -185,7 +221,7 @@ Deliverables: scene/tree/selection handlers and fixtures.
 
 Implement `inspect_node` with editor-visible property filtering, type/hint/usage, writability hints, value summaries, script/groups, and bounds. Include inherited and instanced nodes.
 
-Gate: property types and writability match the fixture; internal/category/secret properties are excluded; large lists truncate; deleted targets return `target_missing`.
+Gate: property types and writability hints match the fixture; internal/category/secret/metadata properties are excluded; a getter failure does not fail the whole result; large lists truncate; deleted targets return `target_missing`; root `editable` is false without an ancestor error.
 
 Deliverables: node/property handlers and fixtures.
 
@@ -193,25 +229,27 @@ Deliverables: node/property handlers and fixtures.
 
 Implement `inspect_resource` for `res://` paths and resource-valued node properties, plus `list_signals` with argument and connection summaries. Bound sub-resources and connections; never serialize Callables.
 
-Gate: a `RectangleShape2D` and a saved `.tres` inspect correctly; missing/wrong-type resources error; connections to scene nodes are reported; freed/external targets are summarized safely.
+Gate: a `RectangleShape2D` and a saved `.tres` inspect correctly, including an embedded resource reached through a node property; missing/wrong-type resources error; connections to scene nodes are reported; freed/external targets are summarized safely.
 
 Deliverables: resource/signal handlers and fixtures.
 
 ### Slice E — read-only, running-scene, and regression behavior
 
-Add the explicit running-scene note and test that inspection never touches the running remote scene. Add read-only assertions: scene file hash, node count, property values, and undo history count are unchanged; no project files are written. Add the compatibility `get_scene_revision`.
+Add the explicit running-scene note and test that inspection never touches the running remote scene. Add read-only assertions: scene file hash, node count, property values, `session_revision`, selected paths, and the project file list/hashes are unchanged; no tool saves the scene or writes files. Add the compatibility `get_scene_revision` with its clean-scene behavior.
 
-Gate: before/after read-only assertions pass for every tool; a running fixture scene still returns edited-scene values; `get_scene_revision` matches the existing attachment behavior.
+Gate: before/after read-only assertions pass for every tool; commit/undo/redo changes `session_revision` while inspection itself does not; a running fixture scene still returns edited-scene values; `get_scene_revision` matches the existing attachment behavior and returns `scene_dirty` for a dirty scene.
 
 Deliverables: read-only tests, running-scene test, compatibility tool.
 
 ### Slice F — integration and handoff
 
-Expose the provider to story 07 through `definitions()`/`execute()`, add the embedded-source build wiring, and record evidence. Do not advertise the tools to the model yet; 07 owns the registry snapshot and prompt.
+Expose the provider to story 07 through `definitions()`/`execute()`, complete the embedded-source build wiring, add the focused editor fixture/runner, and record evidence. Do not advertise the tools to the model yet; 07 owns the registry snapshot and prompt.
 
-Gate: story 07's registry can consume the definitions without changes; direct fixture calls pass; no chat behavior changes in 05.
+The focused harness should live at `integrations/tiiny/tests/editor_workspace_inspector.gd` with a `check_workspace_inspector.py` runner. Build disposable scenes covering authored nodes, an instanced child scene, an inherited scene, a dirty saved scene, a never-saved scene, signals, an embedded resource, and a running scene. Keep pure provider checks separate from the editor integration run.
 
-Deliverables: provider interface, build wiring, work-item/STATUS handoff.
+Gate: story 07's registry can consume the definitions without changes; direct fixture calls and the focused editor run pass; no chat behavior changes in 05.
+
+Deliverables: provider interface, build wiring, focused runner/fixtures, work-item/STATUS handoff.
 
 ## Scenario mapping
 
@@ -222,7 +260,7 @@ Deliverables: provider interface, build wiring, work-item/STATUS handoff.
 | WS-11 runtime vs edited scene | E | Running scene is labeled; edited-scene values are not replaced by runtime values |
 | WS-13 scene switch | A, B | `stale_scene` on identity/revision change |
 | Instanced/inherited ownership | C | Owner paths and source scene paths match the fixture |
-| Read-only guarantee | E | Hash, node count, values, and undo history unchanged |
+| Read-only guarantee | E | Hash, node count, values, and `session_revision` unchanged; no file writes |
 
 ## Review decisions
 
@@ -243,14 +281,15 @@ Deliverables: provider interface, build wiring, work-item/STATUS handoff.
 
 - **Story 01 only:** 05 can start now. 06 consumes the inspector; 07 composes the registry.
 - **Saved-at-least-once scenes:** 05/06/07 assume a `scene_file_path` and a base file hash. Tests must cover `scene_not_saved` for never-saved scenes, dirty inspection, and `scene_dirty` for mutations.
-- **Editor API stability:** verify the exact signatures in this build (`get_property_list`, `get_signal_connection_list`, `is_editable_instance`, `get_scene_instance_load_placeholder`, `get_editor_undo_redo`).
-- **Property getters:** editor-visible getters are generally safe, but expensive or side-effectful properties must be bounded and filtered. Record any exceptions.
+- **Editor API stability (verified):** the disposable probe confirmed `get_object_history_id(root)`, `UndoRedo.get_version()`, `get_unsaved_scenes()` path format, and that `is_editable_instance(root)` errors. A separate check showed `get_scene_instance_state()`/`get_scene_inherited_state()` are not exposed to GDScript, so the provider relies on `scene_file_path` and `owner`. Re-run the probe if the engine API changes.
+- **Revision mistake guarded:** do not use `get_history_undo_redo(0)` or `get_history_count()` for session revisions; history 0 is global and the count is unchanged by undo/redo.
+- **Property getters:** editor-visible getters are generally safe, but expensive or side-effectful properties must be bounded and filtered. GDScript cannot reliably catch every native getter error; read best-effort, do not abort the whole result, and record any observable exception.
 - **Large scenes:** depth/node/property/connection caps and result-size caps are mandatory.
 - **Instanced/inherited scenes:** ownership semantics are the main correctness risk; test both explicitly.
 - **Running scene confusion:** never use `get_tree().current_scene` or debugger APIs for edited-scene inspection.
-- **Dirty-session revisions:** the undo-history version is editor-session-local. File hashes catch on-disk changes; manual edits that bypass undo are the residual gap. Mutations require a clean scene, so recipes never mix with untracked dirty changes.
+- **Dirty-session revisions:** the undo version is editor-session-local. File hashes catch on-disk changes; manual edits that bypass undo are the residual gap. Mutations require a clean scene, so recipes never mix with untracked dirty changes.
 - **Model exposure:** 05 does not change chat behavior. 07 owns availability, prompt, and ledger.
 
 ## Handoff
 
-Planning only. No build, test, or device operation was performed. Implementation starts with slice A (provider foundation), then B–D, with E/F for verification and wiring. Record the tool definitions, result contract, fixtures, read-only evidence, and any API exceptions in the work item and STATUS.
+Accepted. No device operation was performed. The pure and editor fixtures prove the provider contract, real scene/undo behavior, read-only guarantees, and running-scene isolation. Story 07 can compose the definitions and attach model exposure; story 06 can consume node/resource inspection.

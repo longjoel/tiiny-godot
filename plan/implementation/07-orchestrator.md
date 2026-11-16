@@ -1,6 +1,6 @@
 # Story 07 implementation plan — workspace-first prompt and tool orchestration
 
-Status: Planning. Implementation is gated on stories 02, 03, 05, and 06; slices A–C can be built against fake tools before 05/06 land. This plan changes documentation only.
+Status: Accepted. Slices A–F are implemented and verified, including a live Ornith recipe run. See [acceptance evidence](../evidence/07-acceptance.md).
 
 Parent: [07 — Workspace-first prompt and tool orchestration](../work-items/07-integration-orchestrator.md). Visuals: [tool orchestration diagrams](../mockups/07-tool-orchestration-diagrams.md).
 
@@ -278,4 +278,4 @@ Deliverables: test coverage, live evaluation report, work-item/STATUS handoff.
 
 ## Handoff
 
-Planning only. No build, test, or device operation was performed. Implementation starts with slice A (registry and schema) and can proceed against fake tools while 05/06 are completed. Record the tool contract, availability matrix, protocol results, recipe undo evidence, and live-model traces in the work item and STATUS.
+Accepted. Deterministic registry/chat tests, the existing protocol/Jobs suites, and a live Ornith recipe trace are recorded in [acceptance evidence](../evidence/07-acceptance.md). Story 08 can use the turn ledger for richer action history, previews, and recovery UI.

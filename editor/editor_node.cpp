@@ -9454,6 +9454,9 @@ EditorNode::EditorNode() {
 	log = memnew(EditorLog);
 	editor_dock_manager->add_dock(log);
 	VBoxContainer *tiiny_jobs_content = nullptr;
+	Ref<Script> tiiny_inspector_script;
+	Ref<Script> tiiny_transactions_script;
+	Ref<Script> tiiny_registry_script;
 
 	// The job service is editor-owned and its scripts are embedded in the
 	// executable, independent of the currently opened project's resources.
@@ -9474,6 +9477,18 @@ EditorNode::EditorNode() {
 		Ref<Script> publisher_script = load_job_script(TIINY_JOBS_TREE_PUBLISHER);
 		Ref<Script> attach_script = load_job_script(TIINY_JOBS_ATTACH_WORKER);
 		Ref<Script> panel_script = load_job_script(TIINY_JOBS_PANEL);
+		tiiny_inspector_script = load_job_script(TIINY_JOBS_INSPECTOR);
+		tiiny_transactions_script = load_job_script(TIINY_JOBS_TRANSACTIONS);
+		tiiny_registry_script = load_job_script(TIINY_JOBS_REGISTRY);
+		if (!tiiny_inspector_script.is_valid()) {
+			ERR_PRINT("Could not load the built-in Tiiny workspace inspector script.");
+		}
+		if (!tiiny_transactions_script.is_valid()) {
+			ERR_PRINT("Could not load the built-in Tiiny workspace transaction script.");
+		}
+		if (!tiiny_registry_script.is_valid()) {
+			ERR_PRINT("Could not load the built-in Tiiny tool registry script.");
+		}
 		if (queue_script.is_valid() && executor_script.is_valid() && worker_script.is_valid() && publisher_script.is_valid() && attach_script.is_valid() && panel_script.is_valid()) {
 			VBoxContainer *jobs_content = memnew(VBoxContainer);
 			tiiny_jobs_content = jobs_content;
@@ -9506,6 +9521,15 @@ EditorNode::EditorNode() {
 				if (tiiny_jobs_content) {
 					tiiny_content->set("jobs_service", tiiny_jobs_content);
 					tiiny_jobs_content->set("chat_service", tiiny_content);
+				}
+				if (tiiny_inspector_script.is_valid()) {
+					tiiny_content->set("workspace_inspector_script", tiiny_inspector_script);
+				}
+				if (tiiny_transactions_script.is_valid()) {
+					tiiny_content->set("workspace_transactions_script", tiiny_transactions_script);
+				}
+				if (tiiny_registry_script.is_valid()) {
+					tiiny_content->set("workspace_registry_script", tiiny_registry_script);
 				}
 				tiiny_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
 				EditorDock *tiiny_dock = memnew(EditorDock);

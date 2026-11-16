@@ -1,6 +1,6 @@
 # 05 — Read-only Godot workspace tools
 
-Status: Planning complete; implementation can start immediately (depends only on story 01).
+Status: Accepted. The embedded read-only inspector exposes the seven planned tools through `definitions()` and `execute()`, is injected into the dock as a script, and is not advertised to the model. Pure and editor fixtures cover scene identity, ownership, properties, resources, signals, bounds, errors, dirty/undo revisions, scene switching, inherited/instanced scenes, read-only guarantees, and edited-vs-running isolation. See [acceptance evidence](../evidence/05-acceptance.md).
 
 Feature: Read-only Godot workspace tools
 
@@ -20,11 +20,11 @@ Scenes must be saved at least once. Dirty scenes are inspectable and report a di
 
 ## Acceptance criteria
 
-- [ ] Tools return scene identity, scene-relative node identifiers, classes, and relevant ownership for a test scene.
-- [ ] Property/resource inspection returns Godot types and supported writable properties, with bounded results.
-- [ ] No scene, missing selection, deleted target, and scene switching return explicit errors or empty states.
-- [ ] Inspection does not mutate the scene or project files.
-- [ ] Tests cover inherited/instanced nodes and avoid confusing the edited scene with the running remote scene.
+- [x] Tools return scene identity, scene-relative node identifiers, classes, and relevant ownership for a test scene.
+- [x] Property/resource inspection returns Godot types and supported writable properties, with bounded results.
+- [x] No scene, missing selection, deleted target, and scene switching return explicit errors or empty states.
+- [x] Inspection does not mutate the scene or project files.
+- [x] Tests cover inherited/instanced nodes and avoid confusing the edited scene with the running remote scene.
 
 ## Concrete scenarios
 
@@ -32,4 +32,4 @@ Use WS-01, WS-02, WS-11 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.m
 
 ## Evidence and handoff
 
-Pending. Record changed files, validation commands and results, editor/device observations, remaining limitations, and the next action. Update [STATUS.md](../STATUS.md) when handing off.
+Accepted. Implementation: `editor/tiiny/tools/inspector.gd`, generated-source/build injection through `editor/SCsub` and `editor_node.cpp`, a dock `workspace_inspector_script` property, pure fixture `test_workspace_inspector.gd`, and editor fixture `editor_workspace_inspector.gd`/`check_workspace_inspector.py`. Final build `da3b7c67a` (PID 756396) passed the pure suite, editor integration fixture, existing 11-stage editor smoke, and all 25 Jobs modes. See [acceptance evidence](../evidence/05-acceptance.md). Story 06 consumes the inspector; story 07 owns model exposure and the registry.
