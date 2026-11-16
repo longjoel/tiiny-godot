@@ -1,6 +1,6 @@
 # Story 15 implementation plan — first-class script and behavior workflow
 
-Status: Queued. Depends on story 14.
+Status: Accepted. Attach/save and behavior evidence implemented; see acceptance evidence.
 
 Parent: [15 — First-class script and behavior workflow](../work-items/15-script-behavior.md).
 
@@ -37,3 +37,9 @@ Make gameplay behavior a supported primary path. Do not force movement, spin, bo
 - One undo for attachment; file writes are visibly non-scene-undoable.
 - Save is explicit and reports the actual path.
 - Behavior tasks are no longer counted as missing native editor tools.
+
+All gates verified; see [acceptance evidence](../evidence/15-acceptance.md).
+
+## Handoff
+
+Accepted. `attach_script` and `save_edited_scene` pass deterministic attach/undo/save/reload. Live behavior evidence remains the velocity/spin script edits; a live attach/save model turn was not recorded.

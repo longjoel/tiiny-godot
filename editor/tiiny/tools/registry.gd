@@ -88,6 +88,14 @@ const LEGACY_DEFINITIONS := [
 		"timeout_ms": 15000,
 	},
 	{
+		"name": "save_edited_scene",
+		"title": "Save edited scene",
+		"description": "Explicitly save the edited scene to its existing res:// path. This is a file write, not a scene undo action.",
+		"parameters": {"type": "object", "properties": {}, "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+	},
+	{
 		"name": "append_job",
 		"title": "Append reviewed job",
 		"description": "Append a reviewed create_tree, attach_tree_to_scene, model_schedule, or asset_generate job. Acceptance is not completion.",

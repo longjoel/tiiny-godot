@@ -326,6 +326,15 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 				if not source.has_signal(signal_name): return _error("signal_missing", "Signal does not exist: " + signal_name)
 				if not target.has_method(method_name): return _error("method_missing", "Target method does not exist: " + method_name)
 				if source.is_connected(signal_name, Callable(target, method_name)): return _error("already_connected", "Signal is already connected.")
+			"attach_script":
+				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+				if target == null: return _error("target_missing", "attach_script target is missing.")
+				if target.get_owner() != root and not nodes.values().has(target): return _error("read_only_instance", "attach_script target must be owned by the edited scene.")
+				var script: Variant = ResourceLoader.load(str(op.get("path", "")), "", ResourceLoader.CACHE_MODE_REUSE)
+				if not script is GDScript: return _error("artifact_invalid", "Script did not load as GDScript.")
+				op["__target"] = target
+				op["__script"] = script
+				op["__old_script"] = target.get_script()
 			"call_method":
 				var target = _target_object(str(op.get("target", "")), root, nodes, resources, op_by_id)
 				if target == null: return _error("target_missing", "call_method target is missing.")
@@ -432,6 +441,12 @@ func _apply_do(manager: Object, op: Dictionary, nodes: Dictionary, resources: Di
 			var callback := Callable(target, str(op.method))
 			manager.add_do_method(source, "connect", str(op.signal), callback)
 			manager.add_undo_method(source, "disconnect", str(op.signal), callback)
+		"attach_script":
+			var target: Node = op["__target"]
+			var script: Script = op["__script"]
+			manager.add_do_reference(script)
+			manager.add_do_property(target, "script", script)
+			manager.add_undo_property(target, "script", op["__old_script"])
 		"call_method":
 			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
 			_add_undo_redo_call(manager, true, target, str(op.method), _operation_args(op.get("args", []), nodes, resources, op_by_id))
@@ -493,6 +508,9 @@ func _verify(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dic
 			var source: Node = op["__source_node"]
 			var target: Node = op["__target_node"]
 			if not source.is_connected(str(op.signal), Callable(target, str(op.method))): return "Signal was not connected."
+		elif str(op.op) == "attach_script":
+			var target: Node = op["__target"]
+			if target.get_script() != op["__script"]: return "Script was not attached."
 	for op in ops:
 		if str(op.op) == "create_resource":
 			var resource: Resource = resources[str(op.id)]
@@ -537,6 +555,9 @@ func _scene_is_clean_after_undo(ops: Array, nodes: Dictionary, resources: Dictio
 			var source: Node = op["__source_node"]
 			var target: Node = op["__target_node"]
 			if source.is_connected(str(op.signal), Callable(target, str(op.method))): return false
+		elif str(op.op) == "attach_script":
+			var target: Node = op["__target"]
+			if target.get_script() != op["__old_script"]: return false
 	return true
 
 ### Property helpers
@@ -687,7 +708,7 @@ func _register_default_recipes() -> void:
 			"expected_scene_revision": {"type": "string", "maxLength": 256},
 			"expected_session_revision": {"type": "string", "maxLength": 128},
 			"operations": {"type": "array", "maxItems": 16, "items": {"type": "object", "properties": {
-				"op": {"type": "string", "enum": ["create_node", "set_property", "create_resource", "assign_resource", "add_child", "set_owner", "remove_node", "reparent_node", "duplicate_node", "instantiate_scene", "connect_signal"]},
+				"op": {"type": "string", "enum": ["create_node", "set_property", "create_resource", "assign_resource", "add_child", "set_owner", "remove_node", "reparent_node", "duplicate_node", "instantiate_scene", "connect_signal", "attach_script"]},
 				"id": {"type": "string", "maxLength": 64},
 				"class": {"type": "string", "maxLength": 128},
 				"parent": {"type": "string", "maxLength": 512},
@@ -1071,6 +1092,12 @@ func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
 				if not op.get("source") is String or not op.get("signal") is String or not op.get("target") is String or not op.get("method") is String:
 					return {"ok": false, "code": "invalid_arguments", "message": "connect_signal needs source, signal, target, and method."}
 				if str(op.signal).is_empty() or str(op.method).is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "Signal and method names cannot be empty."}
+			"attach_script":
+				var script_path := str(op.get("path", ""))
+				if not op.get("target") is String or not script_path.begins_with("res://") or ".." in script_path.split("/") or not script_path.ends_with(".gd") or not FileAccess.file_exists(script_path):
+					return {"ok": false, "code": "invalid_arguments", "message": "attach_script needs an owned target and an existing res:// .gd path."}
+				if not ResourceLoader.load(script_path, "", ResourceLoader.CACHE_MODE_REUSE) is GDScript:
+					return {"ok": false, "code": "artifact_invalid", "message": "Script did not load as GDScript: " + script_path}
 			_:
 				return {"ok": false, "code": "invalid_operation", "message": "Unsupported editor operation: " + kind}
 	return {"ok": true, "request": {"ops": ops.duplicate(true)}}

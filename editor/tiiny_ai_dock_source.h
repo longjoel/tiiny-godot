@@ -305,7 +305,7 @@ func _append_action_card(result: Dictionary, arguments: Dictionary) -> void:
 		retry.name = "ActionRetry"
 		retry.pressed.connect(_retry_action.bind(str(result.get("tool", "")), arguments.duplicate(true)))
 		buttons.add_child(retry)
-	if str(result.get("undo_group", "")).is_empty() and str(result.get("tool", "")) in ["create_gdscript", "generate_image", "replace_in_gdscript"]:
+	if str(result.get("undo_group", "")).is_empty() and str(result.get("tool", "")) in ["create_gdscript", "generate_image", "replace_in_gdscript", "save_edited_scene"]:
 		var file_note := Label.new()
 		file_note.name = "ActionFileNote"
 		file_note.text = "File change · not scene-undoable"
@@ -958,6 +958,7 @@ func _ensure_workspace_registry() -> bool:
 	workspace_registry.set_handler("create_gdscript", Callable(self, "_registry_create_gdscript"))
 	workspace_registry.set_handler("read_project_file", Callable(self, "_registry_read_file"))
 	workspace_registry.set_handler("replace_in_gdscript", Callable(self, "_registry_replace_script"))
+	workspace_registry.set_handler("save_edited_scene", Callable(self, "_registry_save_scene"))
 	workspace_registry.set_handler("append_job", Callable(self, "_registry_append_job"))
 	workspace_registry.set_handler("get_job_status", Callable(self, "_registry_job_status"))
 	return true
@@ -990,6 +991,9 @@ func _registry_read_file(arguments: Dictionary, _context: Dictionary) -> Diction
 
 func _registry_replace_script(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	return _replace_script_tool(str(arguments.get("path", "")), str(arguments.get("expected_sha256", "")), str(arguments.get("old_text", "")), str(arguments.get("new_text", "")), str(arguments.get("reason", "")))
+
+func _registry_save_scene(_arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	return _save_scene_tool()
 
 func _registry_append_job(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var text := _append_job_tool(arguments)
@@ -1044,6 +1048,7 @@ func _refresh_registry_availability() -> void:
 	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]
 	values["replace_in_gdscript"] = values["create_gdscript"]
+	values["save_edited_scene"] = {"available": saved, "reason": "Open a saved scene before saving it." if not saved else ""}
 	values["append_job"] = {"available": jobs_available, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
 	values["get_job_status"] = values["append_job"]
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
@@ -1521,6 +1526,17 @@ func _replace_script_tool(path: String, expected_sha256: String, old_text: Strin
 	var summary := "Edited %s with one validated snippet replacement." % normalized
 	if not reason.strip_edges().is_empty(): summary += " Reason: " + reason.strip_edges()
 	return {"ok": true, "summary": summary, "data": {"path": normalized, "before_sha256": current_sha, "after_sha256": FileAccess.get_sha256(normalized), "reason": reason.strip_edges()}, "affected": [{"kind": "file", "path": normalized}]}
+
+func _save_scene_tool() -> Dictionary:
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null or root.scene_file_path.is_empty():
+		return _tool_text_result("Error: Open and save the scene to a res:// path before saving.")
+	var path := root.scene_file_path
+	var error := EditorInterface.save_scene()
+	if error != OK:
+		return _tool_text_result("Error: Could not save the scene (error %d)." % error)
+	var dirty := path in EditorInterface.get_unsaved_scenes()
+	return {"ok": true, "summary": "Saved scene: " + path, "data": {"path": path, "dirty": dirty}, "affected": [{"kind": "file", "path": path}]}
 
 func _create_script_tool(path: String, source: String) -> String:
 	var normalized := path.simplify_path()

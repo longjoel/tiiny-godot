@@ -101,6 +101,8 @@ Story 13 also adds `check_asset_generation.py`, a live-device fixture for queued
 
 Story 14 adds `apply_editor_transaction`: bounded typed create/set/resource/assign/remove/reparent/duplicate/instantiate/connect operations, one undo, stale-scene checks, and atomic rollback. The transaction fixture covers all operations plus invalid class/property/reference/cap cases. `check_editor_primitives_live.py` verifies a live Ornith turn composing Camera2D, Label, and a PBR StandardMaterial3D; the resulting scene is captured in `/tmp/tiiny-live-primitives.txt`.
 
+Story 15 adds `attach_script` to `apply_editor_transaction` and an explicit `save_edited_scene` file tool. The transaction fixture attaches a script with undo/redo, saves without adding a fake undo entry, reloads the scene, and verifies persistence. Live behavior evidence remains the velocity/spin script edits.
+
 `check_jobs_displayed.py` launches a displayed X11 editor and captures `/tmp/tiiny-jobs-displayed.png` after a completed `create_tree` job, verifying the Jobs dock is visible with its queued/running/attention/completed/failed columns and card.
 
 The fake chat protocol fixture also submits a reviewed tree job through the

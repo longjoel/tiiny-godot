@@ -434,6 +434,33 @@ func _run() -> void:
 	if _history_count(root) != invalid_history:
 		_fail("Rejected generic transactions changed undo history"); return
 
+
+	var attach_file := FileAccess.open("res://attach_fixture.gd", FileAccess.WRITE)
+	if attach_file == null: _fail("Could not create the script-attachment fixture"); return
+	attach_file.store_string("extends CharacterBody2D\n\nfunc fixture_ping() -> void:\n\tpass\n")
+	attach_file.close()
+	EditorInterface.get_resource_filesystem().scan()
+	var attach_history := _history_count(root)
+	var attach_result: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "attach_script", "target": "Player", "path": "res://attach_fixture.gd"}]})
+	var attached_player: CharacterBody2D = root.get_node_or_null("Player")
+	if not attach_result.get("ok", false) or attached_player == null or not attached_player.get_script() is GDScript or _history_count(root) != attach_history + 1:
+		_fail("Script attachment failed: " + str(attach_result)); return
+	var attach_undo := _history(root)
+	if not attach_undo[2].undo() or attached_player.get_script() != null:
+		_fail("Script attachment undo failed"); return
+	if not attach_undo[2].redo() or attached_player.get_script() == null:
+		_fail("Script attachment redo failed"); return
+	var save_history := _history_count(root)
+	var save_result: Dictionary = dock.call("_registry_save_scene", {}, {})
+	if not save_result.get("ok", false) or bool(inspector.scene_context({}).scene.dirty) or _history_count(root) != save_history:
+		_fail("Explicit scene save failed or changed undo history: " + str(save_result)); return
+	EditorInterface.reload_scene_from_path("res://main.tscn")
+	if not await _wait_for_scene("res://main.tscn"): _fail("Saved script scene did not reload"); return
+	root = EditorInterface.get_edited_scene_root()
+	var reloaded_player: CharacterBody2D = root.get_node_or_null("Player")
+	if reloaded_player == null or reloaded_player.get_script() == null or not str(reloaded_player.get_script().resource_path).ends_with("attach_fixture.gd"):
+		_fail("Saved script attachment did not survive reload"); return
+
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	registry.set_handler("read_project_file", Callable(dock, "_registry_read_file"))
 	registry.set_handler("replace_in_gdscript", Callable(dock, "_registry_replace_script"))
