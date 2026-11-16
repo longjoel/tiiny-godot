@@ -89,6 +89,8 @@ Story 10 adds `Planner.schedule` offline assertions for coding-model protection,
 
 Story 11 adds transaction-fixture coverage for native torch-flicker animation (light discovery, value track path/keys, `tiiny/flicker` library/autoplay, preserved existing animations, undo/redo, missing-light rejection) and slippery PhysicsMaterial assignment (values, shared-material preservation and explicit replacement summary, undo/redo, non-physics rejection). The registry payload must advertise both recipes.
 
+Story 12 adds `check_debugger.py`, which starts a real fixture scene, pauses at a breakpoint, and verifies session/state, stack frames, `Members/counter=7`, `Locals/doubled=null`, frame selection, runtime tree identities, continue/stale-frame rejection, session-end errors, and breakpoint set/removal. Runtime property values remain explicitly unavailable without a selected remote node.
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.

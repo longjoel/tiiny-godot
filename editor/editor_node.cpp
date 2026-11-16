@@ -9457,6 +9457,7 @@ EditorNode::EditorNode() {
 	Ref<Script> tiiny_inspector_script;
 	Ref<Script> tiiny_transactions_script;
 	Ref<Script> tiiny_registry_script;
+	Ref<Script> tiiny_debugger_script;
 
 	// The job service is editor-owned and its scripts are embedded in the
 	// executable, independent of the currently opened project's resources.
@@ -9480,6 +9481,7 @@ EditorNode::EditorNode() {
 		tiiny_inspector_script = load_job_script(TIINY_JOBS_INSPECTOR);
 		tiiny_transactions_script = load_job_script(TIINY_JOBS_TRANSACTIONS);
 		tiiny_registry_script = load_job_script(TIINY_JOBS_REGISTRY);
+		tiiny_debugger_script = load_job_script(TIINY_JOBS_DEBUGGER);
 		if (!tiiny_inspector_script.is_valid()) {
 			ERR_PRINT("Could not load the built-in Tiiny workspace inspector script.");
 		}
@@ -9488,6 +9490,9 @@ EditorNode::EditorNode() {
 		}
 		if (!tiiny_registry_script.is_valid()) {
 			ERR_PRINT("Could not load the built-in Tiiny tool registry script.");
+		}
+		if (!tiiny_debugger_script.is_valid()) {
+			ERR_PRINT("Could not load the built-in Tiiny debugger provider script.");
 		}
 		if (queue_script.is_valid() && executor_script.is_valid() && worker_script.is_valid() && publisher_script.is_valid() && attach_script.is_valid() && panel_script.is_valid()) {
 			VBoxContainer *jobs_content = memnew(VBoxContainer);
@@ -9531,6 +9536,10 @@ EditorNode::EditorNode() {
 				if (tiiny_registry_script.is_valid()) {
 					tiiny_content->set("workspace_registry_script", tiiny_registry_script);
 				}
+				if (tiiny_debugger_script.is_valid()) {
+					tiiny_content->set("workspace_debugger_script", tiiny_debugger_script);
+				}
+				tiiny_content->set("debugger_node", EditorDebuggerNode::get_singleton());
 				tiiny_content->connect("log_message", callable_mp(log, &EditorLog::add_message));
 				EditorDock *tiiny_dock = memnew(EditorDock);
 				tiiny_dock->set_title("Tiiny Chat");

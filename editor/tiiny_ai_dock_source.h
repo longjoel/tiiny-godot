@@ -39,6 +39,9 @@ var workspace_transactions_script: Script
 var workspace_transactions: RefCounted
 var workspace_registry_script: Script
 var workspace_registry: RefCounted
+var workspace_debugger_script: Script
+var workspace_debugger: RefCounted
+var debugger_node: Object
 var turn_ledger: Array[Dictionary] = []
 var action_cards: Array[Dictionary] = []
 var turn_id := ""
@@ -665,12 +668,19 @@ func release_uncertain_device(id: String) -> bool:
 	return true
 
 func _ensure_workspace_registry() -> bool:
-	if workspace_registry != null: return true
+	if debugger_node == null and is_inside_tree():
+		debugger_node = get_tree().get_first_node_in_group("tiiny_debugger_bridge")
+	if workspace_registry != null:
+		if workspace_debugger != null: workspace_debugger.debugger_node = debugger_node
+		return true
 	if workspace_inspector_script == null or workspace_transactions_script == null or workspace_registry_script == null:
 		return false
 	workspace_inspector = workspace_inspector_script.new()
 	workspace_transactions = workspace_transactions_script.new(workspace_inspector)
-	workspace_registry = workspace_registry_script.new(workspace_inspector, workspace_transactions)
+	if workspace_debugger_script != null:
+		workspace_debugger = workspace_debugger_script.new()
+		workspace_debugger.debugger_node = debugger_node
+	workspace_registry = workspace_registry_script.new(workspace_inspector, workspace_transactions, workspace_debugger)
 	workspace_registry.set_handler("generate_image", Callable(self, "_registry_generate_image"))
 	workspace_registry.set_handler("create_gdscript", Callable(self, "_registry_create_gdscript"))
 	workspace_registry.set_handler("append_job", Callable(self, "_registry_append_job"))
@@ -742,6 +752,22 @@ func _refresh_registry_availability() -> void:
 	values["create_gdscript"] = {"available": model_tools, "reason": "" if model_tools else "The coding model is not ready or does not support tool use."}
 	values["append_job"] = {"available": jobs_available and model_tools, "reason": "The Jobs service is unavailable." if not jobs_available else ""}
 	values["get_job_status"] = values["append_job"]
+	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
+	var debug_state: Dictionary = {}
+	if debug_available:
+		debug_state = debugger_node.call("tiiny_debugger_state")
+	var debug_session := debug_available and bool(debug_state.get("session_active", false))
+	var debug_paused := debug_session and bool(debug_state.get("breaked", false))
+	for name in ["get_debugger_state", "get_stack_frames", "get_stack_variables", "select_stack_frame", "get_runtime_tree", "inspect_runtime_node", "set_breakpoint", "remove_breakpoint"]:
+		values[name] = {"available": debug_available, "reason": "" if debug_available else "The editor debugger bridge is unavailable."}
+	values["get_stack_frames"] = {"available": debug_paused, "reason": "Execution is not paused." if debug_available and not debug_paused else ("The editor debugger bridge is unavailable." if not debug_available else "")}
+	values["get_stack_variables"] = values["get_stack_frames"]
+	values["select_stack_frame"] = values["get_stack_frames"]
+	values["get_runtime_tree"] = {"available": debug_session, "reason": "No active debugger session." if debug_available and not debug_session else ("The editor debugger bridge is unavailable." if not debug_available else "")}
+	values["inspect_runtime_node"] = values["get_runtime_tree"]
+	for name in ["debug_continue", "debug_step", "debug_next"]:
+		values[name] = {"available": debug_paused, "reason": "Execution is not paused." if debug_available and not debug_paused else ("The editor debugger bridge is unavailable." if not debug_available else "")}
+	values["debug_pause"] = {"available": debug_session and not debug_paused, "reason": "Execution is already paused." if debug_paused else ("No active debugger session." if not debug_session else "")}
 	workspace_registry.set_availability(values)
 
 func _begin_turn() -> void:

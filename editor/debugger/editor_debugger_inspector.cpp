@@ -553,3 +553,19 @@ String EditorDebuggerInspector::get_stack_variable(const String &p_var) {
 	}
 	return String();
 }
+
+Dictionary EditorDebuggerInspector::get_stack_variables() {
+	Dictionary out;
+	for (KeyValue<StringName, TypedDictionary<uint64_t, Variant>> &E : variables->prop_values) {
+		String key = E.key.string();
+		String category = key.get_slicec('/', 0);
+		String name = key.get_slicec('/', 1).uri_decode();
+		Dictionary group;
+		if (out.has(category)) {
+			group = out[category];
+		}
+		group[name] = variables->get_variant(key);
+		out[category] = group;
+	}
+	return out;
+}

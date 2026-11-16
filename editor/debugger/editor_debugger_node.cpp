@@ -31,9 +31,11 @@
 #include "editor_debugger_node.h"
 
 #include "core/config/engine.h"
+#include "core/io/file_access.h"
 #include "core/io/resource_loader.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/object/script_language.h"
 #include "core/object/undo_redo.h"
 #include "editor/debugger/editor_debugger_plugin.h"
 #include "editor/debugger/editor_debugger_tree.h"
@@ -68,6 +70,7 @@ EditorDebuggerNode *EditorDebuggerNode::singleton = nullptr;
 
 EditorDebuggerNode::EditorDebuggerNode() {
 	set_name(TTRC("Debugger"));
+	add_to_group("tiiny_debugger_bridge");
 	set_icon_name("Debug");
 	set_layout_key("Debugger");
 	set_dock_shortcut(ED_SHORTCUT_AND_COMMAND("bottom_panels/toggle_debugger_bottom_panel", TTRC("Toggle Debugger Dock"), KeyModifierMask::ALT | Key::D));
@@ -237,6 +240,14 @@ void EditorDebuggerNode::_bind_methods() {
 	ClassDB::bind_method("live_debug_restore_node", &EditorDebuggerNode::live_debug_restore_node);
 	ClassDB::bind_method("live_debug_duplicate_node", &EditorDebuggerNode::live_debug_duplicate_node);
 	ClassDB::bind_method("live_debug_reparent_node", &EditorDebuggerNode::live_debug_reparent_node);
+	ClassDB::bind_method(D_METHOD("tiiny_debugger_state"), &EditorDebuggerNode::tiiny_debugger_state);
+	ClassDB::bind_method(D_METHOD("tiiny_stack_frames"), &EditorDebuggerNode::tiiny_stack_frames);
+	ClassDB::bind_method(D_METHOD("tiiny_stack_variables"), &EditorDebuggerNode::tiiny_stack_variables);
+	ClassDB::bind_method(D_METHOD("tiiny_runtime_tree"), &EditorDebuggerNode::tiiny_runtime_tree);
+	ClassDB::bind_method(D_METHOD("tiiny_select_stack_frame", "frame"), &EditorDebuggerNode::tiiny_select_stack_frame);
+	ClassDB::bind_method(D_METHOD("tiiny_set_breakpoint", "path", "line", "enabled"), &EditorDebuggerNode::tiiny_set_breakpoint, DEFVAL(true));
+	ClassDB::bind_method(D_METHOD("tiiny_debug_command", "command"), &EditorDebuggerNode::tiiny_debug_command);
+	ClassDB::bind_method(D_METHOD("request_remote_tree"), &EditorDebuggerNode::request_remote_tree);
 
 	ADD_SIGNAL(MethodInfo("goto_script_line"));
 	ADD_SIGNAL(MethodInfo("set_execution", PropertyInfo("script"), PropertyInfo(Variant::INT, "line")));
@@ -759,6 +770,193 @@ void EditorDebuggerNode::debug_continue() {
 
 String EditorDebuggerNode::get_var_value(const String &p_var) const {
 	return get_current_debugger()->get_var_value(p_var);
+}
+
+Dictionary EditorDebuggerNode::tiiny_debugger_state() {
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	Dictionary state;
+	state["source"] = "runtime";
+	int enabled_breakpoints = 0;
+	for (const KeyValue<Breakpoint, bool> &E : breakpoints) {
+		if (E.value) {
+			enabled_breakpoints++;
+		}
+	}
+	state["breakpoints"] = enabled_breakpoints;
+	if (dbg == nullptr) {
+		state["available"] = false;
+		state["session"] = -1;
+		state["session_active"] = false;
+		state["breaked"] = false;
+		state["debuggable"] = false;
+		state["selected_frame"] = -1;
+		state["script_file"] = "";
+		state["script_line"] = -1;
+		return state;
+	}
+	state["available"] = true;
+	state["session"] = get_debugger_id(dbg);
+	state["session_active"] = dbg->is_session_active();
+	state["breaked"] = dbg->is_breaked();
+	state["debuggable"] = dbg->is_debuggable();
+	state["selected_frame"] = dbg->is_breaked() ? dbg->get_stack_script_frame() : -1;
+	state["script_file"] = dbg->is_breaked() ? dbg->get_stack_script_file() : "";
+	state["script_line"] = dbg->is_breaked() ? dbg->get_stack_script_line() : -1;
+	return state;
+}
+
+Array EditorDebuggerNode::tiiny_stack_frames() {
+	Array frames;
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	if (dbg == nullptr || !dbg->is_breaked() || dbg->stack_dump == nullptr) {
+		return frames;
+	}
+	TreeItem *root = dbg->stack_dump->get_root();
+	TreeItem *item = root != nullptr ? root->get_first_child() : nullptr;
+	while (item != nullptr) {
+		Variant frame = item->get_metadata(0);
+		if (frame.get_type() == Variant::DICTIONARY) {
+			frames.push_back(frame);
+		}
+		item = item->get_next();
+	}
+	return frames;
+}
+
+Dictionary EditorDebuggerNode::tiiny_stack_variables() {
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	if (dbg == nullptr || !dbg->is_breaked() || dbg->inspector == nullptr) {
+		return Dictionary();
+	}
+	return dbg->inspector->get_stack_variables();
+}
+
+Array EditorDebuggerNode::tiiny_runtime_tree() {
+	Array nodes;
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	if (dbg == nullptr || remote_scene_tree == nullptr || !dbg->is_session_active()) {
+		return nodes;
+	}
+	TreeItem *root = remote_scene_tree->get_root();
+	if (root == nullptr) {
+		return nodes;
+	}
+	Vector<TreeItem *> pending;
+	pending.push_back(root->get_first_child());
+	while (!pending.is_empty() && nodes.size() < 5000) {
+		TreeItem *item = pending[pending.size() - 1];
+		pending.remove_at(pending.size() - 1);
+		if (item == nullptr) {
+			continue;
+		}
+		Dictionary entry;
+		entry["id"] = item->get_metadata(0);
+		entry["name"] = item->get_text(0);
+		entry["path"] = item->get_meta("node_path", String());
+		entry["type"] = item->get_meta("node_type", String());
+		entry["scene_file_path"] = item->get_meta("scene_file_path", String());
+		nodes.push_back(entry);
+		for (TreeItem *child = item->get_first_child(); child != nullptr; child = child->get_next()) {
+			pending.push_back(child);
+		}
+	}
+	return nodes;
+}
+
+Dictionary EditorDebuggerNode::tiiny_select_stack_frame(int p_frame) {
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	Dictionary result;
+	if (dbg == nullptr || !dbg->is_breaked() || dbg->stack_dump == nullptr) {
+		result["ok"] = false;
+		result["error"] = "Execution is not paused with a stack dump.";
+		return result;
+	}
+	TreeItem *root = dbg->stack_dump->get_root();
+	TreeItem *item = root != nullptr ? root->get_first_child() : nullptr;
+	int index = 0;
+	while (item != nullptr && index < p_frame) {
+		item = item->get_next();
+		index++;
+	}
+	if (item == nullptr) {
+		result["ok"] = false;
+		result["error"] = "Stack frame is not available.";
+		return result;
+	}
+	item->select(0);
+	if (!dbg->request_stack_dump(p_frame)) {
+		result["ok"] = false;
+		result["error"] = "Could not request variables for that stack frame.";
+		return result;
+	}
+	result["ok"] = true;
+	result["frame"] = p_frame;
+	return result;
+}
+
+Dictionary EditorDebuggerNode::tiiny_set_breakpoint(const String &p_path, int p_line, bool p_enabled) {
+	Dictionary result;
+	if (p_path.is_empty() || p_line < 1 || p_line > 1000000) {
+		result["ok"] = false;
+		result["error"] = "A script path and positive line number are required.";
+		return result;
+	}
+	if (!p_path.begins_with("res://") || !FileAccess::exists(p_path)) {
+		result["ok"] = false;
+		result["error"] = "Breakpoint script path does not exist in the project.";
+		return result;
+	}
+	Ref<Resource> resource = ResourceLoader::load(p_path);
+	if (resource.is_null() || Object::cast_to<Script>(resource.ptr()) == nullptr) {
+		result["ok"] = false;
+		result["error"] = "Breakpoint path is not a script resource.";
+		return result;
+	}
+	set_breakpoint(p_path, p_line, p_enabled);
+	result["ok"] = true;
+	result["path"] = p_path;
+	result["line"] = p_line;
+	result["enabled"] = p_enabled;
+	return result;
+}
+
+Dictionary EditorDebuggerNode::tiiny_debug_command(const String &p_command) {
+	ScriptEditorDebugger *dbg = get_current_debugger();
+	Dictionary result;
+	if (dbg == nullptr || !dbg->is_session_active()) {
+		result["ok"] = false;
+		result["error"] = "No active debugger session.";
+		return result;
+	}
+	if (p_command == "pause") {
+		if (dbg->is_breaked()) {
+			result["ok"] = false;
+			result["error"] = "Execution is already paused.";
+			return result;
+		}
+		dbg->debug_break();
+	} else if (p_command == "continue" || p_command == "step" || p_command == "next") {
+		if (!dbg->is_breaked()) {
+			result["ok"] = false;
+			result["error"] = "Execution is not paused.";
+			return result;
+		}
+		if (p_command == "continue") {
+			dbg->debug_continue();
+		} else if (p_command == "step") {
+			dbg->debug_step();
+		} else {
+			dbg->debug_next();
+		}
+	} else {
+		result["ok"] = false;
+		result["error"] = "Unsupported debugger command.";
+		return result;
+	}
+	result["ok"] = true;
+	result["command"] = p_command;
+	result["state"] = tiiny_debugger_state();
+	return result;
 }
 
 // LiveEdit/Inspector

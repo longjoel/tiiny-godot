@@ -94,13 +94,15 @@ const LEGACY_DEFINITIONS := [
 
 var inspector
 var transactions
+var debugger
 var handlers := {}
 var availability := {}
 var definitions_by_name := {}
 
-func _init(p_inspector = null, p_transactions = null) -> void:
+func _init(p_inspector = null, p_transactions = null, p_debugger = null) -> void:
 	inspector = p_inspector
 	transactions = p_transactions
+	debugger = p_debugger
 	_rebuild_definitions()
 
 func set_handler(name: String, handler: Callable) -> void:
@@ -201,6 +203,8 @@ func execute(name: String, arguments: Dictionary, turn_context: Dictionary = {})
 				value = await inspector.execute(name, arguments, turn_context)
 			elif transactions != null and _has_definition(transactions, name):
 				value = await transactions.execute(name, arguments, turn_context)
+			elif debugger != null and _has_definition(debugger, name):
+				value = await debugger.execute(name, arguments, turn_context)
 			elif handlers.has(name):
 				value = await handlers[name].call(arguments, turn_context)
 			else:
@@ -291,6 +295,7 @@ func _rebuild_definitions() -> void:
 	var sources: Array = []
 	if inspector != null: sources.append_array(inspector.definitions())
 	if transactions != null: sources.append_array(transactions.definitions())
+	if debugger != null: sources.append_array(debugger.definitions())
 	sources.append_array(LEGACY_DEFINITIONS)
 	for definition in sources:
 		if definition is Dictionary and definition.get("name") is String:

@@ -98,6 +98,7 @@ public:
 
 	// Stack Dump variables
 	String get_stack_variable(const String &p_var);
+	Dictionary get_stack_variables();
 	void add_stack_variable(const Array &p_arr, int p_offset = -1);
 	void clear_stack_variables();
 };

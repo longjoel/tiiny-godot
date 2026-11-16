@@ -239,4 +239,14 @@ public:
 	bool plugins_capture(ScriptEditorDebugger *p_debugger, const String &p_message, const Array &p_data);
 	void add_debugger_plugin(const Ref<EditorDebuggerPlugin> &p_plugin);
 	void remove_debugger_plugin(const Ref<EditorDebuggerPlugin> &p_plugin);
+
+	// Built-in Tiiny debugger access. These return bounded, JSON-safe snapshots;
+	// the editor remains authoritative for session/breakpoint UI.
+	Dictionary tiiny_debugger_state();
+	Array tiiny_stack_frames();
+	Dictionary tiiny_stack_variables();
+	Array tiiny_runtime_tree();
+	Dictionary tiiny_select_stack_frame(int p_frame);
+	Dictionary tiiny_set_breakpoint(const String &p_path, int p_line, bool p_enabled);
+	Dictionary tiiny_debug_command(const String &p_command);
 };

@@ -270,6 +270,8 @@ void EditorDebuggerTree::update_scene_tree(const SceneDebuggerTree *p_tree, int 
 			item->set_icon(0, icon);
 		}
 		item->set_metadata(0, node.id);
+		item->set_meta("node_type", node.type_name);
+		item->set_meta("scene_file_path", node.scene_file_path);
 
 		String current_path;
 		if (parent) {
