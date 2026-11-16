@@ -1,0 +1,1290 @@
+{
+  "version": 1,
+  "total": 100,
+  "tasks": [
+    {
+      "id": "2D-001",
+      "order": 1,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Create a Sprite2D from a generated image",
+      "prompt": "Create a new Sprite2D using a generated image of a soccer ball.",
+      "status": "supported",
+      "tools": [
+        "generate_image",
+        "add_sprite_from_image"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+    },
+    {
+      "id": "2D-002",
+      "order": 2,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Import an existing image as a Sprite2D",
+      "prompt": "Add my res://art/player.png as a Sprite2D under the scene root.",
+      "status": "supported",
+      "tools": [
+        "add_sprite_from_image"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "2D-003",
+      "order": 3,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Replace an existing sprite texture",
+      "prompt": "Replace the Icon texture with res://art/player.png.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No direct texture/property mutation recipe; requires a script or manual inspector edit.",
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+    },
+    {
+      "id": "2D-004",
+      "order": 4,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Move, rotate, or scale a node",
+      "prompt": "Move the player to (200, 300) and scale it to 1.5.",
+      "status": "partial",
+      "tools": [
+        "inspect_node",
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No generic transform mutation tool; script edits are the fallback.",
+      "test": ""
+    },
+    {
+      "id": "2D-005",
+      "order": 5,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a ColorRect background",
+      "prompt": "Add a full-screen dark blue background.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic Control creation recipe.",
+      "test": ""
+    },
+    {
+      "id": "2D-006",
+      "order": 6,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Camera2D",
+      "prompt": "Add a Camera2D and make it current.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic node creation or camera configuration tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-007",
+      "order": 7,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a CanvasLayer HUD",
+      "prompt": "Create a CanvasLayer for the HUD.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-008",
+      "order": 8,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Label with text",
+      "prompt": "Add a Label showing \"Score: 0\" at the top left.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-009",
+      "order": 9,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Button",
+      "prompt": "Add a Start button to the scene.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-010",
+      "order": 10,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a ProgressBar",
+      "prompt": "Add a health ProgressBar.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-011",
+      "order": 11,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Polygon2D",
+      "prompt": "Create a Polygon2D for a simple hill.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No polygon node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-012",
+      "order": 12,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Line2D path",
+      "prompt": "Draw a Line2D path across the level.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Line2D creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-013",
+      "order": 13,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a Marker2D spawn point",
+      "prompt": "Add a Marker2D where enemies should spawn.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-014",
+      "order": 14,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a TileMapLayer",
+      "prompt": "Create a TileMapLayer for the ground.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No TileMap creation/tileset tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-015",
+      "order": 15,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a ParallaxBackground",
+      "prompt": "Add a two-layer parallax background.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No parallax node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-016",
+      "order": 16,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add GPUParticles2D",
+      "prompt": "Add a dust particle effect around the player.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No particle creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-017",
+      "order": 17,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add an AnimatedSprite2D",
+      "prompt": "Create an AnimatedSprite2D with an idle animation.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No SpriteFrames/animated sprite tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-018",
+      "order": 18,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a PointLight2D glow",
+      "prompt": "Add a warm PointLight2D around the torch.",
+      "status": "missing",
+      "tools": [],
+      "gap": "Torch flicker requires an existing light; no light creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-019",
+      "order": 19,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add a CanvasModulate night tint",
+      "prompt": "Make the scene look like night with CanvasModulate.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No CanvasModulate creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-020",
+      "order": 20,
+      "category": "2D sprites",
+      "dimension": "2d",
+      "task": "Add screen shake",
+      "prompt": "Shake the camera when the player takes damage.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No camera or tween creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-021",
+      "order": 21,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a rectangular collision shape",
+      "prompt": "Add a 32x48 rectangular collision shape to Player.",
+      "status": "supported",
+      "tools": [
+        "add_rectangular_collision_shape"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "2D-022",
+      "order": 22,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a StaticBody2D platform",
+      "prompt": "Add a static platform at the bottom of the level.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic physics body creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-023",
+      "order": 23,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a CharacterBody2D player",
+      "prompt": "Create a CharacterBody2D player with movement.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic body creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-024",
+      "order": 24,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a RigidBody2D crate",
+      "prompt": "Add a pushable RigidBody2D crate.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic body creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-025",
+      "order": 25,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add an Area2D trigger",
+      "prompt": "Add an Area2D that triggers when the player enters.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Area2D creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-026",
+      "order": 26,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Create a one-way platform",
+      "prompt": "Make this platform one-way from below.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No collision one-way configuration recipe.",
+      "test": ""
+    },
+    {
+      "id": "2D-027",
+      "order": 27,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Make a surface slippery",
+      "prompt": "Make the Platform slippery with low friction.",
+      "status": "supported",
+      "tools": [
+        "assign_slippery_surface"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "2D-028",
+      "order": 28,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Make a surface bouncy",
+      "prompt": "Make the Platform bouncy while keeping normal grip.",
+      "status": "partial",
+      "tools": [
+        "assign_slippery_surface"
+      ],
+      "gap": "The recipe sets bounce but always applies low friction; no general PhysicsMaterial editor.",
+      "test": ""
+    },
+    {
+      "id": "2D-029",
+      "order": 29,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Set collision layers and masks",
+      "prompt": "Put enemies on layer 2 and make them collide with the player layer.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No collision layer/mask mutation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-030",
+      "order": 30,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a RayCast2D",
+      "prompt": "Add a downward RayCast2D to detect the floor.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No RayCast2D creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-031",
+      "order": 31,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a PinJoint2D",
+      "prompt": "Connect two bodies with a PinJoint2D.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No joint creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-032",
+      "order": 32,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a DampedSpringJoint2D",
+      "prompt": "Add a springy connection between two crates.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No joint creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-033",
+      "order": 33,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Add a CollisionPolygon2D",
+      "prompt": "Create a polygon collision shape for the cave wall.",
+      "status": "missing",
+      "tools": [],
+      "gap": "Only rectangle collision shapes are supported.",
+      "test": ""
+    },
+    {
+      "id": "2D-034",
+      "order": 34,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Configure mass and damping",
+      "prompt": "Make the crate heavier and slow its damping.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic RigidBody property mutation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-035",
+      "order": 35,
+      "category": "2D physics",
+      "dimension": "2d",
+      "task": "Detect the floor with a raycast",
+      "prompt": "Detect when the player is grounded.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "Requires a script edit; no native raycast setup.",
+      "test": ""
+    },
+    {
+      "id": "2D-036",
+      "order": 36,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Add a score label HUD",
+      "prompt": "Show the score in a label.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-037",
+      "order": 37,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Build a start menu",
+      "prompt": "Create a start menu with Play and Quit.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI composition tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-038",
+      "order": 38,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Build a pause menu",
+      "prompt": "Add a pause menu toggled by Escape.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI or input tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-039",
+      "order": 39,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Add a health bar",
+      "prompt": "Add a health bar that follows the player.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-040",
+      "order": 40,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Build an inventory grid",
+      "prompt": "Create a 3x3 inventory grid.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI composition tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-041",
+      "order": 41,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Add a dialogue box",
+      "prompt": "Add a dialogue box with speaker name and text.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No UI composition tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-042",
+      "order": 42,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Connect a button signal",
+      "prompt": "Connect the Start button to a start_game function.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No signal-connection tool; requires a script edit.",
+      "test": ""
+    },
+    {
+      "id": "2D-043",
+      "order": 43,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Apply a theme and font",
+      "prompt": "Apply the project theme and a larger font to the HUD.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No theme/font mutation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-044",
+      "order": 44,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Loop background music",
+      "prompt": "Play music.ogg on loop at low volume.",
+      "status": "partial",
+      "tools": [
+        "import_generated_audio"
+      ],
+      "gap": "Audio import creates a player but does not configure looping, volume, or buses.",
+      "test": ""
+    },
+    {
+      "id": "2D-045",
+      "order": 45,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Play a jump sound",
+      "prompt": "Play jump.wav when the player jumps.",
+      "status": "partial",
+      "tools": [
+        "import_generated_audio",
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "Requires audio import plus a script edit; no signal/audio wiring tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-046",
+      "order": 46,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Set an audio bus volume",
+      "prompt": "Lower the Music bus to -12 dB.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No AudioServer/bus mutation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-047",
+      "order": 47,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Make the camera follow the player",
+      "prompt": "Smoothly follow the player with Camera2D.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Camera2D creation or follow tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-048",
+      "order": 48,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Set camera limits and smoothing",
+      "prompt": "Keep the camera inside the level bounds.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Camera2D property mutation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-049",
+      "order": 49,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Tween a node position",
+      "prompt": "Tween the platform between two positions.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No tween creation tool.",
+      "test": ""
+    },
+    {
+      "id": "2D-050",
+      "order": 50,
+      "category": "2D UI/audio",
+      "dimension": "2d",
+      "task": "Tween scale and rotation",
+      "prompt": "Pulse the pickup scale and rotate it.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No tween/animation creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-051",
+      "order": 51,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a MeshInstance3D box",
+      "prompt": "Add a 1x1x1 box mesh to the scene.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic 3D node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-052",
+      "order": 52,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a Camera3D",
+      "prompt": "Add a Camera3D looking at the origin.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Camera3D creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-053",
+      "order": 53,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a DirectionalLight3D",
+      "prompt": "Add a sun light with soft shadows.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No light creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-054",
+      "order": 54,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a WorldEnvironment sky",
+      "prompt": "Add a procedural sky and ambient light.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No environment creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-055",
+      "order": 55,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a CSGBox3D",
+      "prompt": "Block out a room with CSGBox3D.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No CSG creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-056",
+      "order": 56,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a GridMap",
+      "prompt": "Create a GridMap for the floor.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No GridMap tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-057",
+      "order": 57,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a StaticBody3D collision",
+      "prompt": "Add collision to the floor mesh.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D collision creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-058",
+      "order": 58,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a CharacterBody3D controller",
+      "prompt": "Create a first-person CharacterBody3D controller.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D body/controller creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-059",
+      "order": 59,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a RigidBody3D crate",
+      "prompt": "Add a pushable physics crate.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D body creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-060",
+      "order": 60,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add an Area3D trigger",
+      "prompt": "Trigger when the player enters the doorway.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Area3D creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-061",
+      "order": 61,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a NavigationRegion3D",
+      "prompt": "Bake a navigation region for enemies.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No navigation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-062",
+      "order": 62,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a Marker3D spawn",
+      "prompt": "Add a spawn point for enemies.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No generic 3D node creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-063",
+      "order": 63,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Import a generated GLB model",
+      "prompt": "Import res://tiiny_generated/prop.glb under World.",
+      "status": "supported",
+      "tools": [
+        "import_generated_model"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "3D-064",
+      "order": 64,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Generate a 3D model from a reference image",
+      "prompt": "Create a 3D soccer ball from this reference image.",
+      "status": "supported",
+      "tools": [
+        "append_job",
+        "get_job_status",
+        "import_generated_model"
+      ],
+      "gap": "The generator and import are separate tool calls/jobs.",
+      "test": "integrations/tiiny/tests/check_asset_generation.py"
+    },
+    {
+      "id": "3D-065",
+      "order": 65,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add collision to an imported mesh",
+      "prompt": "Give the imported model a matching collision shape.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No mesh-to-collision generation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-066",
+      "order": 66,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Scale or rotate an imported mesh",
+      "prompt": "Scale the imported prop to 2x and rotate it 45 degrees.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No generic transform mutation tool; script edits are the fallback.",
+      "test": ""
+    },
+    {
+      "id": "3D-067",
+      "order": 67,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add an OmniLight3D",
+      "prompt": "Add a warm omni light for the torch.",
+      "status": "missing",
+      "tools": [],
+      "gap": "Torch flicker requires an existing light; no light creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-068",
+      "order": 68,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add torch flicker to a 3D light",
+      "prompt": "Make the torch light flicker.",
+      "status": "supported",
+      "tools": [
+        "add_torch_flicker"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "3D-069",
+      "order": 69,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add a SpotLight3D",
+      "prompt": "Add a spotlight for the streetlamp.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No light creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-070",
+      "order": 70,
+      "category": "3D scene",
+      "dimension": "3d",
+      "task": "Add distance fog",
+      "prompt": "Add volumetric fog to the scene.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No environment/fog tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-071",
+      "order": 71,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Set PBR color, metallic, and roughness",
+      "prompt": "Make the metal crate metallic and rough.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No material creation/property tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-072",
+      "order": 72,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Apply an albedo texture",
+      "prompt": "Apply this texture as the material albedo.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No material/texture assignment tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-073",
+      "order": 73,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Add emission glow",
+      "prompt": "Make the neon sign emit light.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No material emission tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-074",
+      "order": 74,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Make a material transparent",
+      "prompt": "Make the glass material transparent.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No material transparency tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-075",
+      "order": 75,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Add a ReflectionProbe",
+      "prompt": "Add a reflection probe for the room.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No reflection probe tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-076",
+      "order": 76,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Animate a mesh rotation",
+      "prompt": "Make the coin spin continuously.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No generic animation creation; script fallback.",
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+    },
+    {
+      "id": "3D-077",
+      "order": 77,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Animate a door opening",
+      "prompt": "Open the door when the player approaches.",
+      "status": "partial",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "No animation/tween/signal tool; script fallback.",
+      "test": ""
+    },
+    {
+      "id": "3D-078",
+      "order": 78,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Create an orbiting camera",
+      "prompt": "Orbit the camera around the model.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Camera3D/script animation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-079",
+      "order": 79,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Tween the camera",
+      "prompt": "Move the camera to a new position over 2 seconds.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No tween creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-080",
+      "order": 80,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Play a character animation state",
+      "prompt": "Blend idle and run animations.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No AnimationTree/state machine tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-081",
+      "order": 81,
+      "category": "3D animation",
+      "dimension": "3d",
+      "task": "Animate a skeleton",
+      "prompt": "Play the imported walk animation.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No skeleton/animation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-082",
+      "order": 82,
+      "category": "3D effects",
+      "dimension": "3d",
+      "task": "Add 3D particles",
+      "prompt": "Add sparks around the anvil.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D particle creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-083",
+      "order": 83,
+      "category": "3D effects",
+      "dimension": "3d",
+      "task": "Add a 3D trail",
+      "prompt": "Add a trail behind the projectile.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D trail/particle tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-084",
+      "order": 84,
+      "category": "3D effects",
+      "dimension": "3d",
+      "task": "Add 3D rain or snow",
+      "prompt": "Add a rain effect to the scene.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D weather/particle tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-085",
+      "order": 85,
+      "category": "3D audio",
+      "dimension": "3d",
+      "task": "Add positional 3D audio",
+      "prompt": "Make the waterfall sound positional in 3D.",
+      "status": "partial",
+      "tools": [
+        "import_generated_audio"
+      ],
+      "gap": "Audio import creates AudioStreamPlayer, not AudioStreamPlayer3D or attenuation.",
+      "test": ""
+    },
+    {
+      "id": "3D-086",
+      "order": 86,
+      "category": "3D validation",
+      "dimension": "3d",
+      "task": "Validate PBR maps and topology",
+      "prompt": "Check that this generated model has good topology and PBR maps.",
+      "status": "partial",
+      "tools": [
+        "import_generated_model"
+      ],
+      "gap": "Import reports topology/PBR as unverified; no geometry/PBR validator.",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "3D-087",
+      "order": 87,
+      "category": "3D materials",
+      "dimension": "3d",
+      "task": "Import a texture as a material",
+      "prompt": "Create a material from res://art/brick.png.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No material creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-088",
+      "order": 88,
+      "category": "3D camera",
+      "dimension": "3d",
+      "task": "Add camera collision",
+      "prompt": "Stop the camera clipping through walls.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No Camera3D configuration tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-089",
+      "order": 89,
+      "category": "3D text",
+      "dimension": "3d",
+      "task": "Add 3D text",
+      "prompt": "Add a floating Label3D above the shop.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No 3D text creation tool.",
+      "test": ""
+    },
+    {
+      "id": "3D-090",
+      "order": 90,
+      "category": "3D decals",
+      "dimension": "3d",
+      "task": "Add a decal",
+      "prompt": "Put a crack decal on the wall.",
+      "status": "missing",
+      "tools": [],
+      "gap": "No decal creation tool.",
+      "test": ""
+    },
+    {
+      "id": "PROJECT-091",
+      "order": 91,
+      "category": "Project/script",
+      "dimension": "project",
+      "task": "Read and edit an existing script",
+      "prompt": "Read bounce_script.gd and add a spin on wall hit.",
+      "status": "supported",
+      "tools": [
+        "read_project_file",
+        "replace_in_gdscript"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+    },
+    {
+      "id": "PROJECT-092",
+      "order": 92,
+      "category": "Project/script",
+      "dimension": "project",
+      "task": "Create a new script",
+      "prompt": "Create a new GDScript for a pickup.",
+      "status": "supported",
+      "tools": [
+        "create_gdscript"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/test_chat_protocol.gd"
+    },
+    {
+      "id": "PROJECT-093",
+      "order": 93,
+      "category": "Project/inspect",
+      "dimension": "project",
+      "task": "Inspect scene, node, and resources",
+      "prompt": "Show the scene tree and the selected node's properties.",
+      "status": "supported",
+      "tools": [
+        "get_workspace_context",
+        "get_scene_tree",
+        "inspect_node",
+        "inspect_resource"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_workspace_inspector.py"
+    },
+    {
+      "id": "PROJECT-094",
+      "order": 94,
+      "category": "Debugger",
+      "dimension": "project",
+      "task": "Set or remove a breakpoint",
+      "prompt": "Set a breakpoint on bounce_script.gd line 10.",
+      "status": "supported",
+      "tools": [
+        "set_breakpoint",
+        "remove_breakpoint"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_debugger.py"
+    },
+    {
+      "id": "PROJECT-095",
+      "order": 95,
+      "category": "Debugger",
+      "dimension": "project",
+      "task": "Inspect paused stack and locals",
+      "prompt": "What is the value of velocity at this breakpoint?",
+      "status": "supported",
+      "tools": [
+        "get_debugger_state",
+        "get_stack_frames",
+        "get_stack_variables",
+        "select_stack_frame"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_debugger.py"
+    },
+    {
+      "id": "PROJECT-096",
+      "order": 96,
+      "category": "Debugger",
+      "dimension": "project",
+      "task": "Continue, step, or pause execution",
+      "prompt": "Step over the next line and continue.",
+      "status": "supported",
+      "tools": [
+        "debug_step",
+        "debug_continue",
+        "debug_pause"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_debugger.py"
+    },
+    {
+      "id": "PROJECT-097",
+      "order": 97,
+      "category": "Jobs",
+      "dimension": "project",
+      "task": "Queue and monitor a reviewed job",
+      "prompt": "Queue a tree asset job and tell me its status.",
+      "status": "supported",
+      "tools": [
+        "append_job",
+        "get_job_status"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_builtin_jobs.py"
+    },
+    {
+      "id": "PROJECT-098",
+      "order": 98,
+      "category": "Assets/audio",
+      "dimension": "project",
+      "task": "Generate speech and add it to the scene",
+      "prompt": "Generate a spoken line and add an audio player.",
+      "status": "supported",
+      "tools": [
+        "append_job",
+        "get_job_status",
+        "import_generated_audio"
+      ],
+      "gap": "The generator and import are separate job/tool steps.",
+      "test": "integrations/tiiny/tests/check_asset_generation.py"
+    },
+    {
+      "id": "PROJECT-099",
+      "order": 99,
+      "category": "Assets/audio",
+      "dimension": "project",
+      "task": "Import a WAV or OGG audio file",
+      "prompt": "Add line.wav as an AudioStreamPlayer.",
+      "status": "supported",
+      "tools": [
+        "import_generated_audio"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd"
+    },
+    {
+      "id": "PROJECT-100",
+      "order": 100,
+      "category": "Assets/image",
+      "dimension": "project",
+      "task": "Generate an image asset",
+      "prompt": "Generate a soccer ball image and save it to the project.",
+      "status": "supported",
+      "tools": [
+        "generate_image"
+      ],
+      "gap": "",
+      "test": "integrations/tiiny/tests/check_chat_multicall_live.py"
+    }
+  ]
+}
