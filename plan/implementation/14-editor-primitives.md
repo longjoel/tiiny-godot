@@ -1,6 +1,6 @@
 # Story 14 implementation plan — typed editor transaction primitives
 
-Status: Ready to start. No implementation yet.
+Status: Accepted. Implemented and verified; see acceptance evidence.
 
 Parent: [14 — Typed editor transaction primitives](../work-items/14-editor-primitives.md).
 
@@ -108,3 +108,9 @@ Run representative live prompts. Record failures, model traces, and reclassifica
 - One undo action; no automatic save.
 - Composed primitives solve ordinary authoring tasks without a recipe per task.
 - Recipes remain for complex/risky workflows and all existing tests still pass.
+
+All gates verified; see [acceptance evidence](../evidence/14-acceptance.md).
+
+## Handoff
+
+Accepted. Live evidence: Camera2D at (100,200) with smoothing, Label `Score: 0`, and StandardMaterial3D on `World/Crate` via `apply_editor_transaction`. Remaining specialized/behavior work moves to stories 15–17.

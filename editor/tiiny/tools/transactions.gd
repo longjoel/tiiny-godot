@@ -96,12 +96,33 @@ func _execute(context: Dictionary, built: Dictionary, recipe_name: String, turn_
 	for id in nodes:
 		var node: Node = nodes[id]
 		if is_instance_valid(node): created_nodes.append(str(root.get_path_to(node)))
+	var affected_paths := {}
+	var affected_nodes: Array = []
+	for path in created_nodes: affected_paths[path] = true
+	for op in ops:
+		if not op is Dictionary: continue
+		var kind := str(op.get("op", ""))
+		if kind == "remove_node":
+			affected_paths[str(op.get("target", ""))] = true
+		elif kind == "reparent_node":
+			var target: Variant = op.get("__target")
+			if target is Node and is_instance_valid(target): affected_paths[str(root.get_path_to(target))] = true
+		elif kind == "duplicate_node":
+			var copy: Variant = op.get("__copy")
+			if copy is Node and is_instance_valid(copy): affected_paths[str(root.get_path_to(copy))] = true
+		elif kind == "instantiate_scene":
+			var instance: Variant = op.get("__instance")
+			if instance is Node and is_instance_valid(instance): affected_paths[str(root.get_path_to(instance))] = true
+		elif kind == "connect_signal":
+			var source: Variant = op.get("__source_node")
+			if source is Node and is_instance_valid(source): affected_paths[str(root.get_path_to(source))] = true
+	for path in affected_paths: affected_nodes.append(path)
 	var created_resources: Array = []
 	for id in resources:
 		var resource: Resource = resources[id]
 		if is_instance_valid(resource): created_resources.append(resource.resource_path if not resource.resource_path.is_empty() else resource.get_class())
 	var affected: Array = []
-	for path in created_nodes:
+	for path in affected_nodes:
 		affected.append({"kind": "node", "scene_path": context.scene_path, "path": path})
 	for resource in created_resources:
 		affected.append({"kind": "resource", "scene_path": context.scene_path, "resource": resource})
@@ -118,6 +139,10 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 	var nodes := {}
 	var resources := {}
 	var op_by_id := {}
+	for op in ops:
+		if op is Dictionary and str(op.get("op", "")) == "assign_resource":
+			op["op"] = "set_property"
+			op["value"] = {"ref": str(op.get("resource", ""))}
 	for op in ops:
 		if not op is Dictionary or not op.get("op") is String:
 			return _error("invalid_operation", "Operation must be an object with an op.")
@@ -138,6 +163,16 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 				var node = ClassDB.instantiate(str(op.class))
 				if node == null or not node is Node: return _error("class_not_instantiable", "Could not instantiate " + str(op.class))
 				node.name = name
+				var node_properties: Variant = op.get("properties", {})
+				if not (node_properties is Dictionary): return _error("invalid_operation", "Node properties must be an object.")
+				for property in node_properties:
+					var info := _property_info(node, str(property))
+					if info.is_empty(): return _error("property_missing", "Node property does not exist: " + str(property))
+					if _read_only(node, str(property), info): return _error("property_not_writable", "Node property is not writable: " + str(property))
+					var coerced: Variant = _coerce_value(info, node_properties[property])
+					if not _value_compatible(info, coerced): return _error("type_mismatch", "Node property type mismatch: " + str(property))
+					node_properties[property] = coerced
+					node.set(str(property), coerced)
 				nodes[str(op.id)] = node
 			"create_resource":
 				var class_error: Dictionary = _validate_class(op, "Resource")
@@ -149,8 +184,11 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 				for property in properties:
 					var info := _property_info(resource, str(property))
 					if info.is_empty(): return _error("property_missing", "Resource property does not exist: " + str(property))
-					if not _value_compatible(info, properties[property]): return _error("type_mismatch", "Resource property type mismatch: " + str(property))
-					resource.set(str(property), properties[property])
+					if int(info.get("usage", 0)) & PROPERTY_USAGE_INTERNAL: return _error("property_not_writable", "Resource property is internal: " + str(property))
+					var coerced: Variant = _coerce_value(info, properties[property])
+					if not _value_compatible(info, coerced): return _error("type_mismatch", "Resource property type mismatch: " + str(property))
+					properties[property] = coerced
+					resource.set(str(property), coerced)
 				resources[str(op.id)] = resource
 			"create_resource_value":
 				var value: Variant = op.get("resource")
@@ -160,12 +198,60 @@ func _prepare(ops: Array, root: Node, context: Dictionary) -> Dictionary:
 				var node_value: Variant = op.get("node")
 				if not node_value is Node or node_value.get_parent() != null: return _error("invalid_operation", "Recipe node value must be an unparented Node.")
 				nodes[str(op.id)] = node_value
-			_:
-				pass
+			_: pass
+	for op in ops:
+		if not op is Dictionary: return _error("invalid_operation", "Operation must be an object.")
+		var kind := str(op.get("op", ""))
+		if kind == "instantiate_scene":
+			var packed: Variant = ResourceLoader.load(str(op.get("path", "")), "PackedScene", ResourceLoader.CACHE_MODE_REUSE)
+			if not packed is PackedScene: return _error("artifact_invalid", "PackedScene could not be loaded: " + str(op.get("path", "")))
+			var instance: Node = packed.instantiate()
+			if instance == null: return _error("artifact_invalid", "PackedScene could not be instantiated.")
+			instance.name = str(op.get("name", ""))
+			var instance_parent := _target_node(str(op.get("parent", "")), root, nodes, op_by_id)
+			if instance_parent == null: instance.free(); return _error("target_missing", "instantiate_scene parent is missing.")
+			op["__instance"] = instance
+			op["__parent_node"] = instance_parent
+		elif kind == "duplicate_node":
+			var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+			if target == null: return _error("target_missing", "duplicate_node target is missing.")
+			if target == root or (target.get_owner() != root): return _error("read_only_instance", "duplicate_node target must be owned by the edited scene.")
+			var copy: Node = target.duplicate()
+			if copy == null: return _error("invalid_operation", "Node could not be duplicated.")
+			copy.name = str(op.get("new_name", ""))
+			op["__copy"] = copy
+			op["__target"] = target
+			op["__parent_node"] = target.get_parent()
+		elif kind == "remove_node":
+			var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+			if target == null: return _error("target_missing", "remove_node target is missing.")
+			if target == root or target.get_parent() == null or target.get_owner() != root: return _error("read_only_instance", "remove_node target must be an owned non-root node.")
+			op["__target"] = target
+			op["__parent"] = target.get_parent()
+			op["__index"] = target.get_index()
+			op["__owner"] = target.get_owner()
+		elif kind == "reparent_node":
+			var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+			var parent := _target_node(str(op.get("parent", "")), root, nodes, op_by_id)
+			if target == null or parent == null: return _error("target_missing", "reparent_node target or parent is missing.")
+			if target == root or target.get_owner() != root or (parent != root and parent.get_owner() != root): return _error("read_only_instance", "reparent_node target/parent must be owned by the edited scene.")
+			op["__target"] = target
+			op["__parent_node"] = parent
+			op["__old_parent"] = target.get_parent()
+			op["__old_index"] = target.get_index()
+			op["__old_owner"] = target.get_owner()
+	for op in ops:
+		if op is Dictionary and str(op.get("op", "")) == "connect_signal":
+			op["__source_node"] = _target_node(str(op.get("source", "")), root, nodes, op_by_id)
+			op["__target_node"] = _target_node(str(op.get("target", "")), root, nodes, op_by_id)
 	var error := _validate_references(ops, nodes, resources, op_by_id, root, context)
 	if not error.is_empty():
 		for id in nodes: nodes[id].free()
 		for id in resources: resources[id] = null
+		for op in ops:
+			if op is Dictionary:
+				if op.has("__instance") and op["__instance"] is Node: op["__instance"].free()
+				if op.has("__copy") and op["__copy"] is Node: op["__copy"].free()
 		return error
 	return {"nodes": nodes, "resources": resources, "op_by_id": op_by_id}
 
@@ -202,9 +288,44 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 				var property := str(op.get("property", ""))
 				var info := _property_info(target, property)
 				if info.is_empty(): return _error("property_missing", "Property does not exist: " + property)
+				if int(info.get("usage", 0)) & PROPERTY_USAGE_INTERNAL: return _error("property_not_writable", "Property is internal: " + property)
 				if _read_only(target, property, info): return _error("property_not_writable", "Property is not writable: " + property)
-				var value: Variant = _operation_value(op.get("value"), nodes, resources, op_by_id)
+				var value: Variant = _coerce_value(info, _operation_value(op.get("value"), nodes, resources, op_by_id))
+				op["value"] = value
 				if not _value_compatible(info, value): return _error("type_mismatch", "Property type mismatch: " + property)
+			"instantiate_scene":
+				var parent := _target_node(str(op.get("parent", "")), root, nodes, op_by_id)
+				if parent == null: return _error("target_missing", "instantiate_scene parent is missing.")
+				if parent != root and parent.get_owner() != root: return _error("read_only_instance", "instantiate_scene parent must be owned by the edited scene.")
+				if not _valid_name(str(op.get("name", ""))): return _error("invalid_name", "Invalid instance name.")
+				if parent.get_node_or_null(NodePath(str(op.get("name", "")))) != null: return _error("name_conflict", "A sibling already uses the instance name.")
+				var instance: Variant = op.get("__instance")
+				if not instance is Node: return _error("invalid_operation", "PackedScene instance is missing.")
+			"duplicate_node":
+				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+				if target == null: return _error("target_missing", "duplicate_node target is missing.")
+				var parent := target.get_parent()
+				if parent == null: return _error("invalid_operation", "duplicate_node target has no parent.")
+				if parent.get_node_or_null(NodePath(str(op.get("new_name", "")))) != null: return _error("name_conflict", "A sibling already uses the duplicate name.")
+				if not op.get("__copy") is Node: return _error("invalid_operation", "Node duplicate is missing.")
+			"remove_node":
+				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+				if target == null: return _error("target_missing", "remove_node target is missing.")
+			"reparent_node":
+				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+				var parent := _target_node(str(op.get("parent", "")), root, nodes, op_by_id)
+				if target == null or parent == null: return _error("target_missing", "reparent_node target or parent is missing.")
+				if target == parent or target.is_ancestor_of(parent): return _error("invalid_parent", "reparent_node cannot create a cycle.")
+				if parent != target.get_parent() and parent.get_node_or_null(NodePath(str(target.name))) != null: return _error("name_conflict", "The new parent already has a child with that name.")
+			"connect_signal":
+				var source := _target_node(str(op.get("source", "")), root, nodes, op_by_id)
+				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
+				if source == null or target == null: return _error("target_missing", "connect_signal source or target is missing.")
+				var signal_name := str(op.get("signal", ""))
+				var method_name := str(op.get("method", ""))
+				if not source.has_signal(signal_name): return _error("signal_missing", "Signal does not exist: " + signal_name)
+				if not target.has_method(method_name): return _error("method_missing", "Target method does not exist: " + method_name)
+				if source.is_connected(signal_name, Callable(target, method_name)): return _error("already_connected", "Signal is already connected.")
 			"call_method":
 				var target = _target_object(str(op.get("target", "")), root, nodes, resources, op_by_id)
 				if target == null: return _error("target_missing", "call_method target is missing.")
@@ -272,6 +393,45 @@ func _apply_do(manager: Object, op: Dictionary, nodes: Dictionary, resources: Di
 			manager.add_do_reference(resources[str(op.id)])
 		"create_node_value":
 			manager.add_do_reference(nodes[str(op.id)])
+		"instantiate_scene":
+			var instance: Node = op["__instance"]
+			var parent: Node = op["__parent_node"]
+			manager.add_do_reference(instance)
+			manager.add_do_method(parent, "add_child", instance, true)
+			manager.add_do_property(instance, "owner", root)
+			manager.add_undo_method(parent, "remove_child", instance)
+		"duplicate_node":
+			var copy: Node = op["__copy"]
+			var parent: Node = op["__parent_node"]
+			manager.add_do_reference(copy)
+			manager.add_do_method(parent, "add_child", copy, true)
+			manager.add_do_property(copy, "owner", root)
+			for child in copy.get_children(true):
+				manager.add_do_method(child, "set_owner", copy)
+			manager.add_undo_method(parent, "remove_child", copy)
+		"remove_node":
+			var target: Node = op["__target"]
+			var parent: Node = op["__parent"]
+			var old_owner: Node = op["__owner"]
+			manager.add_do_method(parent, "remove_child", target)
+			manager.add_undo_method(parent, "add_child", target, true)
+			manager.add_undo_method(parent, "move_child", target, int(op["__index"]))
+			manager.add_undo_method(target, "set_owner", old_owner)
+		"reparent_node":
+			var target: Node = op["__target"]
+			var parent: Node = op["__parent_node"]
+			var old_parent: Node = op["__old_parent"]
+			var old_owner: Node = op["__old_owner"]
+			manager.add_do_method(target, "reparent", parent)
+			manager.add_undo_method(target, "reparent", old_parent)
+			manager.add_undo_method(old_parent, "move_child", target, int(op["__old_index"]))
+			manager.add_undo_method(target, "set_owner", old_owner)
+		"connect_signal":
+			var source: Node = op["__source_node"]
+			var target: Node = op["__target_node"]
+			var callback := Callable(target, str(op.method))
+			manager.add_do_method(source, "connect", str(op.signal), callback)
+			manager.add_undo_method(source, "disconnect", str(op.signal), callback)
 		"call_method":
 			var target = _target_object(str(op.target), root, nodes, resources, op_by_id)
 			_add_undo_redo_call(manager, true, target, str(op.method), _operation_args(op.get("args", []), nodes, resources, op_by_id))
@@ -296,6 +456,14 @@ func _verify(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dic
 			var node: Node = nodes[str(op.id)]
 			if not is_instance_valid(node) or not node.is_inside_tree(): return "Created node is not in the scene."
 			if str(node.name) != str(op.get("name", "")): return "Created node name changed."
+		elif str(op.op) == "instantiate_scene":
+			var instance: Variant = op.get("__instance")
+			if not instance is Node or not instance.is_inside_tree(): return "Instantiated scene is not in the scene."
+			if str(instance.name) != str(op.get("name", "")): return "Instantiated scene name changed."
+		elif str(op.op) == "duplicate_node":
+			var copy: Variant = op.get("__copy")
+			if not copy is Node or not copy.is_inside_tree(): return "Duplicated node is not in the scene."
+			if str(copy.name) != str(op.get("new_name", "")): return "Duplicated node name changed."
 	for op in ops:
 		if str(op.op) == "add_child":
 			var parent := _target_node(str(op.parent), root, nodes, op_by_id)
@@ -314,6 +482,17 @@ func _verify(ops: Array, nodes: Dictionary, resources: Dictionary, op_by_id: Dic
 			var args := _operation_args(op.get("verify_args", []), nodes, resources, op_by_id)
 			var actual: Variant = target.callv(str(op.verify_method), args)
 			if actual != op.get("expect", true): return "Planned method postcondition failed: " + str(op.verify_method)
+		elif str(op.op) == "remove_node":
+			var target: Node = op["__target"]
+			if target.is_inside_tree(): return "Removed node is still in the scene."
+		elif str(op.op) == "reparent_node":
+			var target: Node = op["__target"]
+			var parent: Node = op["__parent_node"]
+			if target.get_parent() != parent: return "Reparented node has the wrong parent."
+		elif str(op.op) == "connect_signal":
+			var source: Node = op["__source_node"]
+			var target: Node = op["__target_node"]
+			if not source.is_connected(str(op.signal), Callable(target, str(op.method))): return "Signal was not connected."
 	for op in ops:
 		if str(op.op) == "create_resource":
 			var resource: Resource = resources[str(op.id)]
@@ -342,6 +521,22 @@ func _scene_is_clean_after_undo(ops: Array, nodes: Dictionary, resources: Dictio
 			var args := _operation_args(op.get("verify_args", []), nodes, resources, op_by_id)
 			var actual: Variant = target.callv(str(op.verify_method), args)
 			if actual != op.get("undo_expect", not op.get("expect", true)): return false
+		elif str(op.op) == "instantiate_scene":
+			var instance: Variant = op.get("__instance")
+			if instance is Node and instance.is_inside_tree(): return false
+		elif str(op.op) == "duplicate_node":
+			var copy: Variant = op.get("__copy")
+			if copy is Node and copy.is_inside_tree(): return false
+		elif str(op.op) == "remove_node":
+			var target: Node = op["__target"]
+			if not target.is_inside_tree(): return false
+		elif str(op.op) == "reparent_node":
+			var target: Node = op["__target"]
+			if target.get_parent() != op.get("__old_parent"): return false
+		elif str(op.op) == "connect_signal":
+			var source: Node = op["__source_node"]
+			var target: Node = op["__target_node"]
+			if source.is_connected(str(op.signal), Callable(target, str(op.method))): return false
 	return true
 
 ### Property helpers
@@ -352,9 +547,20 @@ func _property_info(object: Object, name: String) -> Dictionary:
 			return info
 	return {}
 
-func _read_only(object: Object, name: String, info: Dictionary) -> bool:
-	if int(info.get("usage", 0)) & PROPERTY_USAGE_READ_ONLY: return true
-	return not object.has_method("set_" + name)
+func _read_only(_object: Object, _name: String, info: Dictionary) -> bool:
+	return bool(int(info.get("usage", 0)) & PROPERTY_USAGE_READ_ONLY)
+
+func _coerce_value(info: Dictionary, value: Variant) -> Variant:
+	var type := int(info.get("type", TYPE_NIL))
+	if type in [TYPE_VECTOR2, TYPE_VECTOR2I] and value is Dictionary and value.has("x") and value.has("y"):
+		return Vector2(float(value.x), float(value.y)) if type == TYPE_VECTOR2 else Vector2i(int(value.x), int(value.y))
+	if type in [TYPE_VECTOR3, TYPE_VECTOR3I] and value is Dictionary and value.has("x") and value.has("y") and value.has("z"):
+		return Vector3(float(value.x), float(value.y), float(value.z)) if type == TYPE_VECTOR3 else Vector3i(int(value.x), int(value.y), int(value.z))
+	if type == TYPE_VECTOR2 and value is Array and value.size() == 2:
+		return Vector2(float(value[0]), float(value[1]))
+	if type == TYPE_VECTOR3 and value is Array and value.size() == 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return value
 
 func _value_compatible(info: Dictionary, value: Variant) -> bool:
 	var type := int(info.get("type", TYPE_NIL))
@@ -472,6 +678,36 @@ func _register_default_recipes() -> void:
 		"timeout_ms": 15000,
 		"validate": Callable(self, "_validate_sprite"),
 		"build": Callable(self, "_build_sprite"),
+	})
+	register_recipe({
+		"name": "apply_editor_transaction",
+		"title": "Apply typed editor transaction",
+		"description": "Compose bounded typed scene edits: create/set nodes and resources, structure, instantiate, and connect signals. One undo action; no scripts, files, methods, or editor internals.",
+		"parameters": {"type": "object", "properties": {
+			"expected_scene_revision": {"type": "string", "maxLength": 256},
+			"expected_session_revision": {"type": "string", "maxLength": 128},
+			"operations": {"type": "array", "maxItems": 16, "items": {"type": "object", "properties": {
+				"op": {"type": "string", "enum": ["create_node", "set_property", "create_resource", "assign_resource", "add_child", "set_owner", "remove_node", "reparent_node", "duplicate_node", "instantiate_scene", "connect_signal"]},
+				"id": {"type": "string", "maxLength": 64},
+				"class": {"type": "string", "maxLength": 128},
+				"parent": {"type": "string", "maxLength": 512},
+				"name": {"type": "string", "maxLength": 128},
+				"target": {"type": "string", "maxLength": 512},
+				"property": {"type": "string", "maxLength": 128},
+				"value": {},
+				"resource": {"type": "string", "maxLength": 64},
+				"properties": {"type": "object"},
+				"path": {"type": "string", "maxLength": 512},
+				"source": {"type": "string", "maxLength": 512},
+				"signal": {"type": "string", "maxLength": 128},
+				"method": {"type": "string", "maxLength": 128},
+				"new_name": {"type": "string", "maxLength": 128},
+			}, "additionalProperties": false}},
+		}, "required": ["operations"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+		"validate": Callable(self, "_validate_generic"),
+		"build": Callable(self, "_build_generic"),
 	})
 
 func _validate_collision(params: Dictionary, context: Dictionary) -> Dictionary:
@@ -764,6 +1000,107 @@ func _build_sprite(request: Dictionary) -> Dictionary:
 	if request.scale != Vector2.ONE:
 		ops.append({"op": "set_property", "target": "sprite", "property": "scale", "value": request.scale})
 	return {"ok": true, "action_name": "Add Sprite2D " + request.node_name, "summary": "Added Sprite2D %s under %s using %s (%s)." % [request.node_name, request.parent_path, request.path, str(request.size)], "data": {"artifact": request.path, "size": [request.size.x, request.size.y], "scale": [request.scale.x, request.scale.y]}, "ops": ops}
+
+func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
+	var ops: Variant = params.get("operations")
+	if not ops is Array or ops.is_empty() or ops.size() > 16:
+		return {"ok": false, "code": "invalid_arguments", "message": "operations must contain between 1 and 16 typed operations."}
+	var expected_scene := str(params.get("expected_scene_revision", ""))
+	if not expected_scene.is_empty() and expected_scene != str(context.get("revision", "")):
+		return {"ok": false, "code": "stale_scene", "message": "The edited scene revision changed; inspect it again."}
+	var expected_session := str(params.get("expected_session_revision", ""))
+	if not expected_session.is_empty() and expected_session != str(context.get("session_revision", "")):
+		return {"ok": false, "code": "stale_scene", "message": "The scene edit history changed; inspect it again."}
+	for index in ops.size():
+		var op: Variant = ops[index]
+		if op is Dictionary and str(op.get("op", "")) in ["create_node", "create_resource"] and str(op.get("id", "")).is_empty():
+			var auto_name := str(op.get("name", ""))
+			op["id"] = auto_name if not auto_name.is_empty() else "auto_" + str(index)
+		if op is Dictionary and str(op.get("op", "")) in ["set_property", "assign_resource"] and not op.has("target") and op.get("path") is String:
+			op["target"] = op.path
+	var ids := {}
+	for op in ops:
+		if not op is Dictionary or not op.get("op") is String:
+			return {"ok": false, "code": "invalid_operation", "message": "Each operation must be an object with an op."}
+		var kind := str(op.op)
+		var id := str(op.get("id", ""))
+		if kind in ["create_node", "create_resource"]:
+			if id.is_empty() or ids.has(id) or id.length() > 64:
+				return {"ok": false, "code": "invalid_operation", "message": "Created node/resource IDs must be unique and non-empty."}
+			ids[id] = true
+	for index in ops.size():
+		var op: Dictionary = ops[index]
+		var kind := str(op.op)
+		match kind:
+			"create_node":
+				if not _generic_class_ok(str(op.get("class", "")), "Node"):
+					return {"ok": false, "code": "invalid_class", "message": "Node class is not allowed or not instantiable: " + str(op.get("class", ""))}
+				if not _valid_name(str(op.get("name", ""))):
+					return {"ok": false, "code": "invalid_name", "message": "Each created node needs a valid unique name."}
+				if not op.get("parent") is String or str(op.parent).is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "create_node parent is required."}
+				if op.has("properties") and not op.properties is Dictionary: return {"ok": false, "code": "invalid_arguments", "message": "create_node properties must be an object."}
+				if op.has("properties") and not _generic_refs_ok(op.properties, ids): return {"ok": false, "code": "invalid_reference", "message": "Initial properties may only reference resources/nodes created earlier in this transaction."}
+			"create_resource":
+				if not _generic_class_ok(str(op.get("class", "")), "Resource"):
+					return {"ok": false, "code": "invalid_class", "message": "Resource class is not allowed or not instantiable: " + str(op.get("class", ""))}
+				if op.has("properties") and not op.properties is Dictionary: return {"ok": false, "code": "invalid_arguments", "message": "create_resource properties must be an object."}
+				if op.has("properties") and not _generic_refs_ok(op.properties, ids): return {"ok": false, "code": "invalid_reference", "message": "Initial properties may only reference resources/nodes created earlier in this transaction."}
+			"set_property":
+				if not op.get("target") is String or not op.get("property") is String or str(op.property).is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "set_property needs target and property."}
+				if not op.has("value"): return {"ok": false, "code": "invalid_arguments", "message": "set_property needs a value."}
+				if not _generic_refs_ok(op.value, ids): return {"ok": false, "code": "invalid_reference", "message": "Property values may only reference resources/nodes created earlier in this transaction."}
+			"assign_resource":
+				if not op.get("target") is String or not op.get("property") is String or not op.get("resource") is String: return {"ok": false, "code": "invalid_arguments", "message": "assign_resource needs target, property, and resource."}
+				if not ids.has(str(op.resource)): return {"ok": false, "code": "invalid_reference", "message": "assign_resource must reference a resource created in this transaction."}
+			"add_child":
+				if not op.get("parent") is String or not op.get("node") is String: return {"ok": false, "code": "invalid_arguments", "message": "add_child needs parent and node."}
+			"set_owner":
+				if not op.get("node") is String or not op.get("owner") is String: return {"ok": false, "code": "invalid_arguments", "message": "set_owner needs node and owner."}
+			"remove_node":
+				if not op.get("target") is String or str(op.target) == ".": return {"ok": false, "code": "invalid_arguments", "message": "remove_node needs a non-root target."}
+			"reparent_node":
+				if not op.get("target") is String or not op.get("parent") is String: return {"ok": false, "code": "invalid_arguments", "message": "reparent_node needs target and parent."}
+			"duplicate_node":
+				if not op.get("target") is String or not _valid_name(str(op.get("new_name", ""))): return {"ok": false, "code": "invalid_arguments", "message": "duplicate_node needs a target and valid new_name."}
+			"instantiate_scene":
+				var path := str(op.get("path", ""))
+				if not path.begins_with("res://") or ".." in path.split("/") or not (path.ends_with(".tscn") or path.ends_with(".scn")) or not FileAccess.file_exists(path):
+					return {"ok": false, "code": "invalid_arguments", "message": "instantiate_scene needs an existing res:// PackedScene path."}
+				if not op.get("parent") is String or not _valid_name(str(op.get("name", ""))): return {"ok": false, "code": "invalid_arguments", "message": "instantiate_scene needs parent and a valid name."}
+			"connect_signal":
+				if not op.get("source") is String or not op.get("signal") is String or not op.get("target") is String or not op.get("method") is String:
+					return {"ok": false, "code": "invalid_arguments", "message": "connect_signal needs source, signal, target, and method."}
+				if str(op.signal).is_empty() or str(op.method).is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "Signal and method names cannot be empty."}
+			_:
+				return {"ok": false, "code": "invalid_operation", "message": "Unsupported editor operation: " + kind}
+	return {"ok": true, "request": {"ops": ops.duplicate(true)}}
+
+func _build_generic(request: Dictionary) -> Dictionary:
+	var count := Array(request.ops).size()
+	var expanded: Array = []
+	for op in request.ops:
+		expanded.append(op)
+		if op is Dictionary and str(op.get("op", "")) == "create_node":
+			expanded.append({"op": "add_child", "parent": str(op.get("parent", "")), "node": str(op.get("id", ""))})
+			expanded.append({"op": "set_owner", "node": str(op.get("id", "")), "owner": "."})
+	return {"ok": true, "action_name": "Apply editor transaction", "summary": "Applied %d typed editor operation(s) in one undo action." % count, "data": {"operation_count": count}, "ops": expanded}
+
+func _generic_class_ok(cls: String, base: String) -> bool:
+	if cls.is_empty() or not ClassDB.class_exists(cls) or not ClassDB.can_instantiate(cls): return false
+	if cls.begins_with("Editor") or cls in ["OS", "Engine", "Script", "GDScript", "PackedScene", "MainLoop", "SceneTree"]: return false
+	return cls == base or ClassDB.is_parent_class(cls, base)
+
+func _generic_refs_ok(value: Variant, ids: Dictionary) -> bool:
+	if value is Dictionary:
+		if value.has("ref"):
+			return value.ref is String and ids.has(str(value.ref))
+		for key in value:
+			if not _generic_refs_ok(value[key], ids): return false
+		return true
+	if value is Array:
+		for item in value:
+			if not _generic_refs_ok(item, ids): return false
+	return true
 
 func _unique_name(parent: Node, base: String) -> String:
 	var candidate := base

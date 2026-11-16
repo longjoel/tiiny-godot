@@ -44,6 +44,10 @@ def make_project(project: Path) -> None:
     (project / "running.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Running" type="Node2D"]\n'
     )
+    (project / "prop.tscn").write_text(
+        '[gd_scene format=3]\n\n[node name="Prop" type="Node3D"]\n\n'
+        '[node name="Mesh" type="MeshInstance3D" parent="."]\n'
+    )
     generated = project / "generated"
     generated.mkdir()
     # Stage-1 image artifact: a real 2x2 PNG used to prove intermediates survive

@@ -514,7 +514,7 @@ func _check_context_budget(payload: Dictionary) -> bool:
 			for part in content:
 				if part is Dictionary and part.get("type") == "text": text_bytes += str(part.get("text", "")).to_utf8_buffer().size()
 		text_bytes += JSON.stringify(message.get("tool_calls", [])).to_utf8_buffer().size() + 32
-	var output_tokens := clampi(budget / 8, 1024, 4096)
+	var output_tokens := clampi(budget / 8, 1024, 8192)
 	payload["max_tokens"] = output_tokens
 	if text_bytes + output_tokens + 512 <= budget: return true
 	send_button.disabled = false
@@ -1039,6 +1039,7 @@ func _refresh_registry_availability() -> void:
 	values["import_generated_model"] = {"available": saved and not dirty, "reason": workspace_reason if not saved else ("Save the scene before applying an edit." if dirty else "")}
 	values["import_generated_audio"] = values["import_generated_model"]
 	values["add_sprite_from_image"] = values["import_generated_model"]
+	values["apply_editor_transaction"] = values["import_generated_model"]
 	values["generate_image"] = {"available": image_available, "reason": "Image generation is unavailable: no configured/downloaded image model." if not image_available else ""}
 	values["create_gdscript"] = {"available": true, "reason": ""}
 	values["read_project_file"] = values["create_gdscript"]

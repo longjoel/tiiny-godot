@@ -1,6 +1,6 @@
 # 14 — Typed editor transaction primitives
 
-Status: Ready to start
+Status: Accepted. `apply_editor_transaction` implements the bounded typed operation set, one-undo composition, rollback, and live composition. See [acceptance evidence](../evidence/14-acceptance.md).
 
 Feature: Model-composable typed editor transactions
 
@@ -35,15 +35,15 @@ Authoring operations are distinct from gameplay behavior. Movement, spin, jumpin
 
 ## Acceptance criteria
 
-- [ ] The model can create an allowed node under an owned parent with validated initial properties in one undo action.
-- [ ] Property/resource assignment rejects missing, read-only, internal, type-incompatible, or out-of-transaction references before mutation.
-- [ ] Remove, reparent, duplicate, scene instantiation, and signal connection are validated and undoable.
-- [ ] A compound transaction is atomic: any invalid operation leaves the scene, history, and dirty state unchanged.
-- [ ] Ownership, instanced-scene boundaries, stale scene/session revisions, unsaved scenes, and running-scene state are handled explicitly.
-- [ ] Operations are bounded, reject editor/internal classes and arbitrary methods, and return structured affected nodes/resources plus an action name.
-- [ ] Chat action cards and the ledger show the transaction once, with target navigation for affected nodes/resources.
-- [ ] Deterministic fixtures cover each operation, invalid inputs, rollback, undo/redo, and composed examples (Camera2D, Label HUD, OmniLight3D, PBR material, collision layers, one-way platform).
-- [ ] A live sample of composed editor requests succeeds and records model/tool evidence.
+- [x] The model can create an allowed node under an owned parent with validated initial properties in one undo action.
+- [x] Property/resource assignment rejects missing, read-only, internal, type-incompatible, or out-of-transaction references before mutation.
+- [x] Remove, reparent, duplicate, scene instantiation, and signal connection are validated and undoable.
+- [x] A compound transaction is atomic: any invalid operation leaves the scene, history, and dirty state unchanged.
+- [x] Ownership, instanced-scene boundaries, stale scene/session revisions, unsaved scenes, and running-scene state are handled explicitly.
+- [x] Operations are bounded, reject editor/internal classes and arbitrary methods, and return structured affected nodes/resources plus an action name.
+- [x] Chat action cards and the ledger show the transaction once, with target navigation for affected nodes/resources.
+- [x] Deterministic fixtures cover each operation, invalid inputs, rollback, undo/redo, and composed examples (Camera2D, Label HUD, OmniLight3D, PBR material, collision layers, one-way platform).
+- [x] A live sample of composed editor requests succeeds and records model/tool evidence.
 
 ## Concrete scenarios
 
@@ -51,4 +51,4 @@ Add WS-16: “Compose a small scene feature from primitives” to [ACCEPTANCE_SC
 
 ## Evidence and handoff
 
-Pending. Record operation schema, changed files, deterministic/live results, rejected cases, and remaining specialized gaps. Update [STATUS.md](../STATUS.md) and reclassify catalog entries in story 16.
+Accepted. Implementation: generic recipe and executor operations in `editor/tiiny/tools/transactions.gd`, prompt/availability in `editor/tiiny/tools/registry.gd` and `editor/tiiny_ai_dock_source.h`. Deterministic fixture covers create/property/resource/assign/structure/instantiate/signal/rollback/stale/cap/undo/redo; live Ornith composed Camera2D + Label + PBR Crate. See [acceptance evidence](../evidence/14-acceptance.md).

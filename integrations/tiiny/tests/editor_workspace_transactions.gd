@@ -357,6 +357,83 @@ func _run() -> void:
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after audio import"); return
 	root = EditorInterface.get_edited_scene_root()
 
+	var generic_history := _history_count(root)
+	var generic_ops := [
+		{"op": "create_node", "id": "camera", "class": "Camera2D", "parent": ".", "name": "MainCamera", "properties": {"position": Vector2(100, 200), "position_smoothing_enabled": true}},
+		{"op": "create_node", "id": "hud", "class": "Label", "parent": ".", "name": "HudLabel", "properties": {"text": "Score: 0"}},
+		{"op": "create_node", "id": "light", "class": "OmniLight3D", "parent": "World", "name": "TorchLight", "properties": {"light_energy": 1.5}},
+		{"op": "create_node", "id": "crate", "class": "MeshInstance3D", "parent": "World", "name": "Crate"},
+		{"op": "create_resource", "id": "metal", "class": "StandardMaterial3D", "properties": {"metallic": 1.0, "roughness": 0.35}},
+		{"op": "assign_resource", "target": "crate", "property": "material_override", "resource": "metal"},
+		{"op": "create_node", "id": "button", "class": "Button", "parent": ".", "name": "StartButton", "properties": {"text": "Start"}},
+		{"op": "connect_signal", "source": "button", "signal": "pressed", "target": "hud", "method": "hide"},
+	]
+	var generic: Dictionary = transactions.execute("apply_editor_transaction", {"operations": generic_ops})
+	if not generic.get("ok", false) or _history_count(root) != generic_history + 1:
+		_fail("Generic editor transaction failed: " + str(generic)); return
+	var camera: Camera2D = root.get_node_or_null("MainCamera")
+	var hud: Label = root.get_node_or_null("HudLabel")
+	var crate: MeshInstance3D = root.get_node_or_null("World/Crate")
+	if camera == null or camera.position != Vector2(100, 200) or not camera.position_smoothing_enabled:
+		_fail("Generic Camera2D creation/properties failed"); return
+	if hud == null or hud.text != "Score: 0" or root.get_node_or_null("StartButton") == null or not root.get_node("StartButton").is_connected("pressed", Callable(hud, "hide")):
+		_fail("Generic Label creation or signal connection failed"); return
+	if crate == null or not crate.material_override is StandardMaterial3D or not is_equal_approx(crate.material_override.metallic, 1.0):
+		_fail("Generic material creation/assignment failed"); return
+	if root.get_node_or_null("World/TorchLight") == null:
+		_fail("Generic OmniLight3D creation failed"); return
+	var generic_undo := _history(root)
+	if not generic_undo[2].undo() or root.get_node_or_null("MainCamera") != null or root.get_node_or_null("HudLabel") != null:
+		_fail("Generic editor transaction undo failed"); return
+	if not generic_undo[2].redo() or root.get_node_or_null("MainCamera") == null:
+		_fail("Generic editor transaction redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before structural transaction"); return
+	root = EditorInterface.get_edited_scene_root()
+	var structural_ops := [
+		{"op": "duplicate_node", "target": "Player", "new_name": "PlayerCopy"},
+		{"op": "reparent_node", "target": "HudLabel", "parent": "MainCamera"},
+		{"op": "instantiate_scene", "path": "res://prop.tscn", "parent": "World", "name": "SceneProp"},
+		{"op": "remove_node", "target": "StartButton"},
+	]
+	var structural: Dictionary = transactions.execute("apply_editor_transaction", {"operations": structural_ops})
+	if not structural.get("ok", false):
+		_fail("Structural editor transaction failed: " + str(structural)); return
+	if root.get_node_or_null("PlayerCopy") == null or root.get_node_or_null("MainCamera/HudLabel") == null or root.get_node_or_null("World/SceneProp") == null or root.get_node_or_null("StartButton") != null:
+		_fail("Structural transaction postconditions failed"); return
+	var structural_undo := _history(root)
+	if not structural_undo[2].undo() or root.get_node_or_null("PlayerCopy") != null or root.get_node_or_null("HudLabel") == null or root.get_node_or_null("StartButton") == null:
+		_fail("Structural transaction undo failed"); return
+	if not structural_undo[2].redo() or root.get_node_or_null("World/SceneProp") == null:
+		_fail("Structural transaction redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after generic transactions"); return
+	root = EditorInterface.get_edited_scene_root()
+	var invalid_history := _history_count(root)
+	var invalid_class: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "create_node", "id": "bad", "class": "OS", "parent": ".", "name": "BadNode"}]})
+	if _error_code(invalid_class) != "invalid_class" or root.get_node_or_null("BadNode") != null or _history_count(root) != invalid_history:
+		_fail("Generic transaction accepted an invalid class: " + str(invalid_class)); return
+	var atomic_ops := [
+		{"op": "create_node", "id": "partial", "class": "Node2D", "parent": ".", "name": "PartialNode"},
+		{"op": "set_property", "target": "partial", "property": "no_such_property", "value": 1},
+	]
+	var atomic: Dictionary = transactions.execute("apply_editor_transaction", {"operations": atomic_ops})
+	if _error_code(atomic) != "property_missing" or root.get_node_or_null("PartialNode") != null or _history_count(root) != invalid_history:
+		_fail("Invalid compound transaction left partial state: " + str(atomic)); return
+	var missing_ref: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "set_property", "target": "World/Crate", "property": "material_override", "value": {"ref": "missing"}}]})
+	if _error_code(missing_ref) != "invalid_reference":
+		_fail("Generic transaction accepted a missing resource reference: " + str(missing_ref)); return
+	var stale: Dictionary = transactions.execute("apply_editor_transaction", {"expected_scene_revision": "stale", "operations": [{"op": "create_node", "id": "s", "class": "Node2D", "parent": ".", "name": "StaleNode"}]})
+	if _error_code(stale) != "stale_scene" or root.get_node_or_null("StaleNode") != null:
+		_fail("Generic transaction accepted a stale revision: " + str(stale)); return
+	var too_many: Array = []
+	for index in 17:
+		too_many.append({"op": "create_node", "id": "n" + str(index), "class": "Node2D", "parent": ".", "name": "N" + str(index)})
+	if _error_code(transactions.execute("apply_editor_transaction", {"operations": too_many})) != "invalid_arguments":
+		_fail("Generic transaction accepted more than 16 operations"); return
+	if _history_count(root) != invalid_history:
+		_fail("Rejected generic transactions changed undo history"); return
+
 	var registry = dock.get("workspace_registry_script").new(inspector, transactions)
 	registry.set_handler("read_project_file", Callable(dock, "_registry_read_file"))
 	registry.set_handler("replace_in_gdscript", Callable(dock, "_registry_replace_script"))
@@ -364,7 +441,7 @@ func _run() -> void:
 		registry.set_available(str(definition.name), true)
 	if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
 		_fail("Registry payload omitted the recipe"); return
-	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "add_sprite_from_image", "read_project_file", "replace_in_gdscript"]:
+	for recipe_name in ["add_torch_flicker", "assign_slippery_surface", "import_generated_model", "import_generated_audio", "add_sprite_from_image", "apply_editor_transaction", "read_project_file", "replace_in_gdscript"]:
 		if not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == recipe_name):
 			_fail("Registry payload omitted the native workflow recipe: " + recipe_name); return
 	var edit_path := "res://edit_fixture.gd"
