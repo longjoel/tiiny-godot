@@ -25,12 +25,13 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`. No build or test remains running
 
 | Check | Result | Log/report |
 | --- | --- | --- |
-| Transaction/registry fixture | Passed TileMap, GridMap, AnimatedSprite, theme, audio loop/bus, navigation, AnimationTree, animation playback, Trail3D, weather, particles, mesh collision, mesh quality, and all prior generic/native tests | `/tmp/transactions-17-final3.log` |
+| Transaction/registry fixture | Passed TileMap, GridMap, AnimatedSprite, theme, audio loop/bus, navigation, AnimationTree, animation playback, Trail3D, weather, particles, mesh collision, mesh quality, and all prior generic/native tests | `/tmp/transactions-17-final4.log` |
 | Catalog validator | Passed: 100 tasks, 48 tools, 40 supported / 60 partial / 0 missing, 40/40 tests | `/tmp/tiiny-task-coverage-final.json` |
-| Jobs suite | Passed all 31 modes | `/tmp/jobs-17-final.log` |
-| Editor smoke | Passed 11/11 | `/tmp/tiiny-story17-final-smoke.json` |
-| Debugger fixture | Passed | `/tmp/debugger-17-final.log` |
+| Jobs suite | Passed all 31 modes | `/tmp/jobs-17-all.log` |
+| Editor smoke | Passed 11/11 | `/tmp/tiiny-story17-all-smoke.json` |
+| Debugger fixture | Passed | `/tmp/debugger-17-all.log` |
 | Build | Exit 0, `00:00:35.45` | `/tmp/tiiny-story17c-build.log` |
+| Resource HTTP fixture | Passed | `/tmp/resource-17-all.log` |
 
 ## Remaining boundaries
 
