@@ -1,6 +1,6 @@
 # 10 — On-demand specialized-model scheduling
 
-Status: Accepted for the implemented scheduling path. `model_schedule` is a queued, journaled transition with coding-model protection, capacity/disk rejection, disconnect recovery, and configured-warm-set restoration. Live hardware load behavior remains unverified. See [acceptance evidence](../evidence/10-acceptance.md).
+Status: Accepted. `model_schedule` is a queued, journaled transition with coding-model protection, capacity/disk rejection, disconnect recovery, and configured-warm-set restoration. Live device swaps and measured load/unload timings are recorded; catalog NPU units remain planning estimates. See [acceptance evidence](../evidence/10-acceptance.md).
 
 Feature: On-demand specialized-model scheduling
 
@@ -25,7 +25,7 @@ Queue specialized jobs while protecting the coding model and restoring user-sele
 - [x] Restore the configured warm set after success, failure, or cancellation when capacity and connection permit.
 - [x] Download/load progress and cancellation are observable and do not freeze the editor.
 - [x] Test disconnects and capacity errors during transitions, including recovery without duplicate jobs.
-- [x] Record tested model combinations and measured load behavior rather than treating catalog percentages as guaranteed RAM accounting. Fixture combinations are recorded; live hardware timing is explicitly unverified.
+- [x] Record tested model combinations and measured load behavior rather than treating catalog percentages as guaranteed RAM accounting. Live: TTS load 8.374 s / unload 6.327 s; Hunyuan3D load 33.499 s / unload 6.552 s; coding model retained at 54 NPU, 76 NPU coexisting, original `[Ornith]` warm set restored.
 
 ## Concrete scenarios
 
@@ -33,4 +33,4 @@ Use DEV-01, DEV-02 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.md). F
 
 ## Evidence and handoff
 
-Accepted for the implemented path. Implementation: pure `Planner.schedule` in `editor/tiiny_ai_manager_source.h`, queued `model_schedule` execution with journaling/restoration, panel validation/worker/title/details in `editor/tiiny/jobs/panel.gd`, dock `append_job` exposure, and registry schema. Deterministic evidence: planner/panel checks, all 31 Jobs modes (including schedule, capacity, restore, disconnect), 11-stage editor smoke, transaction fixture, and resource HTTP fixture. No live Tiiny load/unload timing or hardware capacity measurement was performed; catalog NPU values remain planning estimates. See [acceptance evidence](../evidence/10-acceptance.md).
+Accepted. Implementation: pure `Planner.schedule` in `editor/tiiny_ai_manager_source.h`, queued `model_schedule` execution with journaling/restoration, panel validation/worker/title/details in `editor/tiiny/jobs/panel.gd`, dock `append_job` exposure, and registry schema. Deterministic evidence: planner/panel checks, all 31 Jobs modes, 11-stage editor smoke, transaction fixture, and resource HTTP fixture. Live evidence: TTS load 8.374 s / unload 6.327 s; Hunyuan3D load 33.499 s / unload 6.552 s; Ornith retained at 54 NPU, 76 NPU coexisting, original warm set restored; both models were swapped through `model_schedule` during live story 13 asset jobs. Catalog NPU values remain planning estimates; timings are single-run wall-clock measurements. See [acceptance evidence](../evidence/10-acceptance.md).

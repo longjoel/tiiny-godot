@@ -1,6 +1,6 @@
 # 02 — Persistent FIFO job queue
 
-Status: Complete. All 10 acceptance criteria are implemented and verified. Criterion 10 (Tiiny device coordination) is now evidenced by the shared device lease and protected coding-model work in stories 03/07/10; the Jobs panel behavior is covered by the 31-mode suite and editor smoke. A fresh displayed capture was not repeated in the story 13 slice.
+Status: Complete. All 10 acceptance criteria are implemented and verified. Criterion 10 (Tiiny device coordination) is evidenced by the shared device lease and protected coding-model work in stories 03/07/10/13; the Jobs panel behavior is covered by the 31-mode suite and a displayed X11 capture with a completed job card. A fresh displayed capture is stored at `/tmp/tiiny-jobs-displayed.png` (`check_jobs_displayed.py`).
 
 Feature: Persistent FIFO jobs and execution visibility
 
@@ -31,8 +31,8 @@ Example: append `create_tree`, then append `attach_tree_to_scene`, with an expli
 
 ## Implementation plan and visuals
 
-Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). All 10 acceptance criteria are verified; the Jobs suite covers FIFO, recovery, panel state, and device-coordination paths, while a fresh displayed capture was not repeated in the final slice.
+Follow [the implementation plan](../implementation/02-job-manager.md), [FIFO diagrams](../mockups/02-job-manager-diagrams.md), and [Jobs mockup](../mockups/02-jobs-panel.html). All 10 acceptance criteria are verified; the Jobs suite covers FIFO, recovery, panel state, and device-coordination paths, and `check_jobs_displayed.py` captures a real X11 editor with a completed `create_tree` card, `Queued 0`, and `Completed 1`.
 
 ## Evidence and handoff
 
-JOB-01 through JOB-06 are verified (see STATUS.md entries: `check_job_process.py` lock/recovery, `check_editor_tree.py` publication/import, `check_builtin_jobs.py` create/restore, and four headless fixtures at 0 failures). Criterion 10 is now satisfied by the shared device lease/journal used by chat, resource, model-apply/restore, and `model_schedule` jobs; story 10 additionally protects the coding model and restores the warm set. See [STATUS.md](../STATUS.md) for the full verification log.
+JOB-01 through JOB-06 are verified (see STATUS.md entries: `check_job_process.py` lock/recovery, `check_editor_tree.py` publication/import, `check_builtin_jobs.py` create/restore, and four headless fixtures at 0 failures). Criterion 10 is satisfied by the shared device lease/journal used by chat, resource, model-apply/restore, `model_schedule`, and `asset_generate` jobs; story 10 additionally protects the coding model and restores the warm set. Displayed panel evidence: `check_jobs_displayed.py` captured `/tmp/tiiny-jobs-displayed.png` in an X11 editor showing the completed fixture card and column counts. See [STATUS.md](../STATUS.md) for the full verification log.

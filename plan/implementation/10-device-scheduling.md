@@ -1,6 +1,6 @@
 # Story 10 implementation plan — on-demand specialized-model scheduling
 
-Status: Accepted for the implemented path. Planner, queued execution, exposure, and deterministic verification are complete; live hardware load measurements remain unverified.
+Status: Accepted. Planner, queued execution, exposure, deterministic verification, live swaps, and measured load/unload timings are complete. Catalog NPU values remain planning estimates.
 
 Parent: [10 — On-demand specialized-model scheduling](../work-items/10-device-scheduling.md).
 
@@ -96,4 +96,4 @@ All gates are covered by the planner/panel and Jobs fixtures. See [acceptance ev
 
 ## Handoff
 
-Accepted for the implemented path. See [acceptance evidence](../evidence/10-acceptance.md). Boundaries: no live Tiiny load/unload timing; `model_schedule` does not auto-schedule image generation inside the HTTP tool; unverified commands stop for reconciliation.
+Accepted. See [acceptance evidence](../evidence/10-acceptance.md). Live timings: TTS 8.374 s load / 6.327 s unload; Hunyuan3D 33.499 s load / 6.552 s unload; coding retained at 54 NPU; 76 NPU coexisting; original warm set restored. Boundaries: single-run timings, catalog NPU estimates, unverified commands stop for reconciliation, `restore=false` is explicit.

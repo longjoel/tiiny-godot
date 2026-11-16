@@ -95,6 +95,8 @@ Story 13 adds transaction-fixture coverage for `import_generated_model` (real ge
 
 Story 13 also adds `check_asset_generation.py`, a live-device fixture for queued `asset_generate` jobs: real TTS via `/v1/audio/speech`, real shape-only image-to-3D via `/v1/3d/tasks`, imported AudioStream/MeshInstance3D verification, specialized-model unload/reload through `model_schedule` while the coding model stays resident, a confirmed missing-reference failure with lease release and successful retry, and a cancelled 3D job that becomes `interrupted` and requires acknowledgement. It requires the real Tiiny device and installed models.
 
+`check_jobs_displayed.py` launches a displayed X11 editor and captures `/tmp/tiiny-jobs-displayed.png` after a completed `create_tree` job, verifying the Jobs dock is visible with its queued/running/attention/completed/failed columns and card.
+
 The fake chat protocol fixture also submits a reviewed tree job through the
 real built-in Jobs service, checks the returned acceptance and status, rejects
 an invalid path, and waits for the fixture to complete. It uses no device.
