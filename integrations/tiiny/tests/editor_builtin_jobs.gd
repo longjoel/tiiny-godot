@@ -571,6 +571,78 @@ func _run() -> void:
 		if not jobs.acquire_device(self, "after restart").is_empty():
 			_fail("Restart allowed new device work before reconciliation")
 			return
+	elif mode == "chat_protocol":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		var store: RefCounted = jobs.get("queue")
+		if not store.set_paused(true): _fail("Could not pause queue for protocol fixture"); return
+		fake.prompt.text = "Add some gravity."
+		fake._generate()
+		var snapshot: Dictionary = store.snapshot()
+		if snapshot.jobs.size() != 1: _fail("Protocol chat was not queued"); return
+		var id: String = snapshot.jobs[0].id
+		store.set_paused(false)
+		var deadline := Time.get_ticks_msec() + 10000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Protocol chat did not dispatch classification"); return
+		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Protocol chat did not dispatch an answer"); return
+		var first := {"id": "one", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
+		var second := {"id": "two", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
+		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first, second]}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply)
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var final: Dictionary = jobs.get_job_status(id)
+		if final.get("state") != "failed" or final.get("attempts", []).is_empty() or not final.attempts.back().get("device_confirmed", false):
+			_fail("Protocol rejection was not a confirmed failure: " + str(final)); return
+		if not str(final.get("result", {}).get("error", "")).contains("more than one tool call"):
+			_fail("Protocol rejection lost its reason: " + str(final)); return
+		if jobs.device_recovery_pending() or jobs.acquire_device(self, "after protocol failure").is_empty():
+			_fail("Protocol failure retained an uncertain device lease"); return
+		print("Built-in Jobs chat_protocol passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_empty":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		var store: RefCounted = jobs.get("queue")
+		if not store.set_paused(true): _fail("Could not pause queue for empty fixture"); return
+		fake.prompt.text = "add some gravity"
+		fake._generate()
+		var snapshot: Dictionary = store.snapshot()
+		if snapshot.jobs.size() != 1: _fail("Empty-response chat was not queued"); return
+		var id: String = snapshot.jobs[0].id
+		store.set_paused(false)
+		var deadline := Time.get_ticks_msec() + 10000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Empty-response chat did not classify"); return
+		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Empty-response chat did not answer"); return
+		var empty := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), empty)
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var final: Dictionary = jobs.get_job_status(id)
+		if final.get("state") != "failed" or not str(final.get("result", {}).get("error", "")).contains("empty response"):
+			_fail("Empty response was not a clear failure: " + str(final)); return
+		if not final.attempts.back().get("device_confirmed", false) or jobs.device_recovery_pending() or jobs.acquire_device(self, "after empty failure").is_empty():
+			_fail("Empty response retained an uncertain device lease"); return
+		print("Built-in Jobs chat_empty passed")
+		get_tree().quit()
+		return
 	elif mode == "chat":
 		var fake = load("res://fake_queued_chat.gd").new()
 		add_child(fake)

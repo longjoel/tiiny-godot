@@ -33,4 +33,4 @@ Use WS-01, WS-02, WS-13 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCENARIOS.m
 
 ## Evidence and handoff
 
-Accepted. Implementation: `editor/tiiny/tools/transactions.gd`, build/dock injection as `workspace_transactions_script`, product rectangular-collision recipe, and test-only Marker2D/Capsule recipes in `editor_workspace_transactions.gd`. Final build `da3b7c67a` (PID 797629) passed the transaction editor fixture and the existing 11-stage editor smoke. See [acceptance evidence](../evidence/06-acceptance.md). Story 07 consumes the recipe provider and remains the model-facing registry.
+Accepted. Implementation: `editor/tiiny/tools/transactions.gd`, build/dock injection as `workspace_transactions_script`, product rectangular-collision recipe, and test-only Marker2D/Capsule recipes in `editor_workspace_transactions.gd`. Final build `da3b7c67a` (PID 808644) passed the transaction editor fixture and the existing 11-stage editor smoke. See [acceptance evidence](../evidence/06-acceptance.md). Story 07 consumes the recipe provider and remains the model-facing registry.

@@ -217,6 +217,43 @@ func _set_status(message: String) -> void:
 	if not message.is_empty():
 		log_message.emit("Tiiny AI: " + message, 0)
 
+func _protocol_stop(reason: String) -> void:
+	send_button.disabled = false
+	_set_status(reason)
+	_append_message("assistant", "Tiiny stopped: " + reason)
+	var completed := _successful_ledger_summary()
+	if not completed.is_empty():
+		_append_message("assistant", "Completed actions before the stop:\n" + completed)
+
+func _successful_ledger_summary() -> String:
+	var lines: Array[String] = []
+	for entry in turn_ledger:
+		if bool(entry.get("ok", false)):
+			lines.append(str(entry.get("summary", entry.get("tool", "Tool completed"))))
+	return "\n".join(lines)
+
+func _handle_empty_answer() -> void:
+	var summary := _successful_ledger_summary()
+	var has_success := not summary.is_empty()
+	send_button.disabled = false
+	if has_success:
+		var text := "The model returned no final text. Completed actions:\n" + summary
+		if request_stage == "answer":
+			turn_messages.append({"role": "assistant", "content": text})
+			conversation = turn_messages.duplicate(true)
+		if queued_chat_started:
+			queued_chat_response = text
+			queued_chat_success = true
+		_append_message("assistant", text)
+		_set_status("")
+		return
+	var reason := "The model returned an empty response; no tool succeeded."
+	if queued_chat_started:
+		queued_chat_success = false
+		queued_chat_response = ""
+	_set_status(reason)
+	_append_message("assistant", "Tiiny stopped: " + reason)
+
 func _request_timeout() -> float:
 	return float(clampi(int(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/request_timeout_seconds")), 10, 3600))
 
@@ -425,9 +462,10 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	return {"state": state, "result": result}
 
 func finalize_queued_chat(state: String) -> void:
-	if state == "completed":
-		device_outcome_uncertain = false
-		_release_device()
+	if state == "interrupted":
+		return
+	device_outcome_uncertain = false
+	_release_device()
 
 # Called by the Jobs panel after the user explicitly abandons an interrupted
 # device job. Releases the lease only for that recorded uncertainty.
@@ -620,6 +658,10 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 		send_button.disabled = false
 		_set_status("Connection failed (result %d). Check the device and URL." % result)
 		return
+	if queued_chat_started and not queued_chat_id.is_empty():
+		# The HTTP request completed, so the remote inference outcome is known even
+		# if the local protocol or tool validation rejects the response.
+		confirm_device_success(queued_chat_id)
 	var json := JSON.new()
 	var parsed: Variant = json.data if json.parse(body.get_string_from_utf8()) == OK else null
 	if response_code < 200 or response_code >= 300:
@@ -644,15 +686,24 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			_set_status("The response contained malformed tool calls.")
 			return
 		if not calls.is_empty():
-			if calls.size() != 1 or not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128 or calls[0].get("type") != "function" or tool_call_ids.has(calls[0].id) or tool_rounds >= 6 or tool_call_count >= 8:
-				send_button.disabled = false
-				_set_status("The model requested invalid, repeated, or unsupported tool calls, or exceeded the tool limit.")
+			var protocol_reason := ""
+			if calls.size() != 1:
+				protocol_reason = "The model returned more than one tool call at once; no tool was executed."
+			elif not calls[0] is Dictionary or not calls[0].get("function") is Dictionary or calls[0].get("type") != "function":
+				protocol_reason = "The model returned a malformed tool call; no tool was executed."
+			elif not calls[0].get("id") is String or calls[0].id.strip_edges().is_empty() or calls[0].id.length() > 128:
+				protocol_reason = "The model returned an invalid tool call ID; no tool was executed."
+			elif tool_call_ids.has(calls[0].id):
+				protocol_reason = "The model repeated a tool call ID; no tool was executed."
+			elif tool_rounds >= 6 or tool_call_count >= 8:
+				protocol_reason = "The tool limit was reached; no further tool was executed."
+			if not protocol_reason.is_empty():
+				_protocol_stop(protocol_reason)
 				return
 			var function: Dictionary = calls[0].function
 			var argument_json := JSON.new()
 			if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
-				send_button.disabled = false
-				_set_status("The tool received invalid arguments.")
+				_protocol_stop("The model returned invalid tool arguments; no tool was executed.")
 				return
 			var arguments: Dictionary = argument_json.data
 			tool_call_ids.append(calls[0].id)
@@ -697,6 +748,9 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 		_set_status("The response did not contain text.")
 		return
 	var content: String = choice["message"]["content"]
+	if content.strip_edges().is_empty():
+		_handle_empty_answer()
+		return
 	if request_stage == "classify":
 		var kind := content.strip_edges().to_lower()
 		if not CATEGORIES.has(kind):

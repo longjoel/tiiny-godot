@@ -55,8 +55,14 @@ func _tick_impl() -> void:
 				result["error"] = cancel_reason
 				status.state = "failed" if cancel_reason != "Cancelled by user" else "cancelled"
 		if queue.finish(current.id, status.state, result):
+			var finished_id: String = str(current.id)
+			var finished_state: String = str(status.state)
+			for job in queue.snapshot().jobs:
+				if job.id == finished_id:
+					finished_state = str(job.state)
+					break
 			if worker.has_method("committed"):
-				worker.committed(status.state)
+				worker.committed(finished_state)
 			worker = null
 			current = {}
 			cancel_reason = ""

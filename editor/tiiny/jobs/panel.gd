@@ -467,10 +467,12 @@ func begin_device_request(owner: Object, token: String, id: String, model: Strin
 func confirm_device_request(owner: Object, token: String, id: String) -> bool:
 	if not _owns_device(owner, token): return false
 	var marker := _device_marker()
+	if marker.get("state") == "idle": return true
 	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id or marker.get("verb") != "inference": return false
 	var job := get_job_status(id)
 	if job.get("state") != "running" or job.get("attempts", []).is_empty() or not job.attempts.back().get("device_started", false): return false
-	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"}))
+	if not device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"})): return false
+	return queue.confirm_device_request(id)
 
 # Clear only after all commands in the running attempt were verified. This is
 # done before the worker releases its lease or reports successful completion.

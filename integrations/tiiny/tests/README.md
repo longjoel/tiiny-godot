@@ -40,7 +40,10 @@ checks paused dispatch, automatic classification, captured scene/selection
 context, credential exclusion, tail appends, completion and a timed-out request
 that remains interrupted. A separate abandon fixture verifies that a
 device-uncertain interruption blocks the lease, can be abandoned with the
-recorded uncertainty released, and is not replayed. Resource checks
+recorded uncertainty released, and is not replayed. A `chat_protocol` mode
+verifies that a completed HTTP response rejected for multiple tool calls ends
+as a confirmed failure and releases the device lease instead of becoming an
+interrupted device job. Resource checks
 cover FIFO ordering, callback after commit, cancellation and a late response;
 the focused HTTP check opens a loopback-only fixture, answers automatic
 classification, and verifies that a stale device snapshot revalidates inside a

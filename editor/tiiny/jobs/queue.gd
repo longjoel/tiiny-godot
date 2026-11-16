@@ -115,7 +115,9 @@ func _valid_store(value: Variant) -> bool:
 					return false
 				if (attempt.state in ["failed", "cancelled"] and attempt.mutation.phase != "aborted") or (attempt.state == "completed" and attempt.mutation.phase != "saved"):
 					return false
-			if attempt.has("device_started") and (attempt.device_started != true or attempt.state in ["failed", "cancelled"]):
+			if attempt.has("device_started") and (attempt.device_started != true or (attempt.state in ["failed", "cancelled"] and not attempt.get("device_confirmed", false))):
+				return false
+			if attempt.has("device_confirmed") and (attempt.device_confirmed != true or not attempt.get("device_started", false)):
 				return false
 			if attempt.has("device_operations"):
 				if not attempt.get("device_started", false) or not _valid_device_operations(attempt.device_operations):
@@ -413,6 +415,24 @@ func device_started(id: String) -> bool:
 	_mutex.unlock()
 	return ok
 
+# A completed device request has a known remote outcome even when the local
+# response is rejected by protocol or validation checks. This distinction keeps
+# a deterministic tool/protocol error from being reported as device uncertainty.
+func confirm_device_request(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty():
+		for job in _data.jobs:
+			if job.id == id and job.state == "running" and not job.attempts.is_empty():
+				var attempt: Dictionary = job.attempts.back()
+				if not attempt.get("device_started", false):
+					break
+				attempt["device_confirmed"] = true
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
 # Record the precise model command and its device binding before starting the
 # CLI. The same attempt can contain several commands, but only after the prior
 # one was confirmed from device state. No credentials are stored in the queue.
@@ -545,9 +565,10 @@ func finish(id: String, state: String, result: Dictionary) -> bool:
 				var device_operations: Array = job.attempts.back().get("device_operations", [])
 				if state == "completed" and not device_operations.is_empty() and device_operations.back().state != "verified":
 					break
-				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (job.attempts.back().get("device_started", false) and state != "completed"):
-					# A failure after a publication boundary cannot safely be retried
-					# until a reconciler establishes what was installed.
+				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (job.attempts.back().get("device_started", false) and state != "completed" and not job.attempts.back().get("device_confirmed", false)):
+					# A failure after a publication boundary or an unconfirmed
+					# device request cannot safely be retried until a reconciler
+					# establishes what was installed or stopped.
 					state = "interrupted"
 					result = result.duplicate(true)
 					var reason := str(result.get("error", "")).strip_edges()

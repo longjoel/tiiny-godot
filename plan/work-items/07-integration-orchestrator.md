@@ -33,4 +33,4 @@ Use WS-13, WS-14, WS-15, DEV-03 from [ACCEPTANCE_SCENARIOS.md](../ACCEPTANCE_SCE
 
 ## Evidence and handoff
 
-Accepted. Implementation: `editor/tiiny/tools/registry.gd`, injected registry in the chat dock, structured chat dispatcher and ledger, workspace-first prompt/availability, and recipe-first execution. Final build `da3b7c67a` (PID 797629) passed the transaction/registry/chat fixture, 11-stage editor smoke, all 25 Jobs modes, workspace inspector, and a live Ornith recipe run with undo and unchanged residency. See [acceptance evidence](../evidence/07-acceptance.md). Story 08 can build richer action UI on the ledger.
+Accepted. Implementation: `editor/tiiny/tools/registry.gd`, injected registry in the chat dock, structured chat dispatcher and ledger, workspace-first prompt/availability, and recipe-first execution. Final build `da3b7c67a` (PID 816681) passed the transaction/registry/chat fixture, 11-stage editor smoke, all 27 Jobs modes, workspace inspector, and a live Ornith recipe run with undo and unchanged residency. See [acceptance evidence](../evidence/07-acceptance.md). Story 08 can build richer action UI on the ledger.

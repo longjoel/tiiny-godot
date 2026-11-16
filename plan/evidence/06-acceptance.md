@@ -2,7 +2,7 @@
 
 Story 06 is accepted. The editor-owned transaction provider implements a class-agnostic operation executor and a recipe layer. The product recipe creates one `CollisionShape2D` with an owned `RectangleShape2D`; test-only Marker2D and CapsuleShape2D recipes run through the same executor without changes.
 
-Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.da3b7c67a`. Final build PID 797629 exited 0 in 38.71s with `scons platform=linuxbsd target=editor use_static_cpp=no -j8`. No build remains running.
+Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.da3b7c67a`. Final build PID 808644 exited 0 in 38.21s with `scons platform=linuxbsd target=editor use_static_cpp=no -j8`. No build remains running.
 
 ## Criterion matrix
 
@@ -20,9 +20,9 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.d
 
 | Check | Result | Report/log |
 | --- | --- | --- |
-| Transaction editor integration | Passed | `/tmp/transactions-final2.log` |
-| Existing editor smoke + restart stages | Passed, 11/11 stages | `/tmp/tiiny-story07-final2.json` |
-| Build | Exit 0, 38.71s | `/tmp/tiiny-story07-build8.log` |
+| Transaction editor integration | Passed | `/tmp/transactions-protocol-final.log` |
+| Existing editor smoke + restart stages | Passed, 11/11 stages | `/tmp/tiiny-protocol-final.json` |
+| Build | Exit 0, 38.21s | `/tmp/tiiny-story07-build9.log` |
 
 ## Implementation notes
 

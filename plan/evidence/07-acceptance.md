@@ -2,7 +2,7 @@
 
 Story 07 is accepted on deterministic registry/chat fixtures plus one real-model end-to-end recipe run. The model-facing registry owns tool definitions, availability, schema validation, handlers, structured results, prompt assembly, and ledger entries. One successful live run used Ornith to add a 32×48 rectangular collision shape and the edit was undone.
 
-Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.da3b7c67a`. Final build PID 797629 exited 0 in 38.71s with `scons platform=linuxbsd target=editor use_static_cpp=no -j8`. No build remains running.
+Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.da3b7c67a`. Final build PID 816681 exited 0 in 75.16s with `scons platform=linuxbsd target=editor use_static_cpp=no -j8`. No build remains running.
 
 ## Implementation
 
@@ -24,18 +24,18 @@ Executable: `bin/godot.linuxbsd.editor.x86_64`, version `4.8.beta.custom_build.d
 | Malformed/unknown/duplicate/multiple/limits | Existing editor chat protocol suite covers malformed envelopes, invalid arguments, unknown tools, repeated IDs, multiple calls, round limits, continuation recovery, and unlocked controls. |
 | Structured results and call IDs | Registry/chat fixture checks structured recipe result, `call_id`, `undo_group`, ledger entry, and tool-message round trip. |
 | Real model macro + undo | Live run with `ornith-ai/Ornith-1.5-35B-A3B-Turbo`: advertised the recipe, called it, created `Player/CollisionShape2D` with a 32×48 `RectangleShape2D`, recorded the ledger/undo group, and undid it successfully. |
-| Errors/cancellation preserve completed work | Existing chat protocol/Jobs suites cover error recovery, cancellation, completed-effect retention, and subsequent turns. |
+| Errors/cancellation preserve completed work | Existing chat protocol/Jobs suites cover error recovery, cancellation, completed-effect retention, and subsequent turns. The `chat_protocol` fixture proves a completed HTTP response rejected for multiple tool calls becomes a confirmed `failed` job, not an interrupted device lease. The `chat_empty` fixture proves an empty final model response becomes a clear failure when no tool succeeded, with the confirmed lease released. |
 
 ## Runs
 
 | Check | Result | Report/log |
 | --- | --- | --- |
-| Workspace transaction + registry + chat fixture | Passed, including schema, availability, prompt, ledger, fake-HTTP recipe, unknown tool, and undo | `/tmp/transactions-final2.log` |
-| Existing editor smoke + restart stages | Passed, 11/11 stages | `/tmp/tiiny-story07-final2.json` |
-| Built-in Jobs regression | Passed, all 25 modes | `/tmp/jobs-final2.log` |
+| Workspace transaction + registry + chat fixture | Passed, including schema, availability, prompt, ledger, fake-HTTP recipe, unknown tool, and undo | `/tmp/transactions-empty-final.log` |
+| Existing editor smoke + restart stages | Passed, 11/11 stages | `/tmp/tiiny-empty-final.json` |
+| Built-in Jobs regression | Passed, all 27 modes including confirmed protocol failure and empty-response failure | `/tmp/jobs-empty.log` |
 | Workspace inspector regression | Passed | `/tmp/inspector-final07.log` |
-| Live workspace recipe | Passed on Ornith; recipe ledger/undo; warm set unchanged | `/tmp/workspace-live-final2.log` |
-| Build | Exit 0, 38.71s | `/tmp/tiiny-story07-build8.log` |
+| Live workspace recipe | Passed on Ornith; recipe ledger/undo; warm set unchanged | `/tmp/workspace-live-protocol-final.log` |
+| Build | Exit 0, 75.16s | `/tmp/tiiny-empty-build.log` |
 
 Live evaluation note: two earlier attempts did not reach the recipe (one chose `append_job`; one exceeded an intentionally small 8K context budget). A 32K context and an explicit single-recipe instruction produced the successful run. This is one trace, not a statistical success rate.
 
