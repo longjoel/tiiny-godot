@@ -55,6 +55,10 @@ class ResourceToolLibrary:
 var prompt: TextEdit
 var send_button: Button
 var new_chat_button: Button
+var copy_trace_button: Button
+var last_trace_path := ""
+var last_trace_text := ""
+var turn_trace_path := ""
 var history_box: VBoxContainer
 var history_scroll: ScrollContainer
 var status: Label
@@ -224,6 +228,11 @@ func _ready() -> void:
 	new_chat_button.tooltip_text = "Clear the conversation and this dock's history."
 	new_chat_button.pressed.connect(_new_chat)
 	actions.add_child(new_chat_button)
+	copy_trace_button = Button.new()
+	copy_trace_button.text = "Copy trace"
+	copy_trace_button.tooltip_text = "Copy the current turn trace as JSON for diagnosis."
+	copy_trace_button.pressed.connect(_copy_trace)
+	actions.add_child(copy_trace_button)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	actions.add_child(spacer)
@@ -616,7 +625,65 @@ func _set_status(message: String) -> void:
 	if not message.is_empty():
 		log_message.emit("Tiiny AI: " + message, 0)
 
+func _trace_payload(reason: String) -> Dictionary:
+	return {
+		"schema": 1,
+		"created": Time.get_datetime_string_from_system(),
+		"job": queued_chat_id,
+		"turn": turn_id,
+		"reason": reason,
+		"model": pending_model,
+		"stage": request_stage,
+		"rounds": tool_rounds,
+		"calls": tool_call_count,
+		"wrapup": turn_wrapup,
+		"system": turn_system,
+		"messages": turn_messages.duplicate(true),
+		"ledger": turn_ledger.duplicate(true),
+		"failed_calls": turn_failed_calls.duplicate(true),
+		"signatures": turn_signature_counts.duplicate(true),
+		"last_signature": turn_last_signature,
+		"scene": turn_scene_context.duplicate(true),
+	}
+
+func _write_trace(reason: String) -> String:
+	var payload := _trace_payload(reason)
+	var text := JSON.stringify(payload, "  ")
+	if text.to_utf8_buffer().size() > 2 * 1024 * 1024:
+		payload["messages"] = Array(payload.messages).slice(-40)
+		payload["truncated"] = true
+		text = JSON.stringify(payload, "  ")
+	last_trace_text = text
+	var directory := "res://.tiiny/logs/traces"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory))
+	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
+	var name := stamp + "-" + (queued_chat_id if not queued_chat_id.is_empty() else (turn_id if not turn_id.is_empty() else "manual")) + ".json"
+	var path := directory.path_join(name)
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		log_message.emit("Could not write Tiiny trace to " + path, 2)
+		return ""
+	file.store_string(text)
+	file.close()
+	last_trace_path = path
+	turn_trace_path = path
+	_append_chat_log("trace: " + path)
+	log_message.emit("Tiiny trace: " + path, 0)
+	return path
+
+func trace_text() -> String:
+	if not last_trace_text.is_empty(): return last_trace_text
+	if not last_trace_path.is_empty() and FileAccess.file_exists(last_trace_path):
+		return FileAccess.get_file_as_string(last_trace_path)
+	last_trace_text = JSON.stringify(_trace_payload("manual copy"), "  ")
+	return last_trace_text
+
+func _copy_trace() -> void:
+	DisplayServer.clipboard_set(trace_text())
+	_set_status("Trace copied to clipboard.")
+
 func _protocol_stop(reason: String) -> void:
+	_write_trace(reason)
 	send_button.disabled = false
 	_set_status(reason)
 	_append_message("assistant", "Tiiny stopped: " + reason)
@@ -1366,6 +1433,11 @@ func cancel_pending_chat() -> void:
 
 func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	var result := {"response": queued_chat_response} if state == "completed" else {"error": reason}
+	var trace_path := turn_trace_path
+	if state != "completed" and trace_path.is_empty():
+		trace_path = _write_trace(reason)
+	if not trace_path.is_empty():
+		result["trace_path"] = trace_path
 	var cancelled_by_user := state == "cancelled" and queued_chat_cancel
 	if cancelled_by_user:
 		result["cancelled_by_user"] = true
@@ -1422,6 +1494,7 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	turn_wrapup = false
 	turn_signature_counts = {}
 	turn_last_signature = ""
+	turn_trace_path = ""
 	pending_key = ""
 	send_button.disabled = false
 	if state != "completed":
@@ -1912,7 +1985,8 @@ func _role_tool_definitions() -> Array:
 func _wrap_up() -> bool:
 	return turn_wrapup or (turn_role == "task" and (tool_rounds >= 10 or tool_call_count >= 14))
 
-func _request_wrapup() -> void:
+func _request_wrapup(reason := "tool budget") -> void:
+	_write_trace(reason)
 	if not queued_chat_started:
 		_protocol_stop("The tool budget was reached; no further tool was executed.")
 		return
@@ -2151,7 +2225,7 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				var round_limit := 30 if turn_role == "task" else (configured_rounds if configured_rounds > 0 else 1000)
 				var call_limit := 60 if turn_role == "task" else (configured_calls if configured_calls > 0 else 5000)
 				if tool_rounds >= round_limit or tool_call_count + parsed_calls.size() > call_limit:
-					_request_wrapup()
+					_request_wrapup("tool budget")
 					return
 				seen_calls[call.id] = true
 				parsed_calls.append({"id": str(call.id), "name": str(function.name), "arguments": Dictionary(argument_json.data)})
@@ -2279,9 +2353,6 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 		var function_name := str(parsed_call.name)
 		var arguments: Dictionary = parsed_call.arguments
 		var call_signature := function_name + "\n" + JSON.stringify(arguments)
-		if turn_failed_calls.has(call_signature):
-			_protocol_stop("The model repeated an identical failed tool call; the turn was stopped.")
-			return
 		var repeat_count := int(turn_signature_counts.get(call_signature, 0)) + 1
 		turn_signature_counts[call_signature] = repeat_count
 		var repeated := repeat_count >= 3 or (call_signature == turn_last_signature and repeat_count >= 2)
@@ -2296,7 +2367,7 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 			conversation = turn_messages.duplicate(true)
 			_append_action_card(repeated_result, arguments)
 			_set_status("Repeated tool call detected; asking for a summary.")
-			_request_wrapup()
+			_request_wrapup("repeated tool call")
 			return
 		tool_call_ids.append(call_id)
 		_set_status("Running tool %d of %d…" % [index + 1, parsed_calls.size()])

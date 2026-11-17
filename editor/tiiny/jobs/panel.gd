@@ -1543,6 +1543,8 @@ func _job_details_text(id: String) -> String:
 	if job.state == "running":
 		lines.append("Stage: " + executor.stage)
 		lines.append("Elapsed: %.1f s" % ((Time.get_ticks_msec() - executor.started_msec) / 1000.0))
+	if job.get("result", {}).has("trace_path"):
+		lines.append("Trace: " + str(job.result.trace_path))
 	if not job.result.is_empty():
 		lines.append("Result: " + JSON.stringify(job.result, "  "))
 	for attempt in job.attempts:

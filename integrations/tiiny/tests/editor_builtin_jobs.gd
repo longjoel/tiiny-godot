@@ -1806,12 +1806,12 @@ func _run() -> void:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 1: _fail("Repeated-call fixture did not dispatch"); return
 		var job_id: String = jobs.queue.snapshot().jobs.back().id
-		var first_call := {"id": "repeat-one", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		var first_call := {"id": "repeat-one", "type": "function", "function": {"name": "inspect_node", "arguments": JSON.stringify({"path": "Player"})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first_call]}}]}).to_utf8_buffer())
 		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 2: _fail("First repeated-call round did not dispatch"); return
-		var second_call := {"id": "repeat-two", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		var second_call := {"id": "repeat-two", "type": "function", "function": {"name": "inspect_node", "arguments": JSON.stringify({"path": "Player"})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_call]}}]}).to_utf8_buffer())
 		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
@@ -1855,6 +1855,34 @@ func _run() -> void:
 		if not str(tool_message.get("content", "")).contains(job_id):
 			_fail("Mixed text tool call did not execute get_job_status: " + str(tool_message)); return
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Mixed call done."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "chat_trace_capture":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Capture a trace."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Trace fixture did not dispatch"); return
+		var trace_id: String = jobs.queue.snapshot().jobs.back().id
+		var malformed := {"id": "", "type": "function", "function": {"name": "inspect_node", "arguments": "{}"}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [malformed]}}]}).to_utf8_buffer())
+		while jobs.get_job_status(trace_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var failed: Dictionary = jobs.get_job_status(trace_id)
+		var trace_path := str(failed.get("result", {}).get("trace_path", ""))
+		if trace_path.is_empty() or not FileAccess.file_exists(trace_path):
+			_fail("Failed chat did not write a trace file: " + str(failed)); return
+		var trace_text := FileAccess.get_file_as_string(trace_path)
+		if not trace_text.contains(trace_id) or not trace_text.contains("invalid tool call ID") or not trace_text.contains("\"messages\""):
+			_fail("Trace file is missing job, error, or messages: " + trace_text.left(500)); return
+		if not fake.trace_text().contains(trace_id) or not fake.trace_text().contains("\"ledger\""):
+			_fail("Copyable trace text is incomplete"); return
 		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return
