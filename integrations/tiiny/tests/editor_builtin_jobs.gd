@@ -1886,6 +1886,45 @@ func _run() -> void:
 		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return
+	elif mode == "chat_autosave_transaction":
+		EditorInterface.open_scene_from_path("res://target.tscn")
+		for index in range(30):
+			if EditorInterface.get_edited_scene_root() != null: break
+			await get_tree().process_frame
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/advanced/auto_save_scene", true)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		fake.workspace_inspector_script = load("res://tiiny_inspector.gd")
+		fake.workspace_transactions_script = load("res://tiiny_transactions.gd")
+		fake.workspace_registry_script = load("res://tiiny_registry.gd")
+		fake.workspace_coding_script = load("res://tiiny_workspace.gd")
+		jobs.chat_service = fake
+		if not fake._ensure_workspace_registry(): _fail("Auto-save fixture could not build the registry"); return
+		fake.prompt.text = "Create one node and save."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Auto-save fixture did not dispatch"); return
+		var transaction := {"id": "autosave-transaction", "type": "function", "function": {"name": "apply_editor_transaction", "arguments": JSON.stringify({"operations": [{"op": "create_node", "class": "Node2D", "name": "AutoSaved", "parent": "."}]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [transaction]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Auto-save transaction did not continue"); return
+		var result: Variant = _tool_result_for(fake.submissions[1].messages, "autosave-transaction")
+		if not result is Dictionary or not result.get("ok", false) or not str(result.get("summary", "")).contains("Scene saved") or not bool(result.get("data", {}).get("saved", false)):
+			_fail("Auto-save did not report a saved scene: " + str(result)); return
+		var saved_root := EditorInterface.get_edited_scene_root()
+		if saved_root == null or saved_root.get_node_or_null("AutoSaved") == null or saved_root.scene_file_path in EditorInterface.get_unsaved_scenes():
+			_fail("Auto-save left the scene dirty or missing the node"); return
+		if fake.workspace_registry != null and not fake.workspace_registry.is_available("apply_editor_transaction"):
+			_fail("Auto-save did not restore transaction availability"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Auto-save complete."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
 	elif mode == "chat_project_instructions":
 		var agents := FileAccess.open("res://AGENTS.md", FileAccess.WRITE)
 		agents.store_string("Keep names short.\nUse snake_case for files.\n")

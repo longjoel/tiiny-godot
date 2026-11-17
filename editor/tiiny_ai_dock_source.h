@@ -183,6 +183,9 @@ func _ready() -> void:
 	if not settings.has_setting("tiiny_ai/advanced/tool_call_limit"):
 		settings.set_setting("tiiny_ai/advanced/tool_call_limit", 200)
 	settings.add_property_info({"name": "tiiny_ai/advanced/tool_call_limit", "type": TYPE_INT, "hint": PROPERTY_HINT_RANGE, "hint_string": "0,5000,1"})
+	if not settings.has_setting("tiiny_ai/advanced/auto_save_scene"):
+		settings.set_setting("tiiny_ai/advanced/auto_save_scene", true)
+	settings.add_property_info({"name": "tiiny_ai/advanced/auto_save_scene", "type": TYPE_BOOL})
 	if not settings.has_setting("tiiny_ai/advanced/allow_shell_commands"):
 		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", false)
 	settings.add_property_info({"name": "tiiny_ai/advanced/allow_shell_commands", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Host code execution. Each command still requires explicit approval."})
@@ -681,6 +684,33 @@ func trace_text() -> String:
 func _copy_trace() -> void:
 	DisplayServer.clipboard_set(trace_text())
 	_set_status("Trace copied to clipboard.")
+
+func _auto_save_enabled() -> bool:
+	var settings := EditorInterface.get_editor_settings()
+	return bool(settings.get_setting("tiiny_ai/advanced/auto_save_scene")) if settings.has_setting("tiiny_ai/advanced/auto_save_scene") else true
+
+func _auto_save_after_edit(tool_result: Dictionary) -> void:
+	if not bool(tool_result.get("ok", false)) or not _auto_save_enabled():
+		return
+	var data: Dictionary = tool_result.get("data", {})
+	var dirty := bool(data.get("dirty", false)) or bool(data.get("scene", {}).get("dirty", false))
+	if not dirty:
+		return
+	var root := EditorInterface.get_edited_scene_root()
+	if root == null or root.scene_file_path.is_empty():
+		return
+	await _next_frame()
+	var save_error := EditorInterface.save_scene()
+	if save_error != OK:
+		_append_chat_log("auto-save failed for " + root.scene_file_path + " (error %d)" % save_error)
+		return
+	data["dirty"] = false
+	data["saved"] = true
+	if data.get("scene") is Dictionary:
+		data.scene["dirty"] = false
+	tool_result["data"] = data
+	tool_result["summary"] = str(tool_result.get("summary", "")) + " Scene saved: " + root.scene_file_path + "."
+	_refresh_registry_availability()
 
 func _protocol_stop(reason: String) -> void:
 	_write_trace(reason)
@@ -2440,6 +2470,14 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 			if prepared.has("error"):
 				tool_result = prepared.error
 				serialized = JSON.stringify(tool_result)
+		if tool_result.is_empty() and function_name == "append_job":
+			var append_operation := str(arguments.get("operation", ""))
+			if append_operation not in ["create_tree", "attach_tree_to_scene", "model_schedule", "asset_generate"]:
+				var append_message := "append_job only queues create_tree, attach_tree_to_scene, model_schedule, or asset_generate."
+				if append_operation == "apply_editor_transaction":
+					append_message += " Call apply_editor_transaction directly with an operations array; do not wrap it in append_job."
+				tool_result = {"ok": false, "tool": "append_job", "call_id": call_id, "summary": append_message, "error": {"code": "invalid_arguments", "field": "operation", "message": append_message}, "data": {}, "affected": []}
+				serialized = JSON.stringify(tool_result)
 		if tool_result.is_empty() and _ensure_workspace_registry():
 			tool_result = await workspace_registry.execute(function_name, arguments, _turn_context(call_id))
 			var scene: Variant = tool_result.get("data", {}).get("scene", null)
@@ -2476,6 +2514,11 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 		# Preserve actual tool effects even when the continuation fails.
 		conversation = turn_messages.duplicate(true)
 		_append_action_card(tool_result, arguments)
+		await _auto_save_after_edit(tool_result)
+		if bool(tool_result.get("data", {}).get("saved", false)):
+			serialized = JSON.stringify(tool_result)
+			turn_messages.back()["content"] = serialized
+			conversation = turn_messages.duplicate(true)
 		if not Array(tool_result.get("affected", [])).is_empty() or not str(tool_result.get("undo_group", "")).is_empty():
 			# A mutation is progress; allow the same inspection call again later.
 			turn_signature_counts.clear()

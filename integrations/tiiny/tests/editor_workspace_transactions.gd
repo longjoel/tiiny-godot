@@ -417,6 +417,29 @@ func _run() -> void:
 	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before structural transaction"); return
 	root = EditorInterface.get_edited_scene_root()
+
+	# Model-friendly create_node input: name aliases, no explicit ids, and
+	# Vector2 string values. This mirrors the live trace that failed on these.
+	var trace_history := _history_count(root)
+	var trace_result: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [
+		{"op": "create_node", "class": "CharacterBody2D", "name": "TracePlayer", "parent": ".", "properties": {"position": "Vector2(200, 200)"}},
+		{"op": "create_node", "class": "Sprite2D", "name": "TraceSprite", "parent": "TracePlayer"},
+		{"op": "create_node", "class": "StaticBody2D", "path": "TracePlatform", "parent": ".", "properties": {"position": "(300, 450)"}},
+	]})
+	var trace_player := root.get_node_or_null("TracePlayer") as Node2D
+	var trace_sprite := root.get_node_or_null("TracePlayer/TraceSprite") as Sprite2D
+	var trace_platform := root.get_node_or_null("TracePlatform") as Node2D
+	if not trace_result.get("ok", false) or trace_player == null or trace_player.position != Vector2(200, 200) or trace_sprite == null or trace_sprite.get_owner() != root or trace_platform == null or trace_platform.position != Vector2(300, 450) or _history_count(root) != trace_history + 1:
+		_fail("Model-friendly transaction aliases/Vector2 failed: " + str(trace_result)); return
+	var trace_undo := _history(root)
+	if not trace_undo[2].undo() or root.get_node_or_null("TracePlayer") != null or root.get_node_or_null("TracePlatform") != null:
+		_fail("Model-friendly transaction undo failed"); return
+	if not trace_undo[2].redo() or root.get_node_or_null("TracePlayer") == null or root.get_node_or_null("TracePlatform") == null:
+		_fail("Model-friendly transaction redo failed"); return
+	var trace_undo_again := _history(root)
+	if not trace_undo_again[2].undo():
+		_fail("Model-friendly transaction cleanup undo failed"); return
+	root = EditorInterface.get_edited_scene_root()
 	var structural_ops := [
 		{"op": "duplicate_node", "target": "Player", "new_name": "PlayerCopy"},
 		{"op": "reparent_node", "target": "HudLabel", "parent": "MainCamera"},

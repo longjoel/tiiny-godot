@@ -280,7 +280,16 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 				if node == null: return _error("target_missing", "set_owner node is missing.")
 				if owner == null: return _error("target_missing", "set_owner owner is missing.")
 				var plan_parent := _planned_parent(node, ops, root, nodes, op_by_id)
-				if plan_parent == null or (owner != plan_parent and not owner.is_ancestor_of(plan_parent)):
+				var planned_ok := false
+				var cursor := plan_parent
+				while cursor != null:
+					if cursor == owner:
+						planned_ok = true
+						break
+					if cursor == root:
+						break
+					cursor = _planned_parent(cursor, ops, root, nodes, op_by_id)
+				if not planned_ok:
 					return _error("invalid_operation", "set_owner owner is not an ancestor.")
 			"set_property":
 				var target = _target_object(str(op.get("target", "")), root, nodes, resources, op_by_id)
@@ -578,6 +587,20 @@ func _coerce_value(info: Dictionary, value: Variant) -> Variant:
 	var type := int(info.get("type", TYPE_NIL))
 	if type == TYPE_STRING_NAME and value is String: return StringName(value)
 	if type == TYPE_NODE_PATH and value is String: return NodePath(value)
+	if type in [TYPE_VECTOR2, TYPE_VECTOR2I] and value is String:
+		var text: String = str(value).strip_edges()
+		if text.begins_with("Vector2"): text = text.substr(7)
+		text = text.strip_edges().trim_prefix("(").trim_suffix(")")
+		var parts: PackedStringArray = text.split(",", false)
+		if parts.size() == 2 and parts[0].strip_edges().is_valid_float() and parts[1].strip_edges().is_valid_float():
+			return Vector2(float(parts[0]), float(parts[1])) if type == TYPE_VECTOR2 else Vector2i(int(parts[0]), int(parts[1]))
+	if type in [TYPE_VECTOR3, TYPE_VECTOR3I] and value is String:
+		var text: String = str(value).strip_edges()
+		if text.begins_with("Vector3"): text = text.substr(7)
+		text = text.strip_edges().trim_prefix("(").trim_suffix(")")
+		var parts: PackedStringArray = text.split(",", false)
+		if parts.size() == 3 and parts[0].strip_edges().is_valid_float() and parts[1].strip_edges().is_valid_float() and parts[2].strip_edges().is_valid_float():
+			return Vector3(float(parts[0]), float(parts[1]), float(parts[2])) if type == TYPE_VECTOR3 else Vector3i(int(parts[0]), int(parts[1]), int(parts[2]))
 	if type in [TYPE_VECTOR2, TYPE_VECTOR2I] and value is Dictionary and value.has("x") and value.has("y"):
 		return Vector2(float(value.x), float(value.y)) if type == TYPE_VECTOR2 else Vector2i(int(value.x), int(value.y))
 	if type in [TYPE_VECTOR3, TYPE_VECTOR3I] and value is Dictionary and value.has("x") and value.has("y") and value.has("z"):
@@ -954,7 +977,7 @@ func _register_default_recipes() -> void:
 	register_recipe({
 		"name": "apply_editor_transaction",
 		"title": "Apply typed editor transaction",
-		"description": "Compose bounded typed scene edits: create/set nodes and resources, structure, instantiate, and connect signals. One undo action; no scripts, files, methods, or editor internals.",
+		"description": "Compose bounded typed scene edits: create/set nodes and resources, structure, instantiate, and connect signals. One undo action; no scripts, files, methods, or editor internals. Each create_node requires class and name; path/target are accepted as name aliases. Optional parent defaults to '.'. Vector2 properties accept [x,y], {x,y}, or 'Vector2(x, y)'. Example: {\"operations\":[{\"op\":\"create_node\",\"class\":\"CharacterBody2D\",\"name\":\"Player\",\"parent\":\".\",\"properties\":{\"position\":[200,200]}},{\"op\":\"create_node\",\"class\":\"Sprite2D\",\"name\":\"PlayerSprite\",\"parent\":\"Player\"}]}. Call this tool directly; do not route it through append_job.",
 		"parameters": {"type": "object", "properties": {
 			"expected_scene_revision": {"type": "string", "maxLength": 256},
 			"expected_session_revision": {"type": "string", "maxLength": 128},
@@ -1285,6 +1308,11 @@ func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
 		return {"ok": false, "code": "stale_scene", "message": "The scene edit history changed; inspect it again."}
 	for index in ops.size():
 		var op: Variant = ops[index]
+		if op is Dictionary and str(op.get("op", "")) == "create_node" and str(op.get("name", "")).is_empty():
+			var alias := str(op.get("path", op.get("target", "")))
+			if not alias.is_empty():
+				var alias_parts: PackedStringArray = alias.split("/", false)
+				op["name"] = str(alias_parts[alias_parts.size() - 1]) if not alias_parts.is_empty() else alias
 		if op is Dictionary and str(op.get("op", "")) in ["create_node", "create_resource"] and str(op.get("id", "")).is_empty():
 			var auto_name := str(op.get("name", ""))
 			op["id"] = auto_name if not auto_name.is_empty() else "auto_" + str(index)
@@ -1305,10 +1333,12 @@ func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
 		var kind := str(op.op)
 		match kind:
 			"create_node":
+				if str(op.get("class", "")).is_empty():
+					return {"ok": false, "code": "invalid_class", "message": "create_node requires class (for example Sprite2D or CharacterBody2D)."}
 				if not _generic_class_ok(str(op.get("class", "")), "Node"):
 					return {"ok": false, "code": "invalid_class", "message": "Node class is not allowed or not instantiable: " + str(op.get("class", ""))}
 				if not _valid_name(str(op.get("name", ""))):
-					return {"ok": false, "code": "invalid_name", "message": "Each created node needs a valid unique name."}
+					return {"ok": false, "code": "invalid_name", "message": "Each created node needs a valid unique name; use name (path/target are aliases)."}
 				if not op.get("parent") is String or str(op.parent).is_empty(): return {"ok": false, "code": "invalid_arguments", "message": "create_node parent is required."}
 				if op.has("properties") and not op.properties is Dictionary: return {"ok": false, "code": "invalid_arguments", "message": "create_node properties must be an object."}
 				if op.has("properties") and not _generic_refs_ok(op.properties, ids): return {"ok": false, "code": "invalid_reference", "message": "Initial properties may only reference resources/nodes created earlier in this transaction."}
