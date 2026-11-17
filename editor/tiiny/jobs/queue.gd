@@ -575,7 +575,8 @@ func _finish_locked(id: String, state: String, result: Dictionary, persist: bool
 				var device_operations: Array = job.attempts.back().get("device_operations", [])
 				if state == "completed" and not device_operations.is_empty() and device_operations.back().state != "verified":
 					break
-				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (state != "completed" and not device_operations.is_empty() and device_operations.back().state != "verified") or (job.attempts.back().get("device_started", false) and state != "completed" and not job.attempts.back().get("device_confirmed", false)):
+				var inference_cancel: bool = job.operation == "chat_turn" and state == "cancelled" and bool(result.get("cancelled_by_user", false))
+				if not inference_cancel and (phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (state != "completed" and not device_operations.is_empty() and device_operations.back().state != "verified") or (job.attempts.back().get("device_started", false) and state != "completed" and not job.attempts.back().get("device_confirmed", false))):
 					# A failure after a publication boundary or an unconfirmed
 					# device request cannot safely be retried until a reconciler
 					# establishes what was installed or stopped.

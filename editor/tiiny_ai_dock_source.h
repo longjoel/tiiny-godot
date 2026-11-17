@@ -799,6 +799,9 @@ func poll_queued_chat(job: Dictionary) -> Dictionary:
 		send_button.disabled = true
 	if queued_chat_id != job.id:
 		return {"state": "running", "stage": "Waiting for chat"}
+	if queued_chat_started and queued_chat_cancel:
+		if request != null: request.cancel_request()
+		return _finish_queued_chat("cancelled", "Cancelled by user")
 	if not queued_chat_started:
 		if queued_chat_cancel:
 			return _finish_queued_chat("cancelled", "Cancelled before device execution")
@@ -1353,6 +1356,9 @@ func cancel_pending_chat() -> void:
 
 func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	var result := {"response": queued_chat_response} if state == "completed" else {"error": reason}
+	var cancelled_by_user := state == "cancelled" and queued_chat_cancel
+	if cancelled_by_user:
+		result["cancelled_by_user"] = true
 	if state == "completed" and not queued_chat_reasoning.is_empty():
 		result["reasoning"] = queued_chat_reasoning
 	if state == "completed" and not queued_chat_structured_result.is_empty():
@@ -1364,7 +1370,11 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	var continuation := queued_chat_next_parameters.duplicate(true) if state == "completed" and queued_chat_continued else {}
 	var continuation_operation := queued_chat_next_operation
 	var plan := queued_chat_plan.duplicate(true) if state == "completed" and not queued_chat_plan.is_empty() else {}
-	if queued_chat_started:
+	if cancelled_by_user and queued_chat_started and is_instance_valid(jobs_service) and jobs_service.has_method("cancel_device_request"):
+		if not bool(jobs_service.cancel_device_request(self, device_lease, queued_chat_id)):
+			cancelled_by_user = false
+			result.erase("cancelled_by_user")
+	if queued_chat_started and not cancelled_by_user:
 		# Hold the lease until the queue commits the terminal transition.
 		device_outcome_uncertain = true
 		uncertain_job_id = queued_chat_id

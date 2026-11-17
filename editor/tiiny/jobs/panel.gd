@@ -748,6 +748,16 @@ func begin_device_request(owner: Object, token: String, id: String, model: Strin
 	if device_recovery_pending() or not queue.device_started(id): return false
 	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "uncertain", "project": root_path, "job": id, "verb": "inference", "model": model, "connection": connection}))
 
+func cancel_device_request(owner: Object, token: String, id: String) -> bool:
+	if not _owns_device(owner, token): return false
+	var marker := _device_marker()
+	if marker.get("state") == "idle": return true
+	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id or marker.get("verb") != "inference": return false
+	if not device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"})): return false
+	# Inference has no persistent device effect; an aborted local request can be
+	# settled without claiming a remote response was used.
+	return queue.confirm_device_request(id)
+
 func confirm_device_request(owner: Object, token: String, id: String) -> bool:
 	if not _owns_device(owner, token): return false
 	var marker := _device_marker()
@@ -981,6 +991,8 @@ func skip_plan_task(id: String) -> bool:
 	return ok
 
 func cancel_plan(id: String) -> bool:
+	if executor.current.get("id", "") == id or str(executor.current.get("parameters", {}).get("plan_root", "")) == id:
+		executor.cancel_current()
 	var ok: bool = queue.cancel_plan(id, _validate)
 	if ok: _refresh()
 	return ok
