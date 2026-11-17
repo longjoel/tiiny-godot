@@ -90,6 +90,7 @@ var turn_depth := 0
 var queued_chat_plan: Dictionary = {}
 var queued_chat_structured_result: Dictionary = {}
 var structured_attempts := 0
+var turn_wrapup := false
 var pending_prompt := ""
 var pending_key := ""
 var pending_url := ""
@@ -830,6 +831,7 @@ func poll_queued_chat(job: Dictionary) -> Dictionary:
 		pending_prompt = queued_chat_parameters.prompt
 		turn_role = str(queued_chat_parameters.get("role", ""))
 		turn_depth = int(queued_chat_parameters.get("depth", 0))
+		turn_wrapup = bool(queued_chat_parameters.get("turn", {}).get("wrapup", false)) if queued_chat_parameters.get("turn") is Dictionary else false
 		conversation.assign(queued_chat_parameters.conversation)
 		if queued_chat_parameters.has("turn"):
 			if not _restore_turn_state(queued_chat_parameters.get("turn", {})):
@@ -1370,6 +1372,20 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	var continuation := queued_chat_next_parameters.duplicate(true) if state == "completed" and queued_chat_continued else {}
 	var continuation_operation := queued_chat_next_operation
 	var plan := queued_chat_plan.duplicate(true) if state == "completed" and not queued_chat_plan.is_empty() else {}
+	if state != "completed":
+		var retry_messages: Array = turn_messages.duplicate(true)
+		if retry_messages.is_empty():
+			retry_messages = Array(queued_chat_parameters.get("conversation", [])).duplicate(true)
+			if not retry_messages.any(func(message): return message.get("role") == "user" and str(message.get("content", "")) == str(queued_chat_parameters.get("prompt", ""))):
+				retry_messages.append({"role": "user", "content": str(queued_chat_parameters.get("prompt", ""))})
+		var failure_note := "The previous attempt stopped: " + reason
+		retry_messages.append({"role": "assistant", "content": failure_note})
+		var retry_parameters: Dictionary = queued_chat_parameters.duplicate(true)
+		retry_parameters.erase("turn")
+		retry_parameters["conversation"] = retry_messages.duplicate(true)
+		retry_parameters["prompt"] = failure_note + " Continue the original request from the recorded actions; do not repeat completed calls."
+		result["retry_parameters"] = retry_parameters
+		conversation = retry_messages.duplicate(true)
 	if cancelled_by_user and queued_chat_started and is_instance_valid(jobs_service) and jobs_service.has_method("cancel_device_request"):
 		if not bool(jobs_service.cancel_device_request(self, device_lease, queued_chat_id)):
 			cancelled_by_user = false
@@ -1395,6 +1411,7 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	structured_attempts = 0
 	turn_role = ""
 	turn_depth = 0
+	turn_wrapup = false
 	pending_key = ""
 	send_button.disabled = false
 	if state != "completed":
@@ -1883,12 +1900,29 @@ func _role_tool_definitions() -> Array:
 	return []
 
 func _wrap_up() -> bool:
-	return turn_role == "task" and (tool_rounds >= 10 or tool_call_count >= 14)
+	return turn_wrapup or (turn_role == "task" and (tool_rounds >= 10 or tool_call_count >= 14))
+
+func _request_wrapup() -> void:
+	if not queued_chat_started:
+		_protocol_stop("The tool budget was reached; no further tool was executed.")
+		return
+	turn_wrapup = true
+	var next := _prepare_chat_continuation()
+	if next.is_empty():
+		_protocol_stop("The tool budget was reached and the final summary step could not be queued.")
+		return
+	queued_chat_continued = true
+	queued_chat_next_operation = "chat_turn"
+	queued_chat_next_parameters = next
+	queued_chat_success = true
+	queued_chat_response = ""
+	send_button.disabled = false
+	_set_status("Tool budget reached; asking for a final summary.")
 
 func _send_chat(system: String, user: String) -> void:
 	request.timeout = float(queued_chat_parameters.timeout_ms) / 1000.0 if queued_chat_started else _request_timeout()
 	var effective_system := system
-	if _wrap_up(): effective_system += "\n\nWork budget is spent. Call submit_result now with your structured result."
+	if _wrap_up(): effective_system += "\n\nWork budget is spent. " + ("Call submit_result now with your structured result." if turn_role == "task" else "Do not call tools; summarize what was completed and what remains.")
 	var messages: Array = [{"role": "system", "content": effective_system}]
 	if request_stage == "answer":
 		turn_system = effective_system
@@ -1908,7 +1942,7 @@ func _send_chat(system: String, user: String) -> void:
 		_refresh_registry_availability()
 		var tools: Array
 		if _wrap_up():
-			tools = [RESULT_TOOL]
+			tools = [RESULT_TOOL] if turn_role == "task" else []
 		else:
 			tools = workspace_registry.tools_payload() if workspace_registry != null else ResourceToolLibrary.definitions()
 			tools.append_array(_role_tool_definitions())
@@ -2070,7 +2104,10 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 			send_button.disabled = false
 			_set_status("The response contained malformed tool calls.")
 			return
-		if calls.is_empty() and choice.message.get("content") is String:
+		if turn_wrapup and not calls.is_empty():
+			calls = []
+			choice.message["tool_calls"] = []
+		if not turn_wrapup and calls.is_empty() and choice.message.get("content") is String:
 			var text_calls := _text_tool_calls(str(choice.message.content))
 			if not text_calls.is_empty():
 				choice.message["tool_calls"] = text_calls
@@ -2098,9 +2135,11 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
 					protocol_reason = "The model returned invalid tool arguments; no tool was executed."
 					break
-				if tool_rounds >= (12 if turn_role == "task" else 10) or tool_call_count + parsed_calls.size() > 16:
-					protocol_reason = "The tool limit was reached; no further tool was executed."
-					break
+				var round_limit := 10 if turn_role == "task" else 20
+				var call_limit := 14 if turn_role == "task" else 40
+				if tool_rounds >= round_limit or tool_call_count + parsed_calls.size() > call_limit:
+					_request_wrapup()
+					return
 				seen_calls[call.id] = true
 				parsed_calls.append({"id": str(call.id), "name": str(function.name), "arguments": Dictionary(argument_json.data)})
 			if not protocol_reason.is_empty():
@@ -2198,14 +2237,14 @@ func _tool_display(name: String, result: String) -> String:
 
 func _continue_agent() -> void:
 	var effective_system := turn_system
-	if _wrap_up(): effective_system += "\n\nWork budget is spent. Call submit_result now with your structured result."
+	if _wrap_up(): effective_system += "\n\nWork budget is spent. " + ("Call submit_result now with your structured result." if turn_role == "task" else "Do not call tools; summarize what was completed and what remains.")
 	var messages: Array = [{"role": "system", "content": effective_system}]
 	messages.append_array(turn_messages)
 	var payload := {"model": pending_model, "messages": messages, "stream": false, "chat_template_kwargs": {"enable_thinking": _thinking_enabled()}}
 	_refresh_registry_availability()
 	var tools: Array
 	if _wrap_up():
-		tools = [RESULT_TOOL]
+		tools = [RESULT_TOOL] if turn_role == "task" else []
 	else:
 		tools = workspace_registry.tools_payload() if workspace_registry != null else ResourceToolLibrary.definitions()
 		tools.append_array(_role_tool_definitions())
@@ -2692,6 +2731,7 @@ func _restore_turn_state(turn: Variant) -> bool:
 		turn_ledger.append(entry.duplicate(true))
 	turn_scene_context = state.scene.duplicate(true)
 	turn_truncations = int(state.get("truncations", 0))
+	turn_wrapup = bool(state.get("wrapup", false))
 	request_stage = "answer"
 	return true
 
@@ -2713,6 +2753,7 @@ func _prepare_chat_continuation() -> Dictionary:
 		"ledger": turn_ledger,
 		"scene": turn_scene_context,
 		"truncations": turn_truncations,
+		"wrapup": turn_wrapup,
 	}
 	var safe_state: Variant = JSON.parse_string(JSON.stringify(state))
 	if not safe_state is Dictionary:

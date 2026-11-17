@@ -422,5 +422,19 @@ func _initialize() -> void:
 	check(plan_reload.open(plan_path, "plan-project"), "plan survives restart")
 	check(plan_reload.commit_ready_joins(accept_plan) == 0 and plan_reload.snapshot().jobs.size() == 3, "restart does not duplicate the join")
 	plan_reload.close()
+	var retry_path := root.path_join("chat-retry.json")
+	if FileAccess.file_exists(retry_path): DirAccess.remove_absolute(retry_path)
+	var retry_queue = Queue.new()
+	check(retry_queue.open(retry_path, "retry-project"), "retry queue open")
+	var accept_retry_chat := func(operation: String, _parameters: Dictionary) -> String:
+		return "" if operation == "chat_turn" else "unsupported retry job"
+	var retry_job: Dictionary = retry_queue.append("chat-retry", "chat_turn", {"prompt": "original request", "conversation": []}, accept_retry_chat)
+	retry_queue.start_next()
+	check(retry_queue.finish(retry_job.id, "failed", {"error": "The tool limit was reached"}), "record a failed chat")
+	check(retry_queue.resolve(retry_job.id, "retry"), "retry a failed chat")
+	var retried: Dictionary = retry_queue.snapshot().jobs[0].parameters
+	check(str(retried.prompt).contains("The previous attempt stopped") and str(retried.prompt).contains("Continue the original request"), "legacy retry synthesizes a continuation prompt")
+	check(Array(retried.conversation).any(func(message): return message.get("role") == "user" and message.get("content") == "original request") and Array(retried.conversation).any(func(message): return message.get("role") == "assistant" and str(message.get("content")).contains("The tool limit was reached")), "legacy retry carries the prompt and error")
+	retry_queue.close()
 	print("job queue failures: ", failures)
 	quit(1 if failures else 0)

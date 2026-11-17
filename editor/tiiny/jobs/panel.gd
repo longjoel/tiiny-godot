@@ -615,7 +615,7 @@ func _validate_chat(parameters: Dictionary) -> String:
 			return "Task turns require plan lineage"
 	if parameters.has("turn"):
 		var turn: Variant = parameters.turn
-		if not turn is Dictionary or turn.size() not in [10, 11, 12]:
+		if not turn is Dictionary or turn.size() < 10 or turn.size() > 14:
 			return "Invalid turn state"
 		for key in ["id", "system"]:
 			if not turn.get(key) is String:

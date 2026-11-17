@@ -917,6 +917,23 @@ func resolve(id: String, decision: String) -> bool:
 			# An interrupted worker may still have published an effect. Only a
 			# reconciler can classify it before retry or skip becomes available.
 			if job.id == id and job.state in ["failed", "cancelled"]:
+				if decision == "retry" and job.operation == "chat_turn":
+					if job.result.get("retry_parameters") is Dictionary:
+						job.parameters = job.result.retry_parameters.duplicate(true)
+					else:
+						var retry: Dictionary = job.parameters.duplicate(true)
+						retry.erase("turn")
+						var retry_messages: Array = Array(retry.get("conversation", [])).duplicate(true)
+						var prompt := str(retry.get("prompt", ""))
+						if not retry_messages.any(func(message): return message.get("role") == "user" and str(message.get("content", "")) == prompt):
+							retry_messages.append({"role": "user", "content": prompt})
+						var raw_error: Variant = job.result.get("error", "The previous attempt stopped.")
+						var message := str(raw_error.get("message", "")) if raw_error is Dictionary else str(raw_error)
+						var note := "The previous attempt stopped: " + message
+						retry_messages.append({"role": "assistant", "content": note})
+						retry["conversation"] = retry_messages
+						retry["prompt"] = note + " Continue the original request from the recorded actions; do not repeat completed calls."
+						job.parameters = retry
 				job.state = "queued" if decision == "retry" else "skipped"
 				job["resolution"] = {"decision": decision, "at": Time.get_unix_time_from_system()}
 				if not job.attempts.is_empty():

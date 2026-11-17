@@ -1706,6 +1706,92 @@ func _run() -> void:
 		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return
+	elif mode == "chat_budget_wrapup":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Exercise the tool budget."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Budget fixture did not dispatch"); return
+		var job_id: String = jobs.queue.snapshot().jobs.back().id
+		for round_index in range(20):
+			while fake.submissions.size() < round_index + 1 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < round_index + 1: _fail("Budget round did not dispatch: " + str(round_index) + " status " + fake.status.text + " ledger " + str(fake.turn_ledger) + " rounds " + str(fake.tool_rounds) + " stage " + fake.request_stage + " started " + str(fake.queued_chat_started) + " continued " + str(fake.queued_chat_continued) + " cancel " + str(fake.queued_chat_cancel)); return
+			var call := {"id": "budget-" + str(round_index), "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 21 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 21: _fail("Budget trigger request did not dispatch: " + str(fake.submissions.size())); return
+		var trigger := {"id": "budget-trigger", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [trigger]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 22 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 22: _fail("Budget wrap-up request did not dispatch: " + str(fake.submissions.size())); return
+		var wrapup: Dictionary = fake.submissions[21]
+		if not Array(wrapup.get("tools", [])).is_empty():
+			_fail("Wrap-up step still advertised tools: " + str(wrapup.get("tools", []))); return
+		var wrapup_system := str(Array(wrapup.messages)[0].get("content", ""))
+		if not wrapup_system.contains("Work budget is spent"):
+			_fail("Wrap-up step did not explain the budget"); return
+		var final := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Budget summary."}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final)
+		var final_job: String = jobs.queue.snapshot().jobs.back().id
+		while jobs.get_job_status(final_job).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var completed: Dictionary = jobs.get_job_status(final_job)
+		if completed.get("state") != "completed" or not str(completed.get("result", {}).get("response", "")).contains("Budget summary"):
+			_fail("Budget wrap-up did not complete with a final answer: " + str(completed)); return
+		if str(completed.get("result", {}).get("error", "")).contains("tool limit"):
+			_fail("Budget wrap-up preserved the old limit error"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "chat_retry_context":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Keep this request in the retry context."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Retry context fixture did not dispatch"); return
+		var retry_id: String = jobs.queue.snapshot().jobs.back().id
+		var malformed := {"id": "", "type": "function", "function": {"name": "get_job_status", "arguments": "{}"}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [malformed]}}]}).to_utf8_buffer())
+		while jobs.get_job_status(retry_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var failed_job: Dictionary = jobs.get_job_status(retry_id)
+		if failed_job.get("state") != "failed" or not failed_job.get("result", {}).has("retry_parameters"):
+			_fail("Failed chat did not store retry context: " + str(failed_job)); return
+		if not jobs.queue.resolve(retry_id, "retry") or not jobs.queue.set_paused(false):
+			_fail("Failed chat could not be retried"); return
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Retry did not dispatch"); return
+		var retry_messages: Array = fake.submissions[1].messages
+		var retry_text := JSON.stringify(retry_messages)
+		if not retry_text.contains("Keep this request in the retry context"):
+			_fail("Retry lost the original prompt: " + retry_text); return
+		if not retry_text.contains("The previous attempt stopped"):
+			_fail("Retry did not include the previous failure: " + retry_text); return
+		if not str(retry_messages.back().get("content", "")).contains("Continue the original request"):
+			_fail("Retry prompt is not a continuation: " + str(retry_messages.back())); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Retried with context."}}]}).to_utf8_buffer())
+		while jobs.get_job_status(retry_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(retry_id).get("state") != "completed" or not str(jobs.get_job_status(retry_id).get("result", {}).get("response", "")).contains("Retried with context"):
+			_fail("Retried chat did not complete: " + str(jobs.get_job_status(retry_id))); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
 	elif mode == "chat_project_instructions":
 		var agents := FileAccess.open("res://AGENTS.md", FileAccess.WRITE)
 		agents.store_string("Keep names short.\nUse snake_case for files.\n")
