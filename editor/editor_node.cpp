@@ -8541,7 +8541,7 @@ static void _make_tiiny_settings_visible() {
 	// Embedded scripts register/migrate these settings during child _ready().
 	// Keep the connection section available without Godot's global advanced toggle.
 	EditorSettings *settings = EditorSettings::get_singleton();
-	for (const char *name : { "api_url", "api_key", "cli_path", "device_address", "system_prompt_extra", "request_timeout_seconds" }) {
+	for (const char *name : { "api_url", "api_key", "cli_path", "device_address", "system_prompt_extra", "request_timeout_seconds", "tool_mode", "allow_shell_commands", "log_chat", "model_thinking" }) {
 		String path = String("tiiny_ai/advanced/") + name;
 		if (settings->has_setting(path)) {
 			settings->set_basic(path, true);
@@ -9458,6 +9458,7 @@ EditorNode::EditorNode() {
 	Ref<Script> tiiny_transactions_script;
 	Ref<Script> tiiny_registry_script;
 	Ref<Script> tiiny_debugger_script;
+	Ref<Script> tiiny_workspace_script;
 
 	// The job service is editor-owned and its scripts are embedded in the
 	// executable, independent of the currently opened project's resources.
@@ -9482,6 +9483,7 @@ EditorNode::EditorNode() {
 		tiiny_transactions_script = load_job_script(TIINY_JOBS_TRANSACTIONS);
 		tiiny_registry_script = load_job_script(TIINY_JOBS_REGISTRY);
 		tiiny_debugger_script = load_job_script(TIINY_JOBS_DEBUGGER);
+		tiiny_workspace_script = load_job_script(TIINY_JOBS_WORKSPACE);
 		if (!tiiny_inspector_script.is_valid()) {
 			ERR_PRINT("Could not load the built-in Tiiny workspace inspector script.");
 		}
@@ -9493,6 +9495,9 @@ EditorNode::EditorNode() {
 		}
 		if (!tiiny_debugger_script.is_valid()) {
 			ERR_PRINT("Could not load the built-in Tiiny debugger provider script.");
+		}
+		if (!tiiny_workspace_script.is_valid()) {
+			ERR_PRINT("Could not load the built-in Tiiny workspace coding provider script.");
 		}
 		if (queue_script.is_valid() && executor_script.is_valid() && worker_script.is_valid() && publisher_script.is_valid() && attach_script.is_valid() && panel_script.is_valid()) {
 			VBoxContainer *jobs_content = memnew(VBoxContainer);
@@ -9538,6 +9543,9 @@ EditorNode::EditorNode() {
 				}
 				if (tiiny_debugger_script.is_valid()) {
 					tiiny_content->set("workspace_debugger_script", tiiny_debugger_script);
+				}
+				if (tiiny_workspace_script.is_valid()) {
+					tiiny_content->set("workspace_coding_script", tiiny_workspace_script);
 				}
 				tiiny_content->set("debugger_node", EditorDebuggerNode::get_singleton());
 				tiiny_content->connect("log_message", callable_mp(log, &EditorLog::add_message));

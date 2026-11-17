@@ -29,7 +29,8 @@ def make_project(project: Path) -> None:
     (project / "chat.gd").write_text(chat_source)
     shutil.copyfile(root / "integrations/tiiny/tests/fake_chat.gd", project / "fake_chat.gd")
     (project / "main.tscn").write_text(
-        '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n\n'
+        '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Script" path="res://controller.gd" id="1"]\n\n[node name="Root" type="Node2D"]\n\n'
+        '[node name="Controller" type="Node" parent="."]\nscript = ExtResource("1")\n\n'
         '[node name="Player" type="CharacterBody2D" parent="."]\n\n'
         '[node name="Enemy" type="CharacterBody2D" parent="."]\n\n'
         '[node name="Tree" type="Node2D" parent="."]\n\n'
@@ -38,6 +39,7 @@ def make_project(project: Path) -> None:
         '[node name="Platform" type="StaticBody2D" parent="."]\n\n'
         '[node name="World" type="Node3D" parent="."]\n'
     )
+    (project / "controller.gd").write_text('extends Node\n\nfunc start_game() -> void:\n\tpass\n')
     (project / "base.tscn").write_text(
         '[gd_scene format=3]\n\n[node name="Base" type="Node2D"]\n'
     )

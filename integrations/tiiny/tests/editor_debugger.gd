@@ -66,6 +66,13 @@ func _run() -> void:
 	if not runtime.get("ok", false): _fail("Runtime tree request failed: " + str(runtime)); return
 	if Array(runtime.get("data", {}).get("nodes", [])).is_empty(): _fail("Runtime tree returned no live nodes"); return
 	print("Runtime tree nodes: ", Array(runtime.get("data", {}).get("nodes", [])).size())
+	var stepped: Dictionary = await provider.execute("debug_next", {})
+	if not stepped.get("ok", false): _fail("Step over failed: " + str(stepped)); return
+	if not await _wait_for(func():
+		var current: Array = debugger_node.call("tiiny_stack_frames")
+		return bool(debugger_node.call("tiiny_debugger_state").get("breaked", false)) and not current.is_empty() and int(current[0].get("line", 0)) > 8, 10000):
+		_fail("Step over did not pause on a later line: " + str(debugger_node.call("tiiny_debugger_state")) + " frames=" + str(debugger_node.call("tiiny_stack_frames"))); return
+	print("Step over reached frame: ", JSON.stringify(debugger_node.call("tiiny_stack_frames")[0]))
 	var continued: Dictionary = await provider.execute("debug_continue", {})
 	if not continued.get("ok", false): _fail("Continue failed: " + str(continued)); return
 	if not await _wait_for(func(): return not bool(debugger_node.call("tiiny_debugger_state").get("breaked", false)), 5000):

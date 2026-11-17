@@ -1,6 +1,6 @@
 # 17 — Specialized authoring recipes
 
-Status: Accepted. All 12 remaining specialized tasks now have native recipes/tools with deterministic tests; catalog is 40 supported / 60 partial / 0 specialized-missing. See [acceptance evidence](../evidence/17-acceptance.md).
+Status: Accepted. All 12 remaining specialized tasks now have native recipes/tools with deterministic tests; catalog is 32 supported / 68 partial / 0 specialized-missing after the story 19 audit. See [acceptance evidence](../evidence/17-acceptance.md).
 
 Feature: Complex editor authoring beyond composed primitives
 
@@ -43,4 +43,4 @@ Use the remaining specialized catalog tasks and WS-08/WS-10 where asset generati
 
 ## Evidence and handoff
 
-Accepted. Added TileMapLayer, GridMap, AnimatedSprite2D, theme/font, audio loop/bus, NavigationRegion3D, AnimationTree, animation playback, Trail3D, 3D weather, particles, mesh collision, and mesh-quality validation. Transaction fixture covers creation/properties/undo/redo and validation. Catalog is 40 supported / 60 partial / 0 specialized-missing, with 40/40 supported tests. See [acceptance evidence](../evidence/17-acceptance.md).
+Accepted. Added TileMapLayer, GridMap, AnimatedSprite2D, theme/font, audio loop/bus, NavigationRegion3D, AnimationTree, animation playback, Trail3D, 3D weather, particles, mesh collision, and mesh-quality validation. Transaction fixture covers creation/properties/undo/redo and validation. After the story 19 audit the catalog is 32 supported / 68 partial / 0 specialized-missing, with 32/32 supported tasks mapped to assertions. See [acceptance evidence](../evidence/17-acceptance.md).

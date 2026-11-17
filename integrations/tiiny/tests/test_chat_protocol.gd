@@ -31,6 +31,10 @@ func run(plugin: EditorPlugin) -> String:
 	var dock = load("res://fake_chat.gd").new()
 	plugin.add_child(dock)
 	dock.jobs_service = plugin.get_tree().root.find_child("Tiiny Jobs", true, false)
+	var real_dock := plugin.get_tree().get_first_node_in_group("tiiny_ai_editor_dock")
+	if real_dock == null or real_dock.get("workspace_coding_script") == null: return "Workspace provider unavailable to chat fixture."
+	dock.workspace_coding = real_dock.get("workspace_coding_script").new(ProjectSettings.globalize_path("res://"))
+	dock.workspace_coding.approve_edit = Callable(dock, "_approve_file_edit")
 	var logs: Array[String] = []
 	dock.log_message.connect(func(message: String, _kind: int): logs.append(message))
 	if not await _recover(dock): return "Basic text response failed."

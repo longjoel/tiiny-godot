@@ -34,4 +34,4 @@ Add WS-17: “Implement gameplay behavior through a script” and WS-18: “Save
 
 ## Evidence and handoff
 
-Accepted. `attach_script` is part of `apply_editor_transaction`; `save_edited_scene` is a separate explicit file tool. Fixture covers attach/undo/redo/save/reload; live spin/velocity script edits remain the behavior evidence. Catalog reclassification follows in story 16. See [acceptance evidence](../evidence/15-acceptance.md).
+Accepted. `attach_script` is part of `apply_editor_transaction`; `create_and_attach_gdscript` validates and creates a script for an existing or new owned target; `save_edited_scene` is a separate explicit file tool. Story 19's editor fixture covers creation/attachment validation, failure effects, instanced-child rejection, undo/redo, and save/reload. Live spin/velocity script edits remain the behavior evidence; create-and-attach itself has not been live-model tested. See [acceptance evidence](../evidence/15-acceptance.md) and [story 19 progress](../evidence/19-review-progress.md).

@@ -24,6 +24,19 @@ class FakeWorker extends RefCounted:
 	func cancel() -> void:
 		cancelled = true
 
+class ContinuationWorker extends RefCounted:
+	var validator: Callable
+	var operation := "chat_turn"
+	func _init(p_validator: Callable, p_operation := "chat_turn") -> void:
+		validator = p_validator
+		operation = p_operation
+	func start(_job: Dictionary) -> String:
+		return ""
+	func poll() -> Dictionary:
+		return {"state": "completed", "result": {"response": ""}, "continuation": {"step": 2}, "continuation_operation": operation}
+	func cancel() -> void:
+		pass
+
 func check(condition: bool, message: String) -> void:
 	if not condition:
 		push_error(message)
@@ -78,5 +91,40 @@ func _initialize() -> void:
 	check(queue.snapshot().jobs[2].state == "completed", "completion racing cancellation preserved")
 	check(queue.snapshot().paused, "completion racing cancellation pauses dispatch")
 	queue.close()
+	var handoff_path := root.path_join("executor-handoff.json")
+	if FileAccess.file_exists(handoff_path):
+		DirAccess.remove_absolute(handoff_path)
+	var handoff = Queue.new()
+	check(handoff.open(handoff_path, "executor-handoff"), "open handoff queue")
+	var parent: Dictionary = handoff.append("parent", "fixture", {}, validate)
+	var accept_chat := func(operation: String, parameters: Dictionary) -> String:
+		return "" if operation == "chat_turn" and parameters.get("step") == 2 else "invalid"
+	var factory := func(_job: Dictionary) -> RefCounted:
+		return ContinuationWorker.new(accept_chat)
+	var handoff_executor = Executor.new(handoff, factory, get_clock)
+	handoff_executor.tick()
+	check(handoff_executor.cancel_current(), "cancel racing handoff")
+	handoff_executor.tick()
+	var snapshot: Dictionary = handoff.snapshot()
+	check(snapshot.jobs[0].state == "completed" and snapshot.jobs[0].result.next_job == snapshot.jobs[1].id, "completed handoff is preserved when cancellation races it")
+	check(snapshot.paused and handoff.start_next().is_empty(), "cancel racing completion pauses the successor")
+	check(not handoff.finish_with_continuation(parent.id, {}, {"step": 2}, accept_chat), "executor cannot commit a duplicate successor")
+	handoff.close()
+	var typed_path := root.path_join("executor-typed-handoff.json")
+	if FileAccess.file_exists(typed_path):
+		DirAccess.remove_absolute(typed_path)
+	var typed = Queue.new()
+	check(typed.open(typed_path, "executor-typed-handoff"), "open typed handoff queue")
+	typed.append("parent", "fixture", {}, validate)
+	var accept_tool := func(operation: String, parameters: Dictionary) -> String:
+		return "" if operation == "tool_fixture" and parameters.get("step") == 2 else "invalid"
+	var typed_factory := func(_job: Dictionary) -> RefCounted:
+		return ContinuationWorker.new(accept_tool, "tool_fixture")
+	var typed_executor = Executor.new(typed, typed_factory, get_clock)
+	typed_executor.tick()
+	typed_executor.tick()
+	var typed_snapshot: Dictionary = typed.snapshot()
+	check(typed_snapshot.jobs.size() == 2 and typed_snapshot.jobs[1].operation == "tool_fixture" and typed_snapshot.jobs[0].result.next_job == typed_snapshot.jobs[1].id, "executor commits a validated tool successor")
+	typed.close()
 	print("job executor failures: ", failures)
 	quit(1 if failures else 0)

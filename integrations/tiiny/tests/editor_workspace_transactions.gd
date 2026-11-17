@@ -357,16 +357,38 @@ func _run() -> void:
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after audio import"); return
 	root = EditorInterface.get_edited_scene_root()
 
+	# Catalog 2D-004: change an existing player's position and scale together.
+	var transform_player := root.get_node_or_null("Player") as Node2D
+	if transform_player == null:
+		_fail("Catalog transform fixture has no Player"); return
+	var original_position := transform_player.position
+	var original_scale := transform_player.scale
+	var transform_result: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [
+		{"op": "set_property", "target": "Player", "property": "position", "value": Vector2(200, 300)},
+		{"op": "set_property", "target": "Player", "property": "scale", "value": Vector2(1.5, 1.5)},
+	]})
+	if not transform_result.get("ok", false) or transform_player.position != Vector2(200, 300) or transform_player.scale != Vector2(1.5, 1.5):
+		_fail("Catalog 2D-004 player position/scale failed: " + str(transform_result)); return
+	var transform_undo := _history(root)
+	if not transform_undo[2].undo() or transform_player.position != original_position or transform_player.scale != original_scale:
+		_fail("Catalog 2D-004 undo failed"); return
+	if not transform_undo[2].redo() or transform_player.position != Vector2(200, 300) or transform_player.scale != Vector2(1.5, 1.5):
+		_fail("Catalog 2D-004 redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save catalog transform"); return
+	root = EditorInterface.get_edited_scene_root()
+
 	var generic_history := _history_count(root)
 	var generic_ops := [
 		{"op": "create_node", "id": "camera", "class": "Camera2D", "parent": ".", "name": "MainCamera", "properties": {"position": Vector2(100, 200), "position_smoothing_enabled": true}},
-		{"op": "create_node", "id": "hud", "class": "Label", "parent": ".", "name": "HudLabel", "properties": {"text": "Score: 0"}},
-		{"op": "create_node", "id": "light", "class": "OmniLight3D", "parent": "World", "name": "TorchLight", "properties": {"light_energy": 1.5}},
+		{"op": "create_node", "id": "hud", "class": "Label", "parent": ".", "name": "HudLabel", "properties": {"text": "Score: 0", "position": Vector2(8, 8)}},
+		{"op": "create_node", "id": "light", "class": "OmniLight3D", "parent": "World", "name": "TorchLight", "properties": {"light_energy": 1.5, "light_color": Color(1.0, 0.6, 0.3)}},
 		{"op": "create_node", "id": "crate", "class": "MeshInstance3D", "parent": "World", "name": "Crate"},
 		{"op": "create_resource", "id": "metal", "class": "StandardMaterial3D", "properties": {"metallic": 1.0, "roughness": 0.35}},
 		{"op": "assign_resource", "target": "crate", "property": "material_override", "resource": "metal"},
 		{"op": "create_node", "id": "button", "class": "Button", "parent": ".", "name": "StartButton", "properties": {"text": "Start"}},
-		{"op": "connect_signal", "source": "button", "signal": "pressed", "target": "hud", "method": "hide"},
+		{"op": "create_node", "id": "line", "class": "Line2D", "parent": ".", "name": "BarrierLine", "properties": {"points": [[0, 0], [100, 0]], "default_color": "#ff8800"}},
+		{"op": "connect_signal", "source": "button", "signal": "pressed", "target": "Controller", "method": "start_game"},
 	]
 	var generic: Dictionary = transactions.execute("apply_editor_transaction", {"operations": generic_ops})
 	if not generic.get("ok", false) or _history_count(root) != generic_history + 1:
@@ -374,18 +396,23 @@ func _run() -> void:
 	var camera: Camera2D = root.get_node_or_null("MainCamera")
 	var hud: Label = root.get_node_or_null("HudLabel")
 	var crate: MeshInstance3D = root.get_node_or_null("World/Crate")
-	if camera == null or camera.position != Vector2(100, 200) or not camera.position_smoothing_enabled:
+	if camera == null or camera.position != Vector2(100, 200) or not camera.position_smoothing_enabled or not camera.enabled:
 		_fail("Generic Camera2D creation/properties failed"); return
-	if hud == null or hud.text != "Score: 0" or root.get_node_or_null("StartButton") == null or not root.get_node("StartButton").is_connected("pressed", Callable(hud, "hide")):
+	var start_button := root.get_node_or_null("StartButton") as Button
+	if hud == null or hud.text != "Score: 0" or hud.position != Vector2(8, 8) or start_button == null or start_button.text != "Start" or not start_button.is_connected("pressed", Callable(root.get_node("Controller"), "start_game")):
 		_fail("Generic Label creation or signal connection failed"); return
-	if crate == null or not crate.material_override is StandardMaterial3D or not is_equal_approx(crate.material_override.metallic, 1.0):
+	if crate == null or not crate.material_override is StandardMaterial3D or not is_equal_approx(crate.material_override.metallic, 1.0) or not is_equal_approx(crate.material_override.roughness, 0.35):
 		_fail("Generic material creation/assignment failed"); return
-	if root.get_node_or_null("World/TorchLight") == null:
+	var light := root.get_node_or_null("World/TorchLight") as OmniLight3D
+	if light == null or not light.light_color.is_equal_approx(Color(1.0, 0.6, 0.3)):
 		_fail("Generic OmniLight3D creation failed"); return
+	var barrier_line := root.get_node_or_null("BarrierLine") as Line2D
+	if barrier_line == null or barrier_line.points.size() != 2 or barrier_line.points[1] != Vector2(100, 0) or not barrier_line.default_color.is_equal_approx(Color("#ff8800")):
+		_fail("Line2D points/color coercion failed: " + str(barrier_line)); return
 	var generic_undo := _history(root)
 	if not generic_undo[2].undo() or root.get_node_or_null("MainCamera") != null or root.get_node_or_null("HudLabel") != null:
 		_fail("Generic editor transaction undo failed"); return
-	if not generic_undo[2].redo() or root.get_node_or_null("MainCamera") == null:
+	if not generic_undo[2].redo() or root.get_node_or_null("MainCamera") == null or root.get_node_or_null("StartButton") == null or not root.get_node("StartButton").is_connected("pressed", Callable(root.get_node("Controller"), "start_game")):
 		_fail("Generic editor transaction redo failed"); return
 	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before structural transaction"); return
@@ -439,8 +466,27 @@ func _run() -> void:
 	if attach_file == null: _fail("Could not create the script-attachment fixture"); return
 	attach_file.store_string("extends CharacterBody2D\n\nfunc fixture_ping() -> void:\n\tpass\n")
 	attach_file.close()
+	var root_file := FileAccess.open("res://attach_root_fixture.gd", FileAccess.WRITE)
+	if root_file == null: _fail("Could not create root attachment fixture"); return
+	root_file.store_string("extends Node2D\n")
+	root_file.close()
 	EditorInterface.get_resource_filesystem().scan()
 	var attach_history := _history_count(root)
+	var incompatible_script: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "attach_script", "target": ".", "path": "res://attach_fixture.gd"}]})
+	if _error_code(incompatible_script) != "invalid_target" or root.get_script() != null or _history_count(root) != attach_history or bool(inspector.scene_context({}).scene.dirty):
+		_fail("Incompatible script was not rejected before mutation: " + str(incompatible_script)); return
+	var root_attach: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "attach_script", "target": ".", "path": "res://attach_root_fixture.gd"}]})
+	if not root_attach.get("ok", false) or root.get_script() == null:
+		_fail("Compatible script attachment to scene root failed: " + str(root_attach)); return
+	var root_attach_undo := _history(root)
+	if not root_attach_undo[2].undo() or root.get_script() != null:
+		_fail("Root script attachment undo failed"); return
+	if not root_attach_undo[2].redo() or root.get_script() == null:
+		_fail("Root script attachment redo failed"); return
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after root attachment undo"); return
+	root = EditorInterface.get_edited_scene_root()
+	attach_history = _history_count(root)
 	var attach_result: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [{"op": "attach_script", "target": "Player", "path": "res://attach_fixture.gd"}]})
 	var attached_player: CharacterBody2D = root.get_node_or_null("Player")
 	if not attach_result.get("ok", false) or attached_player == null or not attached_player.get_script() is GDScript or _history_count(root) != attach_history + 1:
@@ -451,7 +497,7 @@ func _run() -> void:
 	if not attach_undo[2].redo() or attached_player.get_script() == null:
 		_fail("Script attachment redo failed"); return
 	var save_history := _history_count(root)
-	var save_result: Dictionary = dock.call("_registry_save_scene", {}, {})
+	var save_result: Dictionary = await dock.call("_registry_save_scene", {}, {})
 	if not save_result.get("ok", false) or bool(inspector.scene_context({}).scene.dirty) or _history_count(root) != save_history:
 		_fail("Explicit scene save failed or changed undo history: " + str(save_result)); return
 	EditorInterface.reload_scene_from_path("res://main.tscn")
@@ -462,9 +508,9 @@ func _run() -> void:
 		_fail("Saved script attachment did not survive reload"); return
 
 
-	var particles2: Dictionary = transactions.execute("add_particles_2d", {"parent_path": ".", "node_name": "DustParticles", "amount": 12, "lifetime": 0.8, "gravity": 100, "initial_velocity": 40, "spread": 35, "scale": 3, "color": "#ffcc88"})
-	var dust: GPUParticles2D = root.get_node_or_null("DustParticles")
-	if not particles2.get("ok", false) or dust == null or not dust.process_material is ParticleProcessMaterial or dust.amount != 12:
+	var particles2: Dictionary = transactions.execute("add_particles_2d", {"parent_path": "Player", "node_name": "DustParticles", "amount": 12, "lifetime": 0.8, "gravity": 100, "initial_velocity": 40, "spread": 35, "scale": 3, "color": "#ffcc88"})
+	var dust: GPUParticles2D = root.get_node_or_null("Player/DustParticles")
+	if not particles2.get("ok", false) or dust == null or not dust.process_material is ParticleProcessMaterial or dust.amount != 12 or dust.get_parent() != root.get_node("Player"):
 		_fail("2D particle recipe failed: " + str(particles2)); return
 	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save after 2D particles"); return
@@ -483,6 +529,9 @@ func _run() -> void:
 	]
 	var mesh_created: Dictionary = transactions.execute("apply_editor_transaction", {"operations": mesh_ops})
 	if not mesh_created.get("ok", false): _fail("Could not create collision mesh fixture: " + str(mesh_created)); return
+	var collision_mesh_node: MeshInstance3D = root.get_node_or_null("World/CollisionMesh")
+	if collision_mesh_node == null or not collision_mesh_node.mesh is BoxMesh or collision_mesh_node.mesh.size != Vector3(1, 1, 1):
+		_fail("Generic 1x1x1 box mesh creation failed"); return
 	EditorInterface.save_scene()
 	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save collision mesh fixture"); return
 	root = EditorInterface.get_edited_scene_root()
@@ -680,6 +729,7 @@ func _run() -> void:
 	chat.workspace_inspector_script = dock.get("workspace_inspector_script")
 	chat.workspace_transactions_script = dock.get("workspace_transactions_script")
 	chat.workspace_registry_script = dock.get("workspace_registry_script")
+	chat.workspace_coding_script = dock.get("workspace_coding_script")
 	chat.pending_prompt = "Add a rectangular collision shape to Enemy, 32 wide and 48 tall."
 	chat.pending_key = "fixture-key"
 	chat.pending_model = "fixture-model"

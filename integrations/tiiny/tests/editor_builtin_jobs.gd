@@ -1,6 +1,14 @@
 @tool
 extends EditorPlugin
 
+class WarmImageManager extends Node:
+	var busy := false
+	var applying := false
+	func is_ready() -> bool:
+		return true
+	func is_model_loaded(_model: String) -> bool:
+		return true
+
 func _enter_tree() -> void:
 	_run.call_deferred()
 
@@ -157,7 +165,7 @@ func _run() -> void:
 			_fail("Explicit acknowledgement did not resolve shared uncertainty: job=" + str(jobs.get_job_status(entries[0].id)) + " marker=" + str(jobs._device_marker()) + " lease=" + str(not recovered_lease.is_empty()) + " holder=" + str(jobs.device_purpose))
 			return
 		jobs.release_device(self, recovered_lease)
-	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight", "model_schedule", "model_schedule_capacity", "model_schedule_restore", "model_schedule_disconnect"]:
+	elif mode in ["model_restore", "model_restore_download", "model_restore_capacity", "model_preflight", "model_preflight_stale", "model_preflight_cancel", "model_restore_stale", "model_resource_preflight", "model_resource_preflight_stale", "model_schedule", "model_schedule_capacity", "model_schedule_restore", "model_schedule_disconnect"]:
 		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		actual.remove_from_group("tiiny_setup_manager")
 		var fake = load("res://fake_model_manager.gd").new()
@@ -181,11 +189,19 @@ func _run() -> void:
 		if mode == "model_schedule_restore":
 			saved.roles.image_model = {"model": "image", "context": 0, "warm": true}
 		settings.set_setting("_tiiny_ai/applied_configuration", saved)
+		if mode in ["model_preflight_stale", "model_resource_preflight_stale"]:
+			fake.fixture_state.loaded = {"code": 47.0}
+			fake.fixture_state.npu_used = 47.0
+			fake.snapshot = fake.fixture_state.duplicate(true)
+			fake.snapshot["time"] = Time.get_ticks_msec() - 120000
+			fake.connected = true
+			fake.connection_identity = "b".repeat(64)
+			settings.set_setting("_tiiny_ai/applied_configuration", {})
 		fake.draft = saved.duplicate(true)
 		fake.draft_initialized = true
 		fake.next_restore_check_msec = Time.get_ticks_msec() + 60000
 		var deadline := Time.get_ticks_msec() + 15000
-		if mode in ["model_preflight", "model_preflight_cancel", "model_resource_preflight"]:
+		if mode in ["model_preflight", "model_preflight_stale", "model_preflight_cancel", "model_resource_preflight", "model_resource_preflight_stale"]:
 			fake.wait_for_cancel = mode == "model_preflight_cancel"
 			var fake_chat = load("res://fake_restore_chat.gd").new()
 			add_child(fake_chat)
@@ -194,14 +210,15 @@ func _run() -> void:
 			var connection: Dictionary = fake_chat._inference_connection()
 			var hash: String = (connection.url + "|" + connection.host + "|" + connection.key).sha256_text()
 			var accepted: Dictionary
-			if mode == "model_resource_preflight":
+			if mode in ["model_resource_preflight", "model_resource_preflight_stale"]:
 				accepted = jobs.append_job("preflight", "resource_shape", {"description": "triangle", "model": "code", "connection_hash": hash, "timeout_ms": 15000})
 			else:
 				accepted = jobs.append_job("preflight", "chat_turn", {"prompt": "hello", "context": "", "custom_prompt": "", "model": "code", "connection_hash": hash, "conversation": [], "timeout_ms": 15000})
-			if mode == "model_resource_preflight":
+			if mode in ["model_resource_preflight", "model_resource_preflight_stale"]:
 				while fake_chat.resource_submissions.is_empty() and Time.get_ticks_msec() < deadline:
 					await get_tree().create_timer(0.05).timeout
-				if fake_chat.resource_submissions.is_empty() or fake.calls != [["load", "code"]]:
+				var expected_calls: Array = [] if mode == "model_resource_preflight_stale" else [["load", "code"]]
+				if fake_chat.resource_submissions.is_empty() or fake.calls != expected_calls:
 					_fail("Resource preflight did not restore the coding model: " + str(jobs.get_job_status(accepted.id)))
 					return
 				var response := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": '{"points":[[0,0],[32,0],[0,32]]}'}}]}).to_utf8_buffer()
@@ -210,6 +227,9 @@ func _run() -> void:
 					await get_tree().create_timer(0.05).timeout
 				if jobs.get_job_status(accepted.id).get("state") != "completed":
 					_fail("Resource generation did not complete after restoration: " + str(jobs.get_job_status(accepted.id)))
+					return
+				if mode == "model_resource_preflight_stale" and jobs.queue.snapshot().jobs.any(func(job): return job.operation == "model_restore"):
+					_fail("Stale resource preflight queued a redundant restoration")
 					return
 				print("Built-in Jobs %s passed" % mode)
 				get_tree().quit(0)
@@ -231,11 +251,12 @@ func _run() -> void:
 				return
 			while fake_chat.submissions.is_empty() and Time.get_ticks_msec() < deadline:
 				await get_tree().create_timer(0.05).timeout
-			if fake_chat.submissions.is_empty() or fake.calls != [["load", "code"]]:
+			var expected_calls: Array = [] if mode == "model_preflight_stale" else [["load", "code"]]
+			if fake_chat.submissions.is_empty() or fake.calls != expected_calls:
 				_fail("Running chat did not restore its coding model before inference: " + str(fake.calls) + " / " + str(jobs.get_job_status(accepted.id)))
 				return
 			var attempt: Dictionary = jobs.get_job_status(accepted.id).attempts.back()
-			if not attempt.get("device_started", false) or attempt.device_operations.back().state != "verified":
+			if not attempt.get("device_started", false) or (mode != "model_preflight_stale" and attempt.device_operations.back().state != "verified"):
 				_fail("Chat preflight did not durably verify restoration")
 				return
 			var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
@@ -247,6 +268,9 @@ func _run() -> void:
 				await get_tree().create_timer(0.05).timeout
 			if jobs.get_job_status(accepted.id).get("state") != "completed":
 				_fail("Chat did not complete after preflight restoration: " + str(jobs.get_job_status(accepted.id)))
+				return
+			if mode == "model_preflight_stale" and jobs.queue.snapshot().jobs.any(func(job): return job.operation == "model_restore"):
+				_fail("Stale chat preflight queued a redundant restoration")
 				return
 		else:
 			if mode in ["model_schedule", "model_schedule_capacity"]:
@@ -670,7 +694,7 @@ func _run() -> void:
 		if snapshot.jobs.size() != 1: _fail("Protocol chat was not queued"); return
 		var id: String = snapshot.jobs[0].id
 		store.set_paused(false)
-		var deadline := Time.get_ticks_msec() + 10000
+		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 1: _fail("Protocol chat did not dispatch classification"); return
@@ -683,18 +707,28 @@ func _run() -> void:
 		var second := {"id": "two", "type": "function", "function": {"name": "get_workspace_context", "arguments": "{}"}}
 		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first, second]}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply)
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var first_step: Dictionary = jobs.get_job_status(id)
+		if first_step.get("state") != "completed" or not bool(first_step.get("result", {}).get("continued", false)):
+			_fail("Multi-call step did not complete as continued: " + str(first_step)); return
+		var next_id := str(first_step.get("result", {}).get("next_job", ""))
+		if next_id.is_empty():
+			_fail("Multi-call step did not name its continuation"); return
+		if fake.tool_call_count != 2:
+			_fail("Multi-call tool count was not preserved: " + str(fake.tool_call_count)); return
 		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3 or fake.tool_call_count != 2:
-			_fail("Multi-call did not execute and continue: submissions=" + str(fake.submissions.size()) + " calls=" + str(fake.tool_call_count)); return
+		if fake.submissions.size() < 3:
+			_fail("Continuation step did not dispatch: submissions=" + str(fake.submissions.size())); return
 		var tool_messages: Array = fake.turn_messages.slice(-2)
 		if tool_messages.size() != 2 or tool_messages[0].get("tool_call_id") != "one" or tool_messages[1].get("tool_call_id") != "two":
 			_fail("Multi-call tool results were not matched in order: " + str(tool_messages)); return
 		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Multi-call complete."}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final_text)
-		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+		while jobs.get_job_status(next_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		var final: Dictionary = jobs.get_job_status(id)
+		var final: Dictionary = jobs.get_job_status(next_id)
 		if final.get("state") != "completed" or not final.attempts.back().get("device_confirmed", false):
 			_fail("Multi-call chat did not complete as a confirmed job: " + str(final)); return
 		if not str(final.get("result", {}).get("response", "")).contains("Multi-call complete"):
@@ -705,6 +739,207 @@ func _run() -> void:
 			_fail("Multi-call completion retained an uncertain device lease: pending=" + str(jobs.device_recovery_pending()) + " lease=" + str(not completion_lease.is_empty())); return
 		jobs.release_device(self, completion_lease)
 		print("Built-in Jobs chat_protocol passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_chain":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		var store: RefCounted = jobs.get("queue")
+		var bad_turn: Dictionary = jobs.append_job("bad-turn", "chat_turn", {"prompt": "x", "context": "", "custom_prompt": "", "model": "code", "connection_hash": "a".repeat(64), "conversation": [], "timeout_ms": 15000, "turn": {"id": "x", "step": 2}})
+		if not bad_turn.has("error"):
+			_fail("Malformed turn state was accepted")
+			return
+		fake.prompt.text = "Build a small game in steps."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		var first_id: String = store.snapshot().jobs.back().id
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Chain chat did not dispatch classification"); return
+		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Chain chat did not dispatch the first answer"); return
+		var round_one := {"id": "chain-one", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
+		var reply_one := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [round_one]}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply_one)
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply_one)
+		var after_duplicate: Array = store.snapshot().jobs.filter(func(job): return job.operation == "chat_turn")
+		if after_duplicate.size() != 1:
+			_fail("A continuation was persisted before the parent completed: " + str(after_duplicate.size())); return
+		while jobs.get_job_status(first_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var step_one: Dictionary = jobs.get_job_status(first_id)
+		after_duplicate = store.snapshot().jobs.filter(func(job): return job.operation == "chat_turn")
+		if after_duplicate.size() != 2:
+			_fail("A repeated response created duplicate continuations: " + str(after_duplicate.size())); return
+		var second_id := str(step_one.get("result", {}).get("next_job", ""))
+		if step_one.get("state") != "completed" or not bool(step_one.get("result", {}).get("continued", false)) or second_id.is_empty():
+			_fail("Chain step one did not continue: " + str(step_one)); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Chain step two did not dispatch"); return
+		var round_two := {"id": "chain-two", "type": "function", "function": {"name": "get_workspace_context", "arguments": "{}"}}
+		var reply_two := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [round_two]}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply_two)
+		while jobs.get_job_status(second_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var step_two: Dictionary = jobs.get_job_status(second_id)
+		var third_id := str(step_two.get("result", {}).get("next_job", ""))
+		if step_two.get("state") != "completed" or not bool(step_two.get("result", {}).get("continued", false)) or third_id.is_empty():
+			_fail("Chain step two did not continue: " + str(step_two)); return
+		if int(step_two.get("parameters", {}).get("turn", {}).get("step", 0)) != 2 or int(step_two.get("parameters", {}).get("turn", {}).get("rounds", 0)) != 1:
+			_fail("Chain step two did not restore its step and round counters: " + str(step_two.get("parameters", {}))); return
+		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 4: _fail("Chain step three did not dispatch"); return
+		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Chain complete."}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final_text)
+		while jobs.get_job_status(third_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var step_three: Dictionary = jobs.get_job_status(third_id)
+		if step_three.get("state") != "completed" or not str(step_three.get("result", {}).get("response", "")).contains("Chain complete"):
+			_fail("Chain final step did not record the response: " + str(step_three)); return
+		if int(step_three.get("parameters", {}).get("turn", {}).get("step", 0)) != 3 or int(step_three.get("parameters", {}).get("turn", {}).get("rounds", 0)) != 2:
+			_fail("Chain final step did not restore its step and round counters: " + str(step_three.get("parameters", {}))); return
+		var chain_jobs: Array = store.snapshot().jobs.filter(func(job): return job.operation == "chat_turn")
+		if chain_jobs.size() != 3:
+			_fail("Chain did not produce three chat steps: " + str(chain_jobs.size())); return
+		print("Built-in Jobs chat_chain passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_chain_prepare":
+		var store: RefCounted = jobs.get("queue")
+		if not store.set_paused(true):
+			_fail("Could not pause for continuation restart")
+			return
+		var turn := {
+			"id": "restart-turn",
+			"step": 2,
+			"system": "Fixture system",
+			"messages": [
+				{"role": "user", "content": "Restart request"},
+				{"role": "assistant", "tool_calls": [{"id": "restart-call", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}]},
+				{"role": "tool", "tool_call_id": "restart-call", "content": "{\"ok\":true}"},
+			],
+			"rounds": 1,
+			"count": 1,
+			"calls": ["restart-call"],
+			"failed": {},
+			"ledger": [],
+			"scene": {},
+		}
+		var accepted: Dictionary = jobs.append_job("restart-continuation", "chat_turn", {"prompt": "Restart request", "context": "", "custom_prompt": "", "model": "fixture-model", "connection_hash": "a".repeat(64), "conversation": turn.messages, "timeout_ms": 15000, "turn": turn})
+		if not accepted.has("id"):
+			_fail("Continuation was not accepted for restart: " + str(accepted))
+			return
+		print("Built-in Jobs chat_chain_prepare passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_chain_restore":
+		var store: RefCounted = jobs.get("queue")
+		var snapshot: Dictionary = store.snapshot()
+		var found := false
+		for job in snapshot.jobs:
+			if job.operation != "chat_turn" or not job.parameters.get("turn") is Dictionary:
+				continue
+			var turn: Dictionary = job.parameters.turn
+			if str(turn.get("id", "")) == "restart-turn" and int(turn.get("step", 0)) == 2 and int(turn.get("rounds", 0)) == 1 and Array(turn.get("messages", [])).size() == 3 and Array(turn.get("calls", [])) == ["restart-call"]:
+				found = true
+		if not found:
+			_fail("Continuation state did not survive restart: " + str(snapshot))
+			return
+		print("Built-in Jobs chat_chain_restore passed")
+		get_tree().quit()
+		return
+	elif mode == "device_acknowledge":
+		var marker_path: String = jobs.get("device_lock_path")
+		var marker_file := FileAccess.open(marker_path, FileAccess.WRITE)
+		if marker_file == null:
+			_fail("Could not write the fixture device marker")
+			return
+		marker_file.store_string(JSON.stringify({"schema": 1, "state": "uncertain", "project": "/tmp/other-project", "job": "other-1", "verb": "inference", "model": "fixture-model", "connection": "a".repeat(64)}))
+		marker_file.close()
+		if not jobs.acknowledge_foreign_device_marker():
+			_fail("Foreign uncertain marker was not acknowledged")
+			return
+		var marker: Dictionary = jobs._device_marker()
+		if marker.get("state") != "idle":
+			_fail("Acknowledged marker is not idle: " + str(marker))
+			return
+		print("Built-in Jobs device_acknowledge passed")
+		get_tree().quit()
+		return
+	elif mode == "queue_resume":
+		var store: RefCounted = jobs.get("queue")
+		if not store.set_paused(true):
+			_fail("Could not pause the queue for the resume fixture")
+			return
+		var accepted: Dictionary = jobs.append_job("resume-fixture", "create_tree", {"destination": "res://assets/resume.png", "timeout_ms": 30000})
+		if not accepted.has("id"):
+			_fail("Resume fixture job was not accepted: " + str(accepted))
+			return
+		if not bool(store.snapshot().paused):
+			_fail("Queue did not stay paused with a queued job")
+			return
+		jobs._resume_if_queued()
+		if bool(store.snapshot().paused):
+			_fail("Queue did not resume with a queued job")
+			return
+		var deadline := Time.get_ticks_msec() + 30000
+		while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(accepted.id).get("state") != "completed":
+			_fail("Resumed job did not complete: " + str(jobs.get_job_status(accepted.id)))
+			return
+		print("Built-in Jobs queue_resume passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_truncation":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		var store: RefCounted = jobs.get("queue")
+		fake.prompt.text = "Build a complex arena."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		var first_id: String = store.snapshot().jobs.back().id
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Truncation chat did not dispatch classification"); return
+		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Truncation chat did not dispatch an answer"); return
+		var truncated := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), truncated)
+		while jobs.get_job_status(first_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var first_step: Dictionary = jobs.get_job_status(first_id)
+		var retry_id := str(first_step.get("result", {}).get("next_job", ""))
+		if first_step.get("state") != "completed" or not bool(first_step.get("result", {}).get("continued", false)) or retry_id.is_empty():
+			_fail("Truncated response did not queue a concise retry: " + str(first_step)); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Truncation retry did not dispatch"); return
+		var last_message: Dictionary = Array(fake.submissions[2].messages).back()
+		if last_message.get("role") != "user" or not str(last_message.get("content", "")).contains("cut off"):
+			_fail("Truncation retry did not include the concise continuation prompt: " + str(last_message)); return
+		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Arena complete."}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final_text)
+		while jobs.get_job_status(retry_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var retry_step: Dictionary = jobs.get_job_status(retry_id)
+		if retry_step.get("state") != "completed" or not str(retry_step.get("result", {}).get("response", "")).contains("Arena complete"):
+			_fail("Truncation retry did not complete with the final response: " + str(retry_step)); return
+		if int(retry_step.get("parameters", {}).get("turn", {}).get("truncations", 0)) != 1:
+			_fail("Truncation retry did not persist its retry count: " + str(retry_step.get("parameters", {}))); return
+		print("Built-in Jobs chat_truncation passed")
 		get_tree().quit()
 		return
 	elif mode == "chat_empty":
@@ -741,6 +976,162 @@ func _run() -> void:
 		print("Built-in Jobs chat_empty passed")
 		get_tree().quit()
 		return
+	elif mode == "chat_image_stale":
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var image_manager := WarmImageManager.new()
+		add_child(image_manager)
+		image_manager.add_to_group("tiiny_setup_manager")
+		var settings := EditorInterface.get_editor_settings()
+		settings.set_setting("tiiny_ai/models/image_model", "fixture-image")
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.image_success_fixture = true
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Generate an image."
+		fake._generate()
+		var id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Stale image classification did not start"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Stale image answer did not start"); return
+		jobs.queue.set_paused(true)
+		var call := {"id": "stale-image", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var chain: Array = jobs.queue.snapshot().jobs
+		if chain.size() != 2 or chain[1].state != "queued": _fail("Image job did not wait in FIFO"); return
+		settings.set_setting("tiiny_ai/models/image_model", "changed-image")
+		jobs.queue.set_paused(false)
+		var result: Dictionary = jobs.get_job_status(str(chain[1].id))
+		while result.get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+			result = jobs.get_job_status(str(chain[1].id))
+		if result.get("state") != "failed" or fake.image_asset_calls != 0 or jobs.queue.snapshot().jobs.size() != 2:
+			_fail("Changed image selection was not rejected before device work: " + str(result)); return
+		print("Built-in Jobs chat_image_stale passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_image_handoff":
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var image_manager := WarmImageManager.new()
+		add_child(image_manager)
+		image_manager.add_to_group("tiiny_setup_manager")
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/image_model", "fixture-image")
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.image_success_fixture = true
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Generate an image and inspect the job."
+		fake._generate()
+		var first_id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Image handoff classification did not start"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Image handoff answer did not start"); return
+		var image_call := {"id": "image-one", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
+		var status_call := {"id": "status-two", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": first_id})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [image_call, status_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Image handoff did not resume the model: " + str(jobs.queue.snapshot())); return
+		var messages: Array = fake.submissions.back().messages
+		var tool_messages: Array = messages.filter(func(message): return message.get("role") == "tool")
+		if tool_messages.size() != 2 or tool_messages[0].get("tool_call_id") != "image-one" or tool_messages[1].get("tool_call_id") != "status-two":
+			_fail("Image and remaining tool results were not retained in order: " + str(tool_messages)); return
+		var generated: Variant = JSON.parse_string(str(tool_messages[0].content))
+		if not generated is Dictionary or not generated.get("ok", false) or not FileAccess.file_exists(str(generated.get("data", {}).get("path", ""))):
+			_fail("Image tool did not return the generated artifact: " + str(generated)); return
+		var chain: Array = jobs.queue.snapshot().jobs
+		if chain.size() != 4 or chain[0].operation != "chat_turn" or chain[1].operation != "asset_generate" or chain[1].state != "completed" or chain[2].operation != "chat_turn" or chain[3].operation != "chat_turn":
+			_fail("Image handoff did not use independent FIFO jobs: " + str(chain)); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "done"}}]}).to_utf8_buffer())
+		while jobs.get_job_status(str(chain[3].id)).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(str(chain[3].id)).get("state") != "completed": _fail("Image turn did not finish"); return
+		print("Built-in Jobs chat_image_handoff passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_image_uncertain":
+		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		actual.remove_from_group("tiiny_setup_manager")
+		var image_manager := WarmImageManager.new()
+		add_child(image_manager)
+		image_manager.add_to_group("tiiny_setup_manager")
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/image_model", "fixture-image")
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.image_timeout_fixture = true
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Generate an image."
+		fake._generate()
+		var id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Image fixture classification did not start"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Image fixture answer did not start"); return
+		var call := {"id": "image-call", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		while jobs.queue.snapshot().jobs.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var chain: Array = jobs.queue.snapshot().jobs
+		var stopped: Dictionary = jobs.get_job_status(str(chain.back().id))
+		while stopped.get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+			stopped = jobs.get_job_status(str(chain.back().id))
+		var marker: Dictionary = jobs._device_marker()
+		if stopped.get("operation") != "asset_generate" or stopped.get("state") != "interrupted" or marker.get("model") != "fixture-image" or not jobs.device_recovery_pending() or jobs.queue.snapshot().jobs.size() != 2:
+			_fail("Uncertain image request did not stop without a continuation: " + str(stopped)); return
+		print("Built-in Jobs chat_image_uncertain passed")
+		get_tree().quit()
+		return
+	elif mode == "chat_second_request_uncertain":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Exercise the second request."
+		fake._generate()
+		var id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Classification did not start"); return
+		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var running: Dictionary = jobs.get_job_status(id)
+		if fake.submissions.size() < 2 or running.attempts.back().get("device_confirmed", false) or not jobs.device_recovery_pending():
+			_fail("The answer request did not establish a fresh uncertainty boundary: " + str(running)); return
+		await fake._request_completed(HTTPRequest.RESULT_TIMEOUT, 0, PackedStringArray(), PackedByteArray())
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var stopped: Dictionary = jobs.get_job_status(id)
+		if stopped.get("state") != "interrupted" or not jobs.device_recovery_pending() or jobs.queue.resolve(id, "retry"):
+			_fail("An uncertain answer request was not stopped for reconciliation: " + str(stopped)); return
+		print("Built-in Jobs chat_second_request_uncertain passed")
+		get_tree().quit()
+		return
 	elif mode == "chat":
 		var fake = load("res://fake_queued_chat.gd").new()
 		add_child(fake)
@@ -772,7 +1163,7 @@ func _run() -> void:
 			_fail("Paused chat dispatched early")
 			return
 		store.set_paused(false)
-		var deadline := Time.get_ticks_msec() + 10000
+		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 1:
@@ -799,22 +1190,37 @@ func _run() -> void:
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), tool_reply)
 		await get_tree().process_frame
 		var tool_result: Variant = JSON.parse_string(fake.turn_messages.back().content)
-		if not tool_result is Dictionary or tool_result.get("sequence") != 3 or fake.submissions.size() != 3:
+		if not tool_result is Dictionary or tool_result.get("sequence") != 3:
 			_fail("Assistant append did not reach the queue tail")
+			return
+		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var first_step: Dictionary = jobs.get_job_status(id)
+		if first_step.get("state") != "completed" or not bool(first_step.get("result", {}).get("continued", false)):
+			_fail("First chat step did not complete as continued: " + str(first_step))
+			return
+		var next_id := str(first_step.get("result", {}).get("next_job", ""))
+		if next_id.is_empty():
+			_fail("First chat step did not name its continuation")
 			return
 		var resource_callback: Array = []
 		fake.generate_shape_for_dialog("Fixture polygon", func(shape, error): resource_callback.assign([shape, error]))
 		snapshot = store.snapshot()
 		var resource_id: String = snapshot.jobs.back().id
-		if snapshot.jobs.back().operation != "resource_shape" or snapshot.jobs.back().sequence != 4 or not resource_callback.is_empty():
+		if snapshot.jobs.back().operation != "resource_shape" or snapshot.jobs.back().sequence != 5 or not resource_callback.is_empty():
 			_fail("Resource generation did not append behind current work")
+			return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3:
+			_fail("Continuation step did not dispatch after preceding jobs")
 			return
 		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Fixture answer"}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply)
-		while jobs.get_job_status(id).get("state") == "running" and Time.get_ticks_msec() < deadline:
+		while jobs.get_job_status(next_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if jobs.get_job_status(id).get("state") != "completed" or jobs.get_job_status(id).result.response != "Fixture answer":
-			_fail("Queued chat result was not committed")
+		if jobs.get_job_status(next_id).get("state") != "completed" or jobs.get_job_status(next_id).result.response != "Fixture answer":
+			_fail("Queued chat result was not committed on the continuation")
 			return
 		while fake.resource_submissions.is_empty() and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout

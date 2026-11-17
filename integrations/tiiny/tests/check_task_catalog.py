@@ -12,6 +12,7 @@ TOOL_FILES = [
     ROOT / "editor/tiiny/tools/transactions.gd",
     ROOT / "editor/tiiny/tools/inspector.gd",
     ROOT / "editor/tiiny/tools/debugger.gd",
+    ROOT / "editor/tiiny/tools/workspace.gd",
 ]
 
 def available_tools() -> set[str]:
@@ -85,6 +86,14 @@ def main() -> int:
                 supported_with_tests += 1
         elif status == "supported":
             errors.append(f"{tid}: supported task has no test reference")
+        assertion = task.get("test_assertion", "")
+        if status == "supported":
+            if not assertion:
+                errors.append(f"{tid}: supported task has no task-specific test assertion")
+            elif test and (ROOT / test).exists() and assertion not in (ROOT / test).read_text():
+                errors.append(f"{tid}: test assertion is not present in {test}: {assertion!r}")
+        elif assertion:
+            errors.append(f"{tid}: non-supported task must not claim a test assertion")
     report = {
         "catalog_version": data.get("version"),
         "total": len(tasks),

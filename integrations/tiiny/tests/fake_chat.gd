@@ -8,3 +8,7 @@ var submit_error := OK
 func _submit_chat(payload: Dictionary) -> int:
 	submissions.append(payload.duplicate(true))
 	return submit_error
+
+# Fixture-only substitute for the real user confirmation dialog.
+func _approve_file_edit(_action: String, _path: String, _reason: String) -> bool:
+	return true

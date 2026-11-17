@@ -329,9 +329,12 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 			"attach_script":
 				var target := _target_node(str(op.get("target", "")), root, nodes, op_by_id)
 				if target == null: return _error("target_missing", "attach_script target is missing.")
-				if target.get_owner() != root and not nodes.values().has(target): return _error("read_only_instance", "attach_script target must be owned by the edited scene.")
+				if target != root and target.get_owner() != root and not nodes.values().has(target): return _error("read_only_instance", "attach_script target must be owned by the edited scene.")
 				var script: Variant = ResourceLoader.load(str(op.get("path", "")), "", ResourceLoader.CACHE_MODE_REUSE)
 				if not script is GDScript: return _error("artifact_invalid", "Script did not load as GDScript.")
+				var base_type := str(script.get_instance_base_type())
+				if base_type.is_empty() or not ClassDB.is_parent_class(target.get_class(), base_type):
+					return _error("invalid_target", "The script base class %s is incompatible with %s (%s)." % [base_type if not base_type.is_empty() else "unknown", str(op.get("target", "")), target.get_class()])
 				op["__target"] = target
 				op["__script"] = script
 				op["__old_script"] = target.get_script()
@@ -583,6 +586,66 @@ func _coerce_value(info: Dictionary, value: Variant) -> Variant:
 		return Vector2(float(value[0]), float(value[1]))
 	if type == TYPE_VECTOR3 and value is Array and value.size() == 3:
 		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	if type == TYPE_COLOR:
+		if value is String: return Color.from_string(value, Color.WHITE)
+		if value is Array and value.size() in [3, 4]:
+			return Color(float(value[0]), float(value[1]), float(value[2]), float(value[3]) if value.size() == 4 else 1.0)
+		if value is Dictionary and value.has("r") and value.has("g") and value.has("b"):
+			return Color(float(value.r), float(value.g), float(value.b), float(value.get("a", 1.0)))
+	if type == TYPE_RECT2 and value is Dictionary and value.has("x") and value.has("y") and value.has("w") and value.has("h"):
+		return Rect2(float(value.x), float(value.y), float(value.w), float(value.h))
+	if type == TYPE_RECT2 and value is Array and value.size() == 4:
+		return Rect2(float(value[0]), float(value[1]), float(value[2]), float(value[3]))
+	if type == TYPE_PACKED_VECTOR2_ARRAY and value is Array:
+		var points := PackedVector2Array()
+		for item in value:
+			if item is Dictionary and item.has("x") and item.has("y"):
+				points.append(Vector2(float(item.x), float(item.y)))
+			elif item is Array and item.size() == 2:
+				points.append(Vector2(float(item[0]), float(item[1])))
+			else:
+				return value
+		return points
+	if type == TYPE_PACKED_VECTOR3_ARRAY and value is Array:
+		var points3 := PackedVector3Array()
+		for item in value:
+			if item is Dictionary and item.has("x") and item.has("y") and item.has("z"):
+				points3.append(Vector3(float(item.x), float(item.y), float(item.z)))
+			elif item is Array and item.size() == 3:
+				points3.append(Vector3(float(item[0]), float(item[1]), float(item[2])))
+			else:
+				return value
+		return points3
+	if type == TYPE_PACKED_FLOAT32_ARRAY and value is Array:
+		var floats := PackedFloat32Array()
+		for item in value:
+			if not (item is int or item is float): return value
+			floats.append(float(item))
+		return floats
+	if type == TYPE_PACKED_FLOAT64_ARRAY and value is Array:
+		var doubles := PackedFloat64Array()
+		for item in value:
+			if not (item is int or item is float): return value
+			doubles.append(float(item))
+		return doubles
+	if type == TYPE_PACKED_INT32_ARRAY and value is Array:
+		var ints := PackedInt32Array()
+		for item in value:
+			if not (item is int or item is float): return value
+			ints.append(int(item))
+		return ints
+	if type == TYPE_PACKED_INT64_ARRAY and value is Array:
+		var longs := PackedInt64Array()
+		for item in value:
+			if not (item is int or item is float): return value
+			longs.append(int(item))
+		return longs
+	if type == TYPE_PACKED_STRING_ARRAY and value is Array:
+		var strings := PackedStringArray()
+		for item in value:
+			if not item is String: return value
+			strings.append(str(item))
+		return strings
 	return value
 
 func _value_compatible(info: Dictionary, value: Variant) -> bool:

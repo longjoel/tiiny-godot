@@ -52,3 +52,7 @@ The 15 specialized-missing tasks are TileMapLayer, GPUParticles2D, AnimatedSprit
 - 15 specialized tasks require story 17 or an explicit limitation.
 - The live batch is representative, not a success-rate study; individual traces are recorded.
 - The catalog measures native/composed/script support, not model correctness on every paraphrase.
+
+## Story 19 reconciliation
+
+Story 19 audited every supported task against its actual assertion rather than a test-file reference. The catalog now requires a `test_assertion` present in the referenced test, and the validator enforces it. The audited count is **32 supported / 68 partial / 0 missing**, with 32/32 supported tasks carrying a present assertion. Four tasks were reclassified to partial because their assertions did not cover the prompt: 2D-006 (active camera unproven), 2D-044 (low volume and OGG music not covered), 3D-082 (sparks not attached to an anvil), and 3D-083 (trail not attached to a projectile). The fixture also gained assertions for 2D-008 (HUD position), 2D-016 (particles parented to `Player`), and 3D-051 (1×1×1 `BoxMesh` size). See [story 19 progress](19-review-progress.md).

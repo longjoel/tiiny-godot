@@ -15,8 +15,9 @@
         "add_sprite_from_image"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
-      "solution": "native_macro"
+      "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
+      "solution": "native_macro",
+      "test_assertion": "Generated Sprite2D has the wrong texture/scale"
     },
     {
       "id": "2D-002",
@@ -31,7 +32,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Generated Sprite2D has the wrong texture/scale"
     },
     {
       "id": "2D-003",
@@ -61,7 +63,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Catalog 2D-004 player position/scale failed"
     },
     {
       "id": "2D-005",
@@ -85,11 +88,11 @@
       "dimension": "2d",
       "task": "Add a Camera2D",
       "prompt": "Add a Camera2D and make it current.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "apply_editor_transaction"
       ],
-      "gap": "",
+      "gap": "The fixture creates a Camera2D with enabled=true but does not assert that it becomes the active camera; active-camera behavior is unproven.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "composed_primitives"
     },
@@ -121,7 +124,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic Label creation or signal connection failed"
     },
     {
       "id": "2D-009",
@@ -136,7 +140,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic Label creation or signal connection failed"
     },
     {
       "id": "2D-010",
@@ -211,7 +216,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "TileMapLayer recipe failed"
     },
     {
       "id": "2D-015",
@@ -241,7 +247,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "2D particle recipe failed"
     },
     {
       "id": "2D-017",
@@ -256,7 +263,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "AnimatedSprite2D recipe failed"
     },
     {
       "id": "2D-018",
@@ -317,7 +325,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Collision recipe result is wrong"
     },
     {
       "id": "2D-022",
@@ -407,7 +416,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Slippery PhysicsMaterial values are wrong"
     },
     {
       "id": "2D-028",
@@ -633,7 +643,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic Label creation or signal connection failed"
     },
     {
       "id": "2D-043",
@@ -648,7 +659,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Theme recipe failed"
     },
     {
       "id": "2D-044",
@@ -657,11 +669,11 @@
       "dimension": "2d",
       "task": "Loop background music",
       "prompt": "Play music.ogg on loop at low volume.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "configure_audio_loop"
       ],
-      "gap": "",
+      "gap": "The fixture verifies loop_mode on a WAV stream; setting a low volume and using an OGG music stream are not covered.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -694,7 +706,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Audio bus configuration failed"
     },
     {
       "id": "2D-047",
@@ -772,7 +785,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic 1x1x1 box mesh creation failed"
     },
     {
       "id": "3D-052",
@@ -847,7 +861,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "GridMap recipe failed"
     },
     {
       "id": "3D-057",
@@ -917,11 +932,11 @@
       "dimension": "3d",
       "task": "Add a NavigationRegion3D",
       "prompt": "Bake a navigation region for enemies.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "add_navigation_region"
       ],
-      "gap": "",
+      "gap": "The recipe creates a NavigationRegion3D and NavigationMesh but does not bake it.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -953,7 +968,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Generated 3D model import failed"
     },
     {
       "id": "3D-064",
@@ -970,7 +986,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_asset_generation.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Tiiny live asset generation passed."
     },
     {
       "id": "3D-065",
@@ -985,7 +1002,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Mesh collision recipe failed"
     },
     {
       "id": "3D-066",
@@ -1015,7 +1033,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic OmniLight3D creation failed"
     },
     {
       "id": "3D-068",
@@ -1030,7 +1049,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Torch flicker recipe failed"
     },
     {
       "id": "3D-069",
@@ -1075,7 +1095,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "composed_primitives"
+      "solution": "composed_primitives",
+      "test_assertion": "Generic material creation/assignment failed"
     },
     {
       "id": "3D-072",
@@ -1208,11 +1229,11 @@
       "dimension": "3d",
       "task": "Play a character animation state",
       "prompt": "Blend idle and run animations.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "add_animation_tree"
       ],
-      "gap": "",
+      "gap": "The recipe creates one animation state; it does not blend idle and run.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -1229,7 +1250,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Animation playback recipe failed"
     },
     {
       "id": "3D-082",
@@ -1238,11 +1260,11 @@
       "dimension": "3d",
       "task": "Add 3D particles",
       "prompt": "Add sparks around the anvil.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "add_particles_3d"
       ],
-      "gap": "",
+      "gap": "The fixture creates sparks under World; attaching them to a specific anvil node is not asserted.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -1253,11 +1275,11 @@
       "dimension": "3d",
       "task": "Add a 3D trail",
       "prompt": "Add a trail behind the projectile.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "add_trail_3d"
       ],
-      "gap": "",
+      "gap": "The fixture creates a Trail3D under World; attaching it behind a projectile is not asserted.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -1274,7 +1296,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Weather recipe failed"
     },
     {
       "id": "3D-085",
@@ -1298,11 +1321,11 @@
       "dimension": "3d",
       "task": "Validate PBR maps and topology",
       "prompt": "Check that this generated model has good topology and PBR maps.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "validate_mesh_quality"
       ],
-      "gap": "",
+      "gap": "The tool reports mesh counts and map presence but marks topology and PBR quality unverified.",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
       "solution": "native_macro"
     },
@@ -1382,7 +1405,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
-      "solution": "script_behavior"
+      "solution": "script_behavior",
+      "test_assertion": "Live multi-call chat passed."
     },
     {
       "id": "PROJECT-092",
@@ -1399,7 +1423,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/test_chat_protocol.gd",
-      "solution": "script_behavior"
+      "solution": "script_behavior",
+      "test_assertion": "Multi-call did not execute both tools."
     },
     {
       "id": "PROJECT-093",
@@ -1417,7 +1442,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_workspace_inspector.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Workspace inspector editor integration passed."
     },
     {
       "id": "PROJECT-094",
@@ -1433,7 +1459,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_debugger.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Tiiny debugger integration passed."
     },
     {
       "id": "PROJECT-095",
@@ -1451,7 +1478,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_debugger.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Tiiny debugger integration passed."
     },
     {
       "id": "PROJECT-096",
@@ -1462,13 +1490,14 @@
       "prompt": "Step over the next line and continue.",
       "status": "supported",
       "tools": [
-        "debug_step",
+        "debug_next",
         "debug_continue",
         "debug_pause"
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_debugger.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Tiiny debugger integration passed."
     },
     {
       "id": "PROJECT-097",
@@ -1484,7 +1513,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/check_builtin_jobs.py",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Built-in Jobs {mode} passed"
     },
     {
       "id": "PROJECT-098",
@@ -1493,13 +1523,13 @@
       "dimension": "project",
       "task": "Generate speech and add it to the scene",
       "prompt": "Generate a spoken line and add an audio player.",
-      "status": "supported",
+      "status": "partial",
       "tools": [
         "append_job",
         "get_job_status",
         "import_generated_audio"
       ],
-      "gap": "",
+      "gap": "Speech generation and audio-player import have separate tests; a composed generated-speech-to-player test is not recorded.",
       "test": "integrations/tiiny/tests/check_asset_generation.py",
       "solution": "native_macro"
     },
@@ -1516,7 +1546,8 @@
       ],
       "gap": "",
       "test": "integrations/tiiny/tests/editor_workspace_transactions.gd",
-      "solution": "native_macro"
+      "solution": "native_macro",
+      "test_assertion": "Generated audio import failed"
     },
     {
       "id": "PROJECT-100",
@@ -1530,8 +1561,9 @@
         "generate_image"
       ],
       "gap": "",
-      "test": "integrations/tiiny/tests/check_chat_multicall_live.py",
-      "solution": "native_macro"
+      "test": "integrations/tiiny/tests/editor_asset_pipeline.gd",
+      "solution": "native_macro",
+      "test_assertion": "Producer artifact was not preserved after failure"
     }
   ]
 }

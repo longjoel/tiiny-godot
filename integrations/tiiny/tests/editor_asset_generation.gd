@@ -115,6 +115,20 @@ func _run() -> void:
 	var speech_stream: Variant = ResourceLoader.load(speech_path, "", ResourceLoader.CACHE_MODE_REUSE)
 	if not speech_stream is AudioStream or speech_stream.get_length() <= 0:
 		_fail("Speech artifact did not import as a playable AudioStream: " + speech_path); return
+	EditorInterface.open_scene_from_path("res://speech_scene.tscn")
+	if not await _wait_for(func(): return EditorInterface.get_edited_scene_root() != null and EditorInterface.get_edited_scene_root().scene_file_path == "res://speech_scene.tscn", 15000):
+		_fail("Speech scene did not open"); return
+	if not dock.call("_ensure_workspace_registry"):
+		_fail("Workspace transactions are unavailable for speech attachment"); return
+	var transactions: RefCounted = dock.get("workspace_transactions")
+	if transactions == null:
+		_fail("Workspace transactions are missing"); return
+	var attach: Dictionary = transactions.execute("import_generated_audio", {"path": speech_path, "player_name": "GeneratedSpeech"})
+	var speech_root := EditorInterface.get_edited_scene_root()
+	var player := speech_root.get_node_or_null("GeneratedSpeech") as AudioStreamPlayer
+	if not attach.get("ok", false) or player == null or player.stream == null or player.stream.resource_path != speech_path:
+		_fail("Generated speech was not attached to an audio player: " + str(attach)); return
+	print("Live generated speech to audio player passed: ", speech_path)
 	print("Live speech asset passed: ", speech_path, " duration=", speech_stream.get_length())
 	if not speech_result.attempts.back().get("device_confirmed", false):
 		_fail("Speech job did not record a confirmed device request"); return

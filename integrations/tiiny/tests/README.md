@@ -7,6 +7,7 @@ cover the story 02 acceptance scenarios):
 mkdir -p /tmp/tiiny-job-test
 TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_queue.gd
 TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_executor.gd
+bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_live_turn_wait.gd
 TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_job_publication.gd
 TIINY_QUEUE_TEST_DIR=/tmp/tiiny-job-test bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_tree_worker.gd
 python3 integrations/tiiny/tests/check_job_process.py
@@ -15,7 +16,12 @@ python3 integrations/tiiny/tests/check_builtin_jobs.py
 python3 integrations/tiiny/tests/check_resource_http.py
 python3 integrations/tiiny/tests/check_workspace_inspector.py
 python3 integrations/tiiny/tests/check_workspace_transactions.py
+python3 integrations/tiiny/tests/check_workspace_tools.py
+python3 integrations/tiiny/tests/check_workspace_bakeoff.py
+python3 integrations/tiiny/tests/check_workspace_displayed.py
+python3 integrations/tiiny/tests/check_workspace_coding_live.py
 python3 integrations/tiiny/tests/check_workspace_live.py
+bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_workspace_tools.gd
 bin/godot.linuxbsd.editor.x86_64 --headless --path . --script integrations/tiiny/tests/test_workspace_inspector.gd
 ```
 
@@ -43,7 +49,7 @@ device-uncertain interruption blocks the lease, can be abandoned with the
 recorded uncertainty released, and is not replayed. A `chat_protocol` mode
 verifies that a completed HTTP response rejected for multiple tool calls ends
 as a confirmed failure and releases the device lease instead of becoming an
-interrupted device job. Resource checks
+interrupted device job. Story 20 adds `chat_chain` (a three-step turn with two tool rounds, restored counters, and duplicate-response rejection) and a `chat_chain_prepare`/`chat_chain_restore` pair that persists a continuation's turn state across an editor restart. Resource checks
 cover FIFO ordering, callback after commit, cancellation and a late response;
 the focused HTTP check opens a loopback-only fixture, answers automatic
 classification, and verifies that a stale device snapshot revalidates inside a
@@ -87,9 +93,13 @@ The resource HTTP fixture also checks story 09's image path: the generated PNG m
 
 Story 09 adds live coverage with `check_chat_multicall_live.py`: the configured downloaded `Tongyi-MAI/Z-Image-Turbo` is loaded on demand, a soccer-ball image is generated/imported, the configured warm set is restored, and `add_sprite_from_image` creates a `SoccerBall` Sprite2D. The generated texture is captured at `/tmp/tiiny-live-sprite.png`.
 
-`check_task_catalog.py` validates `plan/task-catalog.json` v2 and reports coverage for 100 common 2D/3D/project tasks. It checks unique IDs/prompts, solution classes, status consistency, tool existence against 36 embedded tools, and test references for every supported task. Current result: 100 tasks, 40 supported / 60 partial / 0 specialized-missing, 40/40 supported tasks with tests; solution classes are native_macro 30, composed_primitives 56, script_behavior 14, specialized_missing 0. The 60 partial tasks are composed/script workflows still lacking focused per-task tests. Report: `/tmp/tiiny-task-coverage-v2.json`; table: `plan/TASK_CATALOG.md`.
+`check_task_catalog.py` validates `plan/task-catalog.json` v2 and reports coverage for 100 common 2D/3D/project tasks. It checks unique IDs/prompts, solution classes, status consistency, tool existence against the embedded tool surface, a test reference for every supported task, and a task-specific `test_assertion` that must appear in that test file. Current result: 100 tasks, 32 supported / 68 partial / 0 specialized-missing, 32/32 supported tasks with a present assertion; solution classes are native_macro 30, composed_primitives 56, script_behavior 14, specialized_missing 0. Story 19 reclassified 2D-006, 2D-044, 3D-082, and 3D-083 to partial after auditing their assertions against the prompt. Report: `/tmp/tiiny-task-coverage.json`; table: `plan/TASK_CATALOG.md`.
 
 Story 10 adds `Planner.schedule` offline assertions for coding-model protection, eligible eviction, restore actions, already-loaded no-op, and capacity/disk/unknown rejection. The Jobs suite adds `model_schedule` (evict → load → restore with four verified operations), `model_schedule_capacity` (no mutation, clear retained-coding error), `model_schedule_restore` (failure and cancellation restoration), and `model_schedule_disconnect` (same-key dedupe, explicit resolve/resume, recovered schedule).
+
+The `model_preflight_stale` and `model_resource_preflight_stale` Jobs fixtures verify that a stale snapshot is refreshed before attempting restoration: an already-warm compatible coding model can serve the job without an applied configuration or any load command. The `test_live_turn_wait.gd` fixture checks that the live trace follows continuation jobs and rejects a failed final step; it does not contact the device.
+
+`check_asset_pipeline.py` also covers assistant-submitted image jobs with on-demand loading: successful generation/restoration, restoration after a known HTTP failure, preserved image plus interrupted recovery when restoration is uncertain, no restoration after an uncertain image request, and cancellation during model loading. `check_managed_image_planner.py` exercises the production planner and device journal with fake transport, including eviction and restoration of another warm model. These fixtures do not contact Tiiny; automatic handoff from `generate_image` remains unfinished.
 
 Story 11 adds transaction-fixture coverage for native torch-flicker animation (light discovery, value track path/keys, `tiiny/flicker` library/autoplay, preserved existing animations, undo/redo, missing-light rejection) and slippery PhysicsMaterial assignment (values, shared-material preservation and explicit replacement summary, undo/redo, non-physics rejection). The registry payload must advertise both recipes.
 
@@ -104,6 +114,8 @@ Story 14 adds `apply_editor_transaction`: bounded typed create/set/resource/assi
 Story 15 adds `attach_script` to `apply_editor_transaction` and an explicit `save_edited_scene` file tool. The transaction fixture attaches a script with undo/redo, saves without adding a fake undo entry, reloads the scene, and verifies persistence. Live behavior evidence remains the velocity/spin script edits.
 
 Story 17 adds TileMapLayer, GridMap, AnimatedSprite2D, theme/font, audio loop/bus, NavigationRegion3D, AnimationTree/playback, Trail3D, 3D weather, particles, imported-mesh collision, and mesh-quality validation; the transaction fixture covers structure, typed properties, and undo/redo.
+
+Story 18 adds `check_workspace_tools.py` (pure and editor fixtures) for root confinement, symlinks, binary/large reads, bounded searches, hash-guarded atomic writes, commit-time rechecks, creation/move/delete approval, patch conflicts, GDScript validation, git denied-path/credential filtering, headless and shell timeouts/output caps/process-group cleanup, all-open-scene dirty checks, explicit discard approval, mode payload filtering, and file-change action cards. Story 19 adds deterministic interleavings for write, patch, create, move, and delete, including changes during approval and destinations appearing at commit time. `check_workspace_displayed.py` captures the workspace and hybrid mode labels in a real X11 editor (`/tmp/tiiny-story18-mode-*.png`). `check_workspace_bakeoff.py` solves 10 fixed tasks once through workspace files and once through typed editor tools, verifies all 20 results, records times/review effort, and checks stale-write and undo/redo recovery. These are fixed solutions, not a live-model planning rate. `check_workspace_coding_live.py` is a gated real-device trace: the warm coding model edits a script in workspace mode, then creates a Label through a hybrid typed transaction; it records one tool-choice trace, not a success rate. See [story 18 acceptance](../../../plan/evidence/18-acceptance.md).
 
 `check_jobs_displayed.py` launches a displayed X11 editor and captures `/tmp/tiiny-jobs-displayed.png` after a completed `create_tree` job, verifying the Jobs dock is visible with its queued/running/attention/completed/failed columns and card.
 

@@ -1,6 +1,6 @@
 # Story 18 implementation plan — workspace coding tools and hybrid mode
 
-Status: Ready to start. No implementation yet.
+Status: Accepted. Slices A–E are implemented and verified by the pure, editor, displayed, and fixed-solution bake-off fixtures; live-model coding-mode evaluation remains separate. See [acceptance evidence](../evidence/18-acceptance.md).
 
 Parent: [18 — Workspace coding tools and hybrid mode](../work-items/18-workspace-coding-tools.md).
 

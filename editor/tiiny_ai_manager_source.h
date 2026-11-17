@@ -30,6 +30,7 @@ var device_lease_owner: Node
 var connection_identity := ""
 var last_error_type := ""
 var model_job_id := ""
+var external_model_job_id := ""
 var model_job_result: Dictionary = {}
 var model_job_cancelled := false
 var model_job_checkpoint_failed := false
@@ -37,6 +38,7 @@ var next_restore_check_msec := 0
 var current_operation: Dictionary = {}
 var current_progress := 0.0
 var last_operation_failed := false
+var last_busy_report_msec := 0
 
 # The SDK emits a terminal UI. Keep only reported percentages, never terminal
 # escape sequences or arbitrary CLI text, when forwarding progress to Output.
@@ -290,8 +292,9 @@ func _process(_delta: float) -> void:
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 	if service == null or not service.get("available") or service.get("queue") == null: return
 	for job in service.queue.snapshot().jobs:
+		if job.state == "running": return
 		if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false): return
-	_refresh_snapshot(true)
+	_refresh_snapshot(true, true)
 
 static func _valid_saved_draft(saved: Variant) -> bool:
 	if not saved is Dictionary or not saved.get("roles") is Dictionary or not saved.get("extra_warm") is Array: return false
@@ -443,6 +446,13 @@ func _report(text: String) -> void:
 	log_message.emit("Tiiny models: " + text, 0)
 	changed.emit()
 
+func _report_busy() -> void:
+	var now := Time.get_ticks_msec()
+	if now - last_busy_report_msec < 5000:
+		return
+	last_busy_report_msec = now
+	_report("Tiiny is busy with another request; try again when it finishes.")
+
 func _acquire_device(purpose: String) -> bool:
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 	if service == null or not service.has_method("acquire_device"):
@@ -535,6 +545,11 @@ func _fetch_snapshot() -> Dictionary:
 func refresh_device(keep_plan := false) -> void:
 	await _refresh_snapshot(keep_plan)
 
+# A job preflight refreshes observed state before considering restoration. It
+# must not enqueue another restore behind the job currently occupying FIFO.
+func refresh_for_preflight() -> void:
+	await _refresh_snapshot(true, true, false)
+
 # Inference needs a recent device snapshot. Revalidate automatically rather than
 # requiring a manual Refresh, while leaving a pending Check Config plan intact.
 func ensure_ready() -> bool:
@@ -545,10 +560,11 @@ func ensure_ready() -> bool:
 	await _refresh_snapshot(true)
 	return is_ready()
 
-func _refresh_snapshot(keep_plan: bool) -> void:
+func _refresh_snapshot(keep_plan: bool, quiet := false, schedule_restore := true) -> void:
 	if busy: return
 	if not _acquire_device("refresh models"):
-		_report("Tiiny is busy or the Jobs service is unavailable.")
+		if not quiet:
+			_report_busy()
 		return
 	busy = true
 	if not keep_plan: plan = {}
@@ -568,7 +584,8 @@ func _refresh_snapshot(keep_plan: bool) -> void:
 		return
 	_initialize_draft_from_snapshot()
 	_report("Device data refreshed. Choose changes, then Check Config.")
-	_schedule_coding_restore()
+	if schedule_restore:
+		_schedule_coding_restore()
 
 func _saved_coding_model() -> String:
 	var settings := EditorInterface.get_editor_settings()
@@ -642,7 +659,7 @@ func _schedule_coding_restore() -> void:
 func check_config() -> void:
 	if busy: return
 	if not _acquire_device("check models"):
-		_report("Tiiny is busy or the Jobs service is unavailable.")
+		_report_busy()
 		return
 	busy = true
 	plan = {}
@@ -717,7 +734,7 @@ func poll_model_job(job: Dictionary) -> Dictionary:
 	return model_job_result
 
 func cancel_model_job(id: String) -> bool:
-	if model_job_id == id:
+	if not id.is_empty() and (model_job_id == id or external_model_job_id == id):
 		model_job_cancelled = true
 		stop_cli()
 		return true
@@ -1029,7 +1046,7 @@ func ensure_model_loaded_for_job(role: String, model: String, job_id: String, ow
 		return {"ok": false, "error": "Cannot load %s alongside the coding model: %s" % [model, " ".join(plan.errors)]}
 	var executed := await _run_scheduled_actions(plan.temporary, identity, "Loading " + model, false, job_id, token, owner)
 	if not executed.get("ok", false):
-		return {"ok": false, "error": str(executed.get("error", "Could not load " + model)), "uncertain": bool(executed.get("uncertain", false))}
+		return {"ok": false, "error": str(executed.get("error", "Could not load " + model)), "uncertain": bool(executed.get("uncertain", false)), "changed": bool(executed.get("changed", false)), "identity": identity}
 	return {"ok": true, "already_loaded": false, "identity": identity, "saved": saved, "active": active}
 
 func restore_configured_set_for_job(identity: String, job_id: String, owner: Object, token: String) -> Dictionary:
@@ -1295,7 +1312,7 @@ func _run_cli(arguments: Array) -> int:
 	var device: String = connection.base.trim_prefix("http://").trim_prefix("[").trim_suffix("]")
 	var parts := PackedStringArray([_shell_quote(str(settings.get_setting("tiiny_ai/advanced/cli_path"))), "--device-address", _shell_quote(device), "-y"])
 	for arg in arguments: parts.append(_shell_quote(str(arg)))
-	var command := ["--signal=TERM", "--kill-after=5s", "3600s", "script", "-q", "-e", "-c", " ".join(parts), "/dev/null"]
+	var command := ["--signal=TERM", "--kill-after=5s", "86400s", "script", "-q", "-e", "-c", " ".join(parts), "/dev/null"]
 	var process := OS.execute_with_pipe("timeout", PackedStringArray(command), false)
 	if process.is_empty(): return ERR_CANT_FORK
 	process_id = int(process.pid)
@@ -1305,7 +1322,7 @@ func _run_cli(arguments: Array) -> int:
 	var reader := ProgressReader.new()
 	var next_poll := operation_started
 	var last_percent := -1.0
-	var stall_threshold := 120.0
+	var stall_threshold := 900.0
 	var stall_start := 0.0
 	var stalled := false
 	while process_id == running_id and OS.is_process_running(running_id):
@@ -1795,7 +1812,11 @@ class ConfigurationPanel extends VBoxContainer:
 	func _choose_model(role: String, id: String) -> void:
 		var config: Dictionary = manager.draft.duplicate(true)
 		config.roles[role].model = id
-		if role == "coding_model": config.roles[role].context = mini(8192, int(manager.snapshot.models.get(id, {}).get("max_context", 0)))
+		if role == "coding_model":
+			var max_context := int(manager.snapshot.models.get(id, {}).get("max_context", 0))
+			# Default to the model's full context rather than a small 8192 cap;
+			# the user can lower it explicitly if they need a smaller request.
+			config.roles[role].context = maxi(2048, max_context) if max_context > 0 else 8192
 		manager.update_draft(config)
 
 	func _choose_context(role: String, count: int) -> void:

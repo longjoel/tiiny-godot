@@ -30,8 +30,10 @@ var details_text: TextEdit
 var summary: Label
 var pause_button: Button
 var cancel_button: Button
+var acknowledge_button: Button
 var recovery_dialog: AcceptDialog
 var abandon_dialog: ConfirmationDialog
+var acknowledge_dialog: ConfirmationDialog
 var abandon_id := ""
 var elapsed_update := 0.0
 var card_signature := ""
@@ -49,13 +51,16 @@ var inspecting_model_job := ""
 
 class ChatWorker extends RefCounted:
 	var chat: WeakRef
+	var validator: Callable
 	var job: Dictionary
 	var polled := false
 	var cancelled_before_start := false
 	var preflight_done := false
 	var preflight_cancelled := false
-	func _init(owner: Node) -> void:
+	var preflight_refresh_attempted := false
+	func _init(owner: Node, p_validator: Callable) -> void:
 		chat = weakref(owner)
+		validator = p_validator
 	func start(value: Dictionary) -> String:
 		job = value.duplicate(true)
 		return ""
@@ -71,6 +76,14 @@ class ChatWorker extends RefCounted:
 			if manager == null or not manager.has_method("poll_model_preflight"):
 				owner.cancel_pending_chat()
 				return {"state": "failed", "result": {"error": "Tiiny model manager is unavailable"}}
+			if not preflight_refresh_attempted and manager.has_method("refresh_for_preflight"):
+				if manager.busy or manager.applying:
+					return {"state": "running", "stage": "Waiting for Tiiny"}
+				preflight_refresh_attempted = true
+				manager.refresh_for_preflight()
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
+			if manager.busy and str(manager.model_job_id).is_empty():
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
 			var ready: Dictionary = manager.poll_model_preflight(job)
 			if ready.get("state") == "running": return ready
 			if ready.get("state") != "completed" or preflight_cancelled:
@@ -109,6 +122,7 @@ class ResourceWorker extends RefCounted:
 	var cancelled_before_start := false
 	var preflight_done := false
 	var preflight_cancelled := false
+	var preflight_refresh_attempted := false
 	func _init(owner: Node) -> void:
 		chat = weakref(owner)
 	func start(value: Dictionary) -> String:
@@ -124,6 +138,14 @@ class ResourceWorker extends RefCounted:
 			var manager: Node = owner.get_tree().get_first_node_in_group("tiiny_setup_manager")
 			if manager == null or not manager.has_method("poll_model_preflight"):
 				return owner._resource_job_error("failed", "Tiiny model manager is unavailable")
+			if not preflight_refresh_attempted and manager.has_method("refresh_for_preflight"):
+				if manager.busy or manager.applying:
+					return {"state": "running", "stage": "Waiting for Tiiny"}
+				preflight_refresh_attempted = true
+				manager.refresh_for_preflight()
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
+			if manager.busy and str(manager.model_job_id).is_empty():
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
 			var ready: Dictionary = manager.poll_model_preflight(job)
 			if ready.get("state") == "running": return ready
 			if ready.get("state") != "completed" or preflight_cancelled:
@@ -155,11 +177,13 @@ class ResourceWorker extends RefCounted:
 
 class AssetWorker extends RefCounted:
 	var chat: WeakRef
+	var validator: Callable
 	var job: Dictionary
 	var polled := false
 	var cancelled_before_start := false
-	func _init(owner: Node) -> void:
+	func _init(owner: Node, p_validator: Callable) -> void:
 		chat = weakref(owner)
+		validator = p_validator
 	func start(value: Dictionary) -> String:
 		job = value.duplicate(true)
 		return ""
@@ -173,6 +197,11 @@ class AssetWorker extends RefCounted:
 		var result: Dictionary = owner.poll_asset_job(job)
 		if result.get("state") == "completed" and not owner.confirm_device_success(job.id):
 			return {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
+		if result.get("state") == "completed" and job.parameters.has("chat_handoff"):
+			var continuation: Dictionary = owner.prepare_image_tool_successor(job, result.get("result", {}))
+			if continuation.is_empty():
+				return {"state": "failed", "result": {"error": "Image was generated, but the turn continuation could not be prepared.", "artifact": result.get("result", {}).get("artifact", "")}}
+			result["continuation"] = continuation
 		return result
 	func cancel() -> void:
 		var owner: Object = chat.get_ref()
@@ -261,6 +290,12 @@ func _build_ui() -> void:
 	cancel_button.text = "Cancel current"
 	cancel_button.pressed.connect(_on_cancel)
 	actions.add_child(cancel_button)
+	acknowledge_button = Button.new()
+	acknowledge_button.text = "Acknowledge device"
+	acknowledge_button.tooltip_text = "Clear an uncertain device record left by another project after confirming its remote outcome is unknown."
+	acknowledge_button.pressed.connect(_on_acknowledge_device)
+	acknowledge_button.visible = false
+	actions.add_child(acknowledge_button)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	actions.add_child(spacer)
@@ -339,6 +374,11 @@ func _build_ui() -> void:
 	abandon_dialog.ok_button_text = "Abandon job"
 	abandon_dialog.confirmed.connect(_on_abandon_confirmed)
 	add_child(abandon_dialog)
+	acknowledge_dialog = ConfirmationDialog.new()
+	acknowledge_dialog.title = "Acknowledge uncertain device record"
+	acknowledge_dialog.ok_button_text = "Clear device record"
+	acknowledge_dialog.confirmed.connect(_on_acknowledge_confirmed)
+	add_child(acknowledge_dialog)
 
 func _validate(operation: String, parameters: Dictionary) -> String:
 	if operation == "model_restore":
@@ -364,12 +404,27 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 		return ""
 	if operation == "asset_generate":
 		for key in parameters:
-			if str(key) not in ["kind", "model", "connection_hash", "timeout_ms", "image_path", "stage", "text", "voice"]:
+			if str(key) not in ["kind", "model", "connection_hash", "timeout_ms", "image_path", "image_artifact_id", "stage", "text", "voice", "manage_model", "chat_handoff"]:
 				return "Invalid asset-generation request"
-		if not parameters.get("kind") in ["image_to_3d", "speech"] or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.connection_hash.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
+		if parameters.has("manage_model") and (not parameters.manage_model is bool or parameters.get("kind") != "image"):
+			return "Automatic model scheduling is only available for image generation"
+		if parameters.has("chat_handoff"):
+			var handoff: Variant = parameters.chat_handoff
+			if parameters.get("kind") != "image" or not handoff is Dictionary or handoff.size() != 3 or not handoff.get("chat") is Dictionary or not handoff.chat.has("turn") or not handoff.get("call") is Dictionary or not handoff.get("remaining") is Array:
+				return "Invalid image turn handoff"
+			if not _validate_chat(handoff.chat).is_empty() or not _valid_pending_calls([handoff.call] + handoff.remaining):
+				return "Invalid image turn handoff"
+			if handoff.call.name != "generate_image" or handoff.call.arguments.get("prompt") != parameters.get("text") or handoff.call.id not in handoff.chat.turn.calls:
+				return "Image turn handoff does not match the request"
+			for pending in handoff.remaining:
+				if pending.id in handoff.chat.turn.calls: return "Pending tool call was already executed"
+			if JSON.stringify(parameters).to_utf8_buffer().size() > 24 * 1024 * 1024: return "Image turn handoff is too large"
+		if not parameters.get("kind") in ["image", "image_to_3d", "speech"] or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.connection_hash.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
 			return "Invalid asset-generation request"
 		if parameters.kind == "image_to_3d":
-			if not parameters.get("image_path") is String or str(parameters.image_path).strip_edges().is_empty() or not parameters.get("stage") in ["shape", "both"]:
+			var has_path := parameters.get("image_path") is String and not str(parameters.image_path).strip_edges().is_empty()
+			var has_artifact := parameters.get("image_artifact_id") is String and str(parameters.image_artifact_id).ends_with(":image") and str(parameters.image_artifact_id).length() <= 128 and str(parameters.image_artifact_id).length() > 6
+			if has_path == has_artifact or not parameters.get("stage") in ["shape", "both"]:
 				return "Invalid image-to-3D request"
 		elif not parameters.get("text") is String or str(parameters.text).strip_edges().is_empty() or str(parameters.text).length() > 10000:
 			return "Invalid speech request"
@@ -377,7 +432,7 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 			return "Invalid speech voice"
 		return ""
 	if operation == "resource_shape":
-		if parameters.size() != 4 or not parameters.get("description") is String or parameters.description.strip_edges().is_empty() or parameters.description.length() > 100000 or not parameters.get("model") is String or parameters.model.is_empty() or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 3600000:
+		if parameters.size() != 4 or not parameters.get("description") is String or parameters.description.strip_edges().is_empty() or parameters.description.length() > 100000 or not parameters.get("model") is String or parameters.model.is_empty() or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 0 or parameters.timeout_ms > 86400000:
 			return "Invalid resource-generation request"
 		return ""
 	if operation == "chat_turn":
@@ -414,7 +469,7 @@ func _validate_tree_path(path: Variant) -> String:
 
 func _validate_chat(parameters: Dictionary) -> String:
 	var strings := ["prompt", "context", "custom_prompt", "model", "connection_hash"]
-	if parameters.size() != 7:
+	if parameters.size() not in [7, 8]:
 		return "Invalid chat job parameters"
 	for key in strings:
 		if not parameters.get(key) is String:
@@ -423,11 +478,46 @@ func _validate_chat(parameters: Dictionary) -> String:
 		return "Invalid chat request"
 	if not parameters.get("conversation") is Array:
 		return "Invalid chat context"
-	if not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 3600000:
+	if not parameters.get("timeout_ms") is int or parameters.timeout_ms < 0 or parameters.timeout_ms > 86400000:
 		return "Invalid time limit"
+	if parameters.has("turn"):
+		var turn: Variant = parameters.turn
+		if not turn is Dictionary or turn.size() not in [10, 11, 12]:
+			return "Invalid turn state"
+		for key in ["id", "system"]:
+			if not turn.get(key) is String:
+				return "Invalid turn state"
+		if str(turn.id).is_empty() or str(turn.id).length() > 128:
+			return "Invalid turn state"
+		if not turn.get("step") is int and not turn.get("step") is float:
+			return "Invalid turn state"
+		if int(turn.step) < 1 or int(turn.step) > 1000:
+			return "Invalid turn state"
+		if not turn.get("messages") is Array or not turn.get("calls") is Array or not turn.get("ledger") is Array:
+			return "Invalid turn state"
+		if (not turn.get("rounds") is int and not turn.get("rounds") is float) or (not turn.get("count") is int and not turn.get("count") is float):
+			return "Invalid turn state"
+		if not turn.get("failed") is Dictionary or not turn.get("scene") is Dictionary:
+			return "Invalid turn state"
+		if turn.has("truncations") and not turn.get("truncations") is int and not turn.get("truncations") is float:
+			return "Invalid turn state"
+		if turn.has("pending_calls") and (not turn.pending_calls is Array or not _valid_pending_calls(turn.pending_calls)):
+			return "Invalid pending tool calls"
+		if turn.has("pending_calls"):
+			for pending in turn.pending_calls:
+				if pending.id in turn.calls: return "Pending tool call was already executed"
 	if JSON.stringify(parameters).to_utf8_buffer().size() > 24 * 1024 * 1024:
 		return "Chat context is too large to queue"
 	return ""
+
+func _valid_pending_calls(calls: Array) -> bool:
+	if calls.size() > 16: return false
+	var seen := {}
+	for call in calls:
+		if not call is Dictionary or call.size() != 3 or not call.get("id") is String or str(call.id).is_empty() or str(call.id).length() > 128 or not call.get("name") is String or str(call.name).is_empty() or str(call.name).length() > 128 or not call.get("arguments") is Dictionary or seen.has(call.id):
+			return false
+		seen[call.id] = true
+	return true
 
 func _validate_attachment(parameters: Dictionary) -> String:
 	if parameters.size() != 6:
@@ -463,6 +553,11 @@ func append_job(key: String, operation: String, parameters: Dictionary) -> Dicti
 		var producer: Dictionary = get_job_status(producer_id)
 		if producer.get("operation") != "create_tree":
 			return {"error": "Artifact must reference an accepted tree job"}
+	if operation == "asset_generate" and parameters.get("kind") == "image_to_3d" and parameters.get("image_artifact_id") is String:
+		var producer_id: String = parameters.image_artifact_id.trim_suffix(":image")
+		var producer: Dictionary = get_job_status(producer_id)
+		if producer.get("operation") != "asset_generate" or producer.get("parameters", {}).get("kind") != "image":
+			return {"error": "Artifact must reference an accepted image-generation job"}
 	var result: Dictionary = queue.append(key, operation, parameters, _validate)
 	if result.has("id"):
 		log_message.emit("Job %s accepted at position %d." % [result.id, result.sequence], 0)
@@ -536,12 +631,13 @@ func confirm_model_operations(owner: Object, token: String, id: String) -> bool:
 	if not _owns_device(owner, token): return false
 	var marker := _device_marker()
 	if marker.get("state") == "idle": return true
-	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id: return false
+	if marker.get("state") != "uncertain" or marker.get("project") != root_path or marker.get("job") != id or marker.get("verb") not in ["download", "load", "unload"]: return false
 	var job := get_job_status(id)
 	if job.get("state") != "running" or job.get("attempts", []).is_empty(): return false
 	var operations: Array = job.attempts.back().get("device_operations", [])
 	if operations.is_empty() or operations.back().get("state") != "verified": return false
-	return device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"}))
+	if not device_process_lock.commit(JSON.stringify({"schema": 1, "state": "idle"})): return false
+	return queue.confirm_device_request(id)
 
 # The user has explicitly acknowledged an uncertain outcome. The marker must
 # match this project and job; a different project's uncertainty is untouched.
@@ -560,6 +656,40 @@ func acknowledge_model_uncertainty(id: String) -> bool:
 	var ok: bool = marker.get("state") == "idle" or (marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id and lock.commit(JSON.stringify({"schema": 1, "state": "idle"})))
 	if temporary: lock.release()
 	return ok
+
+# Clear an uncertain record left by another project. The owning project's queue
+# is not available here, so this is an explicit user acknowledgement rather than
+# a job resolution. It never claims the remote operation stopped.
+func acknowledge_foreign_device_marker() -> bool:
+	var marker := _device_marker()
+	if marker.get("state") == "idle": return true
+	if marker.get("state") != "uncertain": return false
+	var lock: RefCounted = device_process_lock
+	var temporary := false
+	if lock == null:
+		lock = ClassDB.instantiate("TiinyJobStorage")
+		if lock == null or not lock.acquire(device_lock_path): return false
+		temporary = true
+	marker = _device_marker()
+	var ok: bool = marker.get("state") == "idle" or (marker.get("state") == "uncertain" and lock.commit(JSON.stringify({"schema": 1, "state": "idle"})))
+	if temporary: lock.release()
+	return ok
+
+func _on_acknowledge_device() -> void:
+	var marker := _device_marker()
+	if marker.get("state") != "uncertain":
+		_refresh()
+		return
+	acknowledge_dialog.dialog_text = "The shared device record is uncertain for %s (job %s, %s). Another project may have left an inference or model operation unfinished.\n\nClearing it allows new device work, but the remote outcome will not be recovered. Check the device before continuing. Clear the record?" % [str(marker.get("project", "")), str(marker.get("job", "")), str(marker.get("verb", ""))]
+	acknowledge_dialog.popup_centered()
+
+func _on_acknowledge_confirmed() -> void:
+	if not acknowledge_foreign_device_marker():
+		summary.text = "Could not clear the shared device record."
+		_refresh()
+		return
+	log_message.emit("Cleared an uncertain device record after explicit acknowledgement.", 0)
+	_refresh()
 
 # Recovery may read the matching device while the ordinary lease is blocked.
 # This restricted lease cannot begin a model command or clear the marker.
@@ -630,9 +760,9 @@ func _make_worker(job: Dictionary) -> RefCounted:
 	if job.operation == "resource_shape":
 		return ResourceWorker.new(chat_service) if is_instance_valid(chat_service) else null
 	if job.operation == "asset_generate":
-		return AssetWorker.new(chat_service) if is_instance_valid(chat_service) else null
+		return AssetWorker.new(chat_service, _validate) if is_instance_valid(chat_service) else null
 	if job.operation == "chat_turn":
-		return ChatWorker.new(chat_service) if is_instance_valid(chat_service) else null
+		return ChatWorker.new(chat_service, _validate) if is_instance_valid(chat_service) else null
 	if job.operation == "attach_tree_to_scene":
 		return attach_script.new(queue, root_path)
 	if job.operation != "create_tree":
@@ -726,7 +856,10 @@ func _job_title(job: Dictionary) -> String:
 	if job.operation == "asset_generate":
 		return label + " — " + str(job.parameters.get("kind", "asset")) + " " + str(job.parameters.get("model", ""))
 	if job.operation == "chat_turn":
-		return label + " — " + _preview(job.parameters.get("prompt", ""), 90)
+		var step := ""
+		if job.parameters.get("turn") is Dictionary:
+			step = " (step %d)" % int(job.parameters.turn.get("step", 1))
+		return label + " — " + _preview(job.parameters.get("prompt", ""), 90) + step
 	if job.operation == "resource_shape":
 		return label + " — " + _preview(job.parameters.get("description", ""), 90)
 	if job.operation == "create_tree":
@@ -862,6 +995,14 @@ func _on_cancel_queued_all() -> void:
 			queue.cancel_queued(job.id)
 	_refresh()
 
+func _skip_with_tool_result(job: Dictionary, decision: String) -> bool:
+	if job.get("operation") == "asset_generate" and job.get("parameters", {}).has("chat_handoff"):
+		if not is_instance_valid(chat_service) or not chat_service.has_method("prepare_image_tool_successor"):
+			return false
+		var continuation: Dictionary = chat_service.prepare_image_tool_successor(job, job.get("result", {}), true, decision == "abandon")
+		return not continuation.is_empty() and queue.skip_with_successor(str(job.id), decision, "chat_turn", continuation, _validate)
+	return queue.abandon(str(job.id)) if decision == "abandon" else queue.resolve(str(job.id), "skip")
+
 func _on_clear_job(id: String) -> void:
 	if not available:
 		return
@@ -872,11 +1013,25 @@ func _on_clear_job(id: String) -> void:
 		if queue.hide(id):
 			_refresh()
 		return
-	if job.state in ["failed", "cancelled"] and not queue.resolve(id, "skip"):
-		return
+	if job.state in ["failed", "cancelled"]:
+		var marker := _device_marker()
+		if marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == id:
+			if not acknowledge_model_uncertainty(id):
+				summary.text = "Could not clear the shared device record."
+				_refresh()
+				return
+		if not _skip_with_tool_result(job, "skip"):
+			return
 	if not queue.hide(id):
 		return
+	_resume_if_queued()
 	_refresh()
+
+func _resume_if_queued() -> void:
+	for job in queue.snapshot().jobs:
+		if job.state == "queued":
+			queue.set_paused(false)
+			return
 
 func _on_clear_completed() -> void:
 	if not available:
@@ -891,8 +1046,18 @@ func _on_clear_failed() -> void:
 		if job.state == "cancelled" and job.attempts.is_empty():
 			queue.hide(job.id)
 		elif job.state in ["failed", "cancelled"]:
-			queue.resolve(job.id, "skip")
+			var marker := _device_marker()
+			if marker.get("state") == "uncertain" and marker.get("project") == root_path and marker.get("job") == job.id:
+				if not acknowledge_model_uncertainty(job.id):
+					summary.text = "Could not clear the shared device record."
+					_refresh()
+					return
+			if not _skip_with_tool_result(job, "skip"):
+				summary.text = "Could not preserve a failed tool result."
+				_refresh()
+				return
 	queue.hide_state("skipped")
+	_resume_if_queued()
 	_refresh()
 
 func _on_skip_job(id: String) -> void:
@@ -920,7 +1085,7 @@ func _on_abandon_confirmed() -> void:
 		summary.text = "Could not acknowledge the shared device recovery record."
 		_refresh()
 		return
-	if not queue.abandon(id):
+	if not _skip_with_tool_result(job, "abandon"):
 		summary.text = "Could not abandon the interrupted job."
 		_refresh()
 		return
@@ -965,6 +1130,17 @@ func _on_check_job(id: String) -> void:
 func refresh_board() -> void:
 	_refresh()
 
+func is_paused() -> bool:
+	return available and bool(queue.snapshot().paused)
+
+func is_stopped() -> bool:
+	return available and not str(queue.snapshot().stop_reason).is_empty()
+
+func resume() -> bool:
+	if not available:
+		return false
+	return queue.set_paused(false)
+
 func _refresh() -> void:
 	if not available:
 		return
@@ -977,6 +1153,9 @@ func _refresh() -> void:
 		summary.text = "Tiiny requires review in %s (job %s)." % [marker.project, marker.job]
 	elif not stopped and not running and marker.get("state") == "invalid":
 		summary.text = "Tiiny recovery record is unreadable; device access is stopped."
+	if is_instance_valid(acknowledge_button):
+		acknowledge_button.visible = marker.get("state") == "uncertain"
+		acknowledge_button.disabled = not stopped and running
 	pause_button.text = "Resume" if state.paused else "Pause"
 	pause_button.disabled = stopped
 	cancel_button.disabled = not running
@@ -1007,6 +1186,8 @@ func _job_details_text(id: String) -> String:
 	if job.operation == "chat_turn":
 		lines.append("Prompt: " + _preview(job.parameters.get("prompt", "")))
 		lines.append("Model: " + str(job.parameters.get("model", "")))
+		if job.get("result", {}).has("reasoning"):
+			lines.append("Reasoning:\n" + str(job.result.reasoning))
 	elif job.operation == "resource_shape":
 		lines.append("Description: " + _preview(job.parameters.get("description", "")))
 		lines.append("Model: " + str(job.parameters.get("model", "")))
@@ -1025,6 +1206,7 @@ func _job_details_text(id: String) -> String:
 		lines.append("Kind: " + str(job.parameters.get("kind", "")))
 		lines.append("Model: " + str(job.parameters.get("model", "")))
 		if job.parameters.has("image_path"): lines.append("Reference: " + str(job.parameters.image_path))
+		if job.parameters.has("image_artifact_id"): lines.append("Image artifact: " + str(job.parameters.image_artifact_id))
 		if job.parameters.has("text"): lines.append("Text: " + _preview(job.parameters.text))
 	if _is_abandonable(job):
 		lines.append("Remote outcome: unknown. Skip abandons this job and releases the device lease.")

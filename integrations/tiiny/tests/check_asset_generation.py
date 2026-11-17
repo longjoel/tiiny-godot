@@ -21,6 +21,7 @@ def make_project(project: Path) -> None:
     (addon / "plugin.cfg").write_text(
         '[plugin]\nname="Tiiny Asset Test"\ndescription="Fixture"\nauthor="Tests"\nversion="1"\nscript="plugin.gd"\n'
     )
+    (project / "speech_scene.tscn").write_text('[gd_scene format=3]\n\n[node name="SpeechScene" type="Node"]\n')
     shutil.copyfile(root / "integrations/tiiny/tests/editor_asset_generation.gd", addon / "plugin.gd")
     image = Image.new("RGB", (512, 512), (235, 235, 235))
     draw = ImageDraw.Draw(image)

@@ -246,7 +246,7 @@ func append(key: String, operation: String, parameters: Dictionary, validator: C
 	_mutex.unlock()
 	return result
 
-func _append_locked(key: String, operation: String, parameters: Dictionary, validator: Callable) -> Dictionary:
+func _append_locked(key: String, operation: String, parameters: Dictionary, validator: Callable, persist := true) -> Dictionary:
 	if not error.is_empty() or _data.is_empty():
 		return {"error": "Queue unavailable"}
 	if key.is_empty() or operation.is_empty() or not validator.is_valid() or not _json_safe(parameters):
@@ -263,7 +263,7 @@ func _append_locked(key: String, operation: String, parameters: Dictionary, vali
 	var id := "%s-%08d" % [_project.sha256_text().substr(0, 12), sequence]
 	var job := {"id": id, "sequence": sequence, "submission_key": key, "operation": operation, "parameters": parameters.duplicate(true), "state": "queued", "attempts": [], "result": {}, "created_at": Time.get_unix_time_from_system()}
 	_data.jobs.append(job)
-	if not _save():
+	if persist and not _save():
 		_data.jobs.pop_back()
 		return {"error": error}
 	return {"id": id, "sequence": sequence, "duplicate": false}
@@ -406,10 +406,13 @@ func device_started(id: String) -> bool:
 	if error.is_empty():
 		for job in _data.jobs:
 			if job.id == id and job.state == "running":
-				if job.attempts.back().get("device_started", false):
+				var attempt: Dictionary = job.attempts.back()
+				if attempt.get("device_started", false) and not attempt.get("device_confirmed", false):
 					ok = true
 				else:
-					job.attempts.back()["device_started"] = true
+					attempt["device_started"] = true
+					# A prior request's confirmation cannot certify this one.
+					attempt.erase("device_confirmed")
 					ok = _save()
 				break
 	_mutex.unlock()
@@ -448,6 +451,7 @@ func begin_device_operation(id: String, verb: String, model: String, connection:
 			if operations.size() >= 128 or (not operations.is_empty() and operations.back().state != "verified"):
 				break
 			attempt["device_started"] = true
+			attempt.erase("device_confirmed")
 			operations.append({"verb": verb, "model": model, "connection": connection, "state": "started", "progress": -1.0})
 			attempt["device_operations"] = operations
 			ok = _save()
@@ -555,6 +559,11 @@ func reconcile_scene(id: String, outcome: String, evidence: Dictionary) -> bool:
 
 func finish(id: String, state: String, result: Dictionary) -> bool:
 	_mutex.lock()
+	var ok := _finish_locked(id, state, result, true)
+	_mutex.unlock()
+	return ok
+
+func _finish_locked(id: String, state: String, result: Dictionary, persist: bool) -> bool:
 	var ok := false
 	if error.is_empty() and state in ["completed", "failed", "cancelled", "interrupted"] and _json_safe(result):
 		for job in _data.jobs:
@@ -565,7 +574,7 @@ func finish(id: String, state: String, result: Dictionary) -> bool:
 				var device_operations: Array = job.attempts.back().get("device_operations", [])
 				if state == "completed" and not device_operations.is_empty() and device_operations.back().state != "verified":
 					break
-				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (job.attempts.back().get("device_started", false) and state != "completed" and not job.attempts.back().get("device_confirmed", false)):
+				if phase in ["prepared", "published"] or (phase == "imported" and state != "completed") or (not mutation_phase.is_empty() and (mutation_phase != "saved" or state != "completed")) or (state != "completed" and not device_operations.is_empty() and device_operations.back().state != "verified") or (job.attempts.back().get("device_started", false) and state != "completed" and not job.attempts.back().get("device_confirmed", false)):
 					# A failure after a publication boundary or an unconfirmed
 					# device request cannot safely be retried until a reconciler
 					# establishes what was installed or stopped.
@@ -584,8 +593,64 @@ func finish(id: String, state: String, result: Dictionary) -> bool:
 					_data.stop_reason = str(result.get("error", state))
 					if _data.stop_reason.is_empty():
 						_data.stop_reason = state
-				ok = _save()
+				ok = _save() if persist else true
 				break
+	return ok
+
+# Commit the terminal result and its successor together. A restart observes
+# either a running parent with no successor or a completed parent linked to one.
+func finish_with_continuation(id: String, result: Dictionary, parameters: Dictionary, validator: Callable) -> bool:
+	return finish_with_successor(id, result, "chat_turn", parameters, validator)
+
+# A successor may be a tool job as well as a model round. Its operation and
+# parameters are validated under the queue lock before the single store commit.
+func finish_with_successor(id: String, result: Dictionary, operation: String, parameters: Dictionary, validator: Callable) -> bool:
+	_mutex.lock()
+	var before := _data.duplicate(true)
+	var accepted := _append_locked("continuation:" + id, operation, parameters, validator, false)
+	var ok := false
+	if accepted.has("id") and not accepted.get("duplicate", false):
+		var completed := result.duplicate(true)
+		completed["continued"] = true
+		completed["next_job"] = accepted.id
+		if _finish_locked(id, "completed", completed, false):
+			for job in _data.jobs:
+				if job.id == id and job.state == "completed":
+					ok = _save()
+					break
+	if not ok:
+		_data = before
+	_mutex.unlock()
+	return ok
+
+# A user may skip a known failure or explicitly abandon an uncertain device
+# outcome. Preserve the tool error and its continuation in the same commit.
+func skip_with_successor(id: String, decision: String, operation: String, parameters: Dictionary, validator: Callable) -> bool:
+	_mutex.lock()
+	var before := _data.duplicate(true)
+	var target: Dictionary = {}
+	for job in _data.get("jobs", []):
+		if job.id != id: continue
+		if decision == "skip" and job.state in ["failed", "cancelled"]:
+			target = job
+		elif decision == "abandon" and job.state == "interrupted" and not job.attempts.is_empty():
+			var attempt: Dictionary = job.attempts.back()
+			if attempt.get("device_started", false) and not attempt.has("mutation") and not attempt.has("publication"):
+				target = job
+		break
+	var ok := false
+	if not target.is_empty():
+		var accepted := _append_locked("continuation:" + id, operation, parameters, validator, false)
+		if accepted.has("id") and not accepted.get("duplicate", false):
+			target.state = "skipped"
+			target["resolution"] = {"decision": decision, "at": Time.get_unix_time_from_system()}
+			if not target.attempts.is_empty(): target.attempts.back()["resolution"] = target.resolution.duplicate(true)
+			target.result["continued"] = true
+			target.result["next_job"] = accepted.id
+			_data.stop_reason = ""
+			_data.paused = true
+			ok = _save()
+	if not ok: _data = before
 	_mutex.unlock()
 	return ok
 

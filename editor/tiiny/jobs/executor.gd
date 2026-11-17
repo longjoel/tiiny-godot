@@ -54,7 +54,19 @@ func _tick_impl() -> void:
 			else:
 				result["error"] = cancel_reason
 				status.state = "failed" if cancel_reason != "Cancelled by user" else "cancelled"
-		if queue.finish(current.id, status.state, result):
+		var finished := false
+		if status.state == "completed" and status.get("continuation") is Dictionary:
+			if worker.get("validator") is Callable:
+				var operation: Variant = status.get("continuation_operation", "chat_turn")
+				if operation is String and not operation.is_empty():
+					finished = queue.finish_with_successor(current.id, result, operation, status.continuation, worker.validator)
+			if not finished and queue.error.is_empty():
+				status.state = "failed"
+				result = {"error": "Could not commit the next turn step; no continuation was queued."}
+				finished = queue.finish(current.id, status.state, result)
+		else:
+			finished = queue.finish(current.id, status.state, result)
+		if finished:
 			var finished_id: String = str(current.id)
 			var finished_state: String = str(status.state)
 			for job in queue.snapshot().jobs:

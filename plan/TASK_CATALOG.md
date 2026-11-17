@@ -1,13 +1,13 @@
 # Tiiny 2D/3D task catalog
 
-Catalog of **100** common editor tasks. `solution` says how the task should be solved; `status` says what is verified today. `supported` tasks have a passing test reference.
+Catalog of **100** common editor tasks. `solution` says how the task should be solved; `status` says what is verified today. `supported` tasks have a task-specific assertion in a named test file, enforced by `check_task_catalog.py`; a test-file reference alone is not evidence.
 
 ## Coverage
 
 | Status | Count |
 | --- | ---: |
-| supported | 40 |
-| partial | 60 |
+| supported | 32 |
+| partial | 68 |
 | missing | 0 |
 
 | Solution class | Count |
@@ -19,11 +19,11 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | Dimension | Supported | Partial | Missing |
 | --- | ---: | ---: | ---: |
-| 2d | 15 | 35 | 0 |
-| 3d | 15 | 25 | 0 |
-| project | 10 | 0 | 0 |
+| 2d | 13 | 37 | 0 |
+| 3d | 10 | 30 | 0 |
+| project | 9 | 1 | 0 |
 
-> Behavior tasks are script work, not missing editor features. Composed tasks use `apply_editor_transaction`; supported specialized tasks have native recipes/tools.
+> Behavior tasks are script work, not missing editor features. Composed tasks use `apply_editor_transaction`; supported specialized tasks have native recipes/tools. Story 19 reclassified four tasks to partial after auditing their assertions against the prompt: 2D-006 (active camera unproven), 2D-044 (low volume and OGG music not covered), 3D-082 (sparks not attached to an anvil), and 3D-083 (trail not attached to a projectile).
 
 ## Tasks
 
@@ -36,7 +36,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 2D-003 | Replace an existing sprite texture | composed_primitives | partial | apply_editor_transaction |
 | 2D-004 | Move, rotate, or scale a node | composed_primitives | supported | apply_editor_transaction |
 | 2D-005 | Add a ColorRect background | composed_primitives | partial | apply_editor_transaction |
-| 2D-006 | Add a Camera2D | composed_primitives | supported | apply_editor_transaction |
+| 2D-006 | Add a Camera2D | composed_primitives | partial | apply_editor_transaction; enabled is asserted, becoming the active camera is not |
 | 2D-007 | Add a CanvasLayer HUD | composed_primitives | partial | apply_editor_transaction |
 | 2D-008 | Add a Label with text | composed_primitives | supported | apply_editor_transaction |
 | 2D-009 | Add a Button | composed_primitives | supported | apply_editor_transaction |
@@ -84,7 +84,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 2D-041 | Add a dialogue box | composed_primitives | partial | apply_editor_transaction |
 | 2D-042 | Connect a button signal | composed_primitives | supported | apply_editor_transaction |
 | 2D-043 | Apply a theme and font | native_macro | supported | apply_theme |
-| 2D-044 | Loop background music | native_macro | supported | configure_audio_loop |
+| 2D-044 | Loop background music | native_macro | partial | configure_audio_loop; loop is verified, low volume and OGG music are not |
 | 2D-045 | Play a jump sound | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 2D-046 | Set an audio bus volume | native_macro | supported | configure_audio_bus |
 | 2D-047 | Make the camera follow the player | script_behavior | partial | read_project_file, replace_in_gdscript |
@@ -106,7 +106,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 3D-058 | Add a CharacterBody3D controller | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-059 | Add a RigidBody3D crate | composed_primitives | partial | apply_editor_transaction |
 | 3D-060 | Add an Area3D trigger | composed_primitives | partial | apply_editor_transaction |
-| 3D-061 | Add a NavigationRegion3D | native_macro | supported | add_navigation_region |
+| 3D-061 | Add a NavigationRegion3D | native_macro | partial | add_navigation_region; navigation baking is not implemented |
 | 3D-062 | Add a Marker3D spawn | composed_primitives | partial | apply_editor_transaction |
 | 3D-063 | Import a generated GLB model | native_macro | supported | import_generated_model |
 | 3D-064 | Generate a 3D model from a reference image | native_macro | supported | append_job, get_job_status, import_generated_model |
@@ -136,15 +136,15 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | 3D-077 | Animate a door opening | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-078 | Create an orbiting camera | script_behavior | partial | read_project_file, replace_in_gdscript |
 | 3D-079 | Tween the camera | script_behavior | partial | read_project_file, replace_in_gdscript |
-| 3D-080 | Play a character animation state | native_macro | supported | add_animation_tree |
+| 3D-080 | Play a character animation state | native_macro | partial | add_animation_tree; blending idle and run is not implemented |
 | 3D-081 | Animate a skeleton | native_macro | supported | play_animation |
 
 ### 3D effects
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
-| 3D-082 | Add 3D particles | native_macro | supported | add_particles_3d |
-| 3D-083 | Add a 3D trail | native_macro | supported | add_trail_3d |
+| 3D-082 | Add 3D particles | native_macro | partial | add_particles_3d; sparks are created under World, not attached to an anvil |
+| 3D-083 | Add a 3D trail | native_macro | partial | add_trail_3d; the trail is created under World, not behind a projectile |
 | 3D-084 | Add 3D rain or snow | native_macro | supported | add_weather_3d |
 
 ### 3D audio
@@ -157,7 +157,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
-| 3D-086 | Validate PBR maps and topology | native_macro | supported | validate_mesh_quality |
+| 3D-086 | Validate PBR maps and topology | native_macro | partial | validate_mesh_quality; topology and PBR quality remain unverified |
 
 ### 3D camera
 
@@ -196,7 +196,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 | --- | --- | --- | --- | --- |
 | PROJECT-094 | Set or remove a breakpoint | native_macro | supported | set_breakpoint, remove_breakpoint |
 | PROJECT-095 | Inspect paused stack and locals | native_macro | supported | get_debugger_state, get_stack_frames, get_stack_variables, select_stack_frame |
-| PROJECT-096 | Continue, step, or pause execution | native_macro | supported | debug_step, debug_continue, debug_pause |
+| PROJECT-096 | Continue, step, or pause execution | native_macro | supported | debug_next, debug_continue, debug_pause |
 
 ### Jobs
 
@@ -208,7 +208,7 @@ Catalog of **100** common editor tasks. `solution` says how the task should be s
 
 | ID | Task | Solution | Status | Tools / gap |
 | --- | --- | --- | --- | --- |
-| PROJECT-098 | Generate speech and add it to the scene | native_macro | supported | append_job, get_job_status, import_generated_audio |
+| PROJECT-098 | Generate speech and add it to the scene | native_macro | partial | append_job, get_job_status, import_generated_audio; composed generated-speech-to-player test not recorded |
 | PROJECT-099 | Import a WAV or OGG audio file | native_macro | supported | import_generated_audio |
 
 ### Assets/image
