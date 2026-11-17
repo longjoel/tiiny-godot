@@ -1708,6 +1708,8 @@ func _run() -> void:
 		return
 	elif mode == "chat_budget_wrapup":
 		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/advanced/tool_round_limit", 20)
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/advanced/tool_call_limit", 40)
 		var fake = load("res://fake_queued_chat.gd").new()
 		add_child(fake)
 		fake.jobs_service = jobs
@@ -1723,12 +1725,12 @@ func _run() -> void:
 			while fake.submissions.size() < round_index + 1 and Time.get_ticks_msec() < deadline:
 				await get_tree().create_timer(0.05).timeout
 			if fake.submissions.size() < round_index + 1: _fail("Budget round did not dispatch: " + str(round_index) + " status " + fake.status.text + " ledger " + str(fake.turn_ledger) + " rounds " + str(fake.tool_rounds) + " stage " + fake.request_stage + " started " + str(fake.queued_chat_started) + " continued " + str(fake.queued_chat_continued) + " cancel " + str(fake.queued_chat_cancel)); return
-			var call := {"id": "budget-" + str(round_index), "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+			var call := {"id": "budget-" + str(round_index), "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id + "-" + str(round_index)})}}
 			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
 		while fake.submissions.size() < 21 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
 		if fake.submissions.size() < 21: _fail("Budget trigger request did not dispatch: " + str(fake.submissions.size())); return
-		var trigger := {"id": "budget-trigger", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		var trigger := {"id": "budget-trigger", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id + "-trigger"})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [trigger]}}]}).to_utf8_buffer())
 		while fake.submissions.size() < 22 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
@@ -1789,6 +1791,70 @@ func _run() -> void:
 			await get_tree().create_timer(0.05).timeout
 		if jobs.get_job_status(retry_id).get("state") != "completed" or not str(jobs.get_job_status(retry_id).get("result", {}).get("response", "")).contains("Retried with context"):
 			_fail("Retried chat did not complete: " + str(jobs.get_job_status(retry_id))); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "chat_repeated_call":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Repeat a tool call."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Repeated-call fixture did not dispatch"); return
+		var job_id: String = jobs.queue.snapshot().jobs.back().id
+		var first_call := {"id": "repeat-one", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("First repeated-call round did not dispatch"); return
+		var second_call := {"id": "repeat-two", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": job_id})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Repeated call did not trigger a wrap-up: " + str(fake.submissions.size())); return
+		var wrapup: Dictionary = fake.submissions[2]
+		if not Array(wrapup.get("tools", [])).is_empty():
+			_fail("Repeated-call wrap-up still advertised tools"); return
+		var repeated_error: Variant = _tool_result_for(wrapup.messages, "repeat-two")
+		if not repeated_error is Dictionary or str(repeated_error.get("error", {}).get("code", "")) != "repeated_call":
+			_fail("Repeated call did not return a repeated_call error: " + str(repeated_error)); return
+		var final := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Repeated-call summary."}}]}).to_utf8_buffer()
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final)
+		var final_job: String = jobs.queue.snapshot().jobs.back().id
+		while jobs.get_job_status(final_job).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(final_job).get("state") != "completed": _fail("Repeated-call turn did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "chat_mixed_tool_call":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Use an inline tool call."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Mixed tool-call fixture did not dispatch"); return
+		var job_id: String = jobs.queue.snapshot().jobs.back().id
+		var mixed := "Now I'll check the job.\n<tool_call>\n<function=get_job_status>\n<parameter=id>" + job_id + "</parameter>\n</function>\n</tool_call>"
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": mixed}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Mixed text tool call did not execute"); return
+		var tool_message: Dictionary = {}
+		for message in fake.submissions[1].messages:
+			if message.get("role") == "tool": tool_message = message
+		if tool_message.is_empty(): _fail("Mixed text tool call returned no result"); return
+		if not str(tool_message.get("content", "")).contains(job_id):
+			_fail("Mixed text tool call did not execute get_job_status: " + str(tool_message)); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Mixed call done."}}]}).to_utf8_buffer())
 		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return

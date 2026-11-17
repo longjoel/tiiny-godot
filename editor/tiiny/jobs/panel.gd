@@ -615,7 +615,7 @@ func _validate_chat(parameters: Dictionary) -> String:
 			return "Task turns require plan lineage"
 	if parameters.has("turn"):
 		var turn: Variant = parameters.turn
-		if not turn is Dictionary or turn.size() < 10 or turn.size() > 14:
+		if not turn is Dictionary or turn.size() < 10 or turn.size() > 18:
 			return "Invalid turn state"
 		for key in ["id", "system"]:
 			if not turn.get(key) is String:
@@ -633,6 +633,10 @@ func _validate_chat(parameters: Dictionary) -> String:
 		if not turn.get("failed") is Dictionary or not turn.get("scene") is Dictionary:
 			return "Invalid turn state"
 		if turn.has("truncations") and not turn.get("truncations") is int and not turn.get("truncations") is float:
+			return "Invalid turn state"
+		if turn.has("signatures") and (not turn.get("signatures") is Dictionary or JSON.stringify(turn.signatures).to_utf8_buffer().size() > 16384):
+			return "Invalid turn state"
+		if turn.has("last_signature") and not turn.get("last_signature") is String:
 			return "Invalid turn state"
 		if turn.has("pending_calls") and (not turn.pending_calls is Array or not _valid_pending_calls(turn.pending_calls)):
 			return "Invalid pending tool calls"

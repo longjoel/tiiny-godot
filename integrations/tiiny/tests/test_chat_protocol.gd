@@ -97,7 +97,7 @@ func run(plugin: EditorPlugin) -> String:
 		if FileAccess.file_exists("res://invalid_call.gd"): return "Malformed tool call created a file before validation."
 		if dock.submissions.size() != before or not _idle(dock) or not await _recover(dock): return "Malformed tool call continued or prevented recovery."
 	_begin(dock)
-	dock.tool_rounds = 20
+	dock.tool_rounds = 100
 	await _tool(dock, [_call("limit", "res://invalid_call.gd")])
 	if FileAccess.file_exists("res://invalid_call.gd") or not _idle(dock): return "Tool round limit did not stop execution."
 	# A valid unknown tool returns a matched tool error, never a mutation.

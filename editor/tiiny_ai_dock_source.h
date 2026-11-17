@@ -91,6 +91,8 @@ var queued_chat_plan: Dictionary = {}
 var queued_chat_structured_result: Dictionary = {}
 var structured_attempts := 0
 var turn_wrapup := false
+var turn_signature_counts: Dictionary = {}
+var turn_last_signature := ""
 var pending_prompt := ""
 var pending_key := ""
 var pending_url := ""
@@ -171,6 +173,12 @@ func _ready() -> void:
 	if not settings.has_setting("tiiny_ai/advanced/tool_mode"):
 		settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	settings.add_property_info({"name": "tiiny_ai/advanced/tool_mode", "type": TYPE_STRING, "hint": PROPERTY_HINT_ENUM, "hint_string": "editor,workspace,hybrid"})
+	if not settings.has_setting("tiiny_ai/advanced/tool_round_limit"):
+		settings.set_setting("tiiny_ai/advanced/tool_round_limit", 100)
+	settings.add_property_info({"name": "tiiny_ai/advanced/tool_round_limit", "type": TYPE_INT, "hint": PROPERTY_HINT_RANGE, "hint_string": "0,1000,1"})
+	if not settings.has_setting("tiiny_ai/advanced/tool_call_limit"):
+		settings.set_setting("tiiny_ai/advanced/tool_call_limit", 200)
+	settings.add_property_info({"name": "tiiny_ai/advanced/tool_call_limit", "type": TYPE_INT, "hint": PROPERTY_HINT_RANGE, "hint_string": "0,5000,1"})
 	if not settings.has_setting("tiiny_ai/advanced/allow_shell_commands"):
 		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", false)
 	settings.add_property_info({"name": "tiiny_ai/advanced/allow_shell_commands", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Host code execution. Each command still requires explicit approval."})
@@ -1412,6 +1420,8 @@ func _finish_queued_chat(state: String, reason: String) -> Dictionary:
 	turn_role = ""
 	turn_depth = 0
 	turn_wrapup = false
+	turn_signature_counts = {}
+	turn_last_signature = ""
 	pending_key = ""
 	send_button.disabled = false
 	if state != "completed":
@@ -2135,8 +2145,11 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 				if not function.get("name") is String or function.name.strip_edges().is_empty() or not function.get("arguments") is String or argument_json.parse(function.arguments) != OK or not argument_json.data is Dictionary:
 					protocol_reason = "The model returned invalid tool arguments; no tool was executed."
 					break
-				var round_limit := 10 if turn_role == "task" else 20
-				var call_limit := 14 if turn_role == "task" else 40
+				var settings := EditorInterface.get_editor_settings()
+				var configured_rounds := int(settings.get_setting("tiiny_ai/advanced/tool_round_limit")) if settings.has_setting("tiiny_ai/advanced/tool_round_limit") else 100
+				var configured_calls := int(settings.get_setting("tiiny_ai/advanced/tool_call_limit")) if settings.has_setting("tiiny_ai/advanced/tool_call_limit") else 200
+				var round_limit := 30 if turn_role == "task" else (configured_rounds if configured_rounds > 0 else 1000)
+				var call_limit := 60 if turn_role == "task" else (configured_calls if configured_calls > 0 else 5000)
 				if tool_rounds >= round_limit or tool_call_count + parsed_calls.size() > call_limit:
 					_request_wrapup()
 					return
@@ -2185,6 +2198,9 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 	if content.strip_edges().is_empty():
 		_handle_empty_answer()
 		return
+	if turn_wrapup and content.contains("<tool_call"):
+		var wrap_summary := _successful_ledger_summary()
+		content = "The tool budget was reached. " + ("Completed actions:\n" + wrap_summary if not wrap_summary.is_empty() else "No final summary was produced; use the recorded job details to continue.")
 	if queued_chat_started:
 		queued_chat_response = content
 		queued_chat_success = true
@@ -2197,14 +2213,12 @@ func _request_completed(result: int, response_code: int, _headers: PackedStringA
 	_set_status("")
 
 func _text_tool_calls(content: String) -> Array:
-	var text := content.strip_edges()
-	if not text.begins_with("<tool_call") or not text.ends_with("</tool_call>"): return []
+	var text := content
 	var block_re := RegEx.new()
 	block_re.compile("(?s)<tool_call>\\s*<function=([A-Za-z0-9_]+)>\\s*(.*?)\\s*</function>\\s*</tool_call>")
 	var parameter_re := RegEx.new()
 	parameter_re.compile("(?s)<parameter=([A-Za-z0-9_]+)>\\s*(.*?)\\s*</parameter>")
 	var calls: Array = []
-	var leftover := text
 	for block in block_re.search_all(text):
 		var function_name := block.get_string(1)
 		var arguments := {}
@@ -2214,8 +2228,6 @@ func _text_tool_calls(content: String) -> Array:
 			var parsed: Variant = parser.data if parser.parse(raw) == OK else null
 			arguments[parameter.get_string(1)] = parsed if parsed != null else raw
 		calls.append({"id": "text-" + Crypto.new().generate_random_bytes(8).hex_encode(), "type": "function", "function": {"name": function_name, "arguments": JSON.stringify(arguments)}})
-		leftover = leftover.replace(block.get_string(0), "")
-	if calls.is_empty() or not leftover.strip_edges().is_empty(): return []
 	return calls
 
 func _tool_display(name: String, result: String) -> String:
@@ -2269,6 +2281,22 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 		var call_signature := function_name + "\n" + JSON.stringify(arguments)
 		if turn_failed_calls.has(call_signature):
 			_protocol_stop("The model repeated an identical failed tool call; the turn was stopped.")
+			return
+		var repeat_count := int(turn_signature_counts.get(call_signature, 0)) + 1
+		turn_signature_counts[call_signature] = repeat_count
+		var repeated := repeat_count >= 3 or (call_signature == turn_last_signature and repeat_count >= 2)
+		if not repeated:
+			turn_last_signature = call_signature
+		if repeated:
+			tool_call_ids.append(call_id)
+			var repeated_result := {"ok": false, "tool": function_name, "call_id": call_id, "summary": "This exact tool call already ran; use the earlier result or choose a different action.", "error": {"code": "repeated_call", "message": "This exact tool call already ran."}, "data": {}, "affected": []}
+			_append_chat_log("job=%s repeated tool %s -> %s" % [queued_chat_id, function_name, JSON.stringify(arguments)])
+			turn_messages.append({"role": "tool", "tool_call_id": call_id, "content": JSON.stringify(repeated_result)})
+			turn_failed_calls[call_signature] = true
+			conversation = turn_messages.duplicate(true)
+			_append_action_card(repeated_result, arguments)
+			_set_status("Repeated tool call detected; asking for a summary.")
+			_request_wrapup()
 			return
 		tool_call_ids.append(call_id)
 		_set_status("Running tool %d of %d…" % [index + 1, parsed_calls.size()])
@@ -2377,6 +2405,10 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 		# Preserve actual tool effects even when the continuation fails.
 		conversation = turn_messages.duplicate(true)
 		_append_action_card(tool_result, arguments)
+		if not Array(tool_result.get("affected", [])).is_empty() or not str(tool_result.get("undo_group", "")).is_empty():
+			# A mutation is progress; allow the same inspection call again later.
+			turn_signature_counts.clear()
+			turn_last_signature = ""
 		if queued_chat_started and queued_chat_request_recorded:
 			queued_chat_success = false
 			send_button.disabled = false
@@ -2732,6 +2764,8 @@ func _restore_turn_state(turn: Variant) -> bool:
 	turn_scene_context = state.scene.duplicate(true)
 	turn_truncations = int(state.get("truncations", 0))
 	turn_wrapup = bool(state.get("wrapup", false))
+	turn_signature_counts = state.get("signatures", {}).duplicate(true) if state.get("signatures") is Dictionary else {}
+	turn_last_signature = str(state.get("last_signature", ""))
 	request_stage = "answer"
 	return true
 
@@ -2754,6 +2788,8 @@ func _prepare_chat_continuation() -> Dictionary:
 		"scene": turn_scene_context,
 		"truncations": turn_truncations,
 		"wrapup": turn_wrapup,
+		"signatures": turn_signature_counts,
+		"last_signature": turn_last_signature,
 	}
 	var safe_state: Variant = JSON.parse_string(JSON.stringify(state))
 	if not safe_state is Dictionary:

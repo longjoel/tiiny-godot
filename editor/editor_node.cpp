@@ -8541,7 +8541,7 @@ static void _make_tiiny_settings_visible() {
 	// Embedded scripts register/migrate these settings during child _ready().
 	// Keep the connection section available without Godot's global advanced toggle.
 	EditorSettings *settings = EditorSettings::get_singleton();
-	for (const char *name : { "api_url", "api_key", "cli_path", "device_address", "system_prompt_extra", "request_timeout_seconds", "tool_mode", "allow_shell_commands", "log_chat", "model_thinking" }) {
+	for (const char *name : { "api_url", "api_key", "cli_path", "device_address", "system_prompt_extra", "request_timeout_seconds", "tool_mode", "tool_round_limit", "tool_call_limit", "allow_shell_commands", "log_chat", "model_thinking" }) {
 		String path = String("tiiny_ai/advanced/") + name;
 		if (settings->has_setting(path)) {
 			settings->set_basic(path, true);

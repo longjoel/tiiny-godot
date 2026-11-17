@@ -292,7 +292,7 @@ func _process(_delta: float) -> void:
 	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
 	if service == null or not service.get("available") or service.get("queue") == null: return
 	for job in service.queue.snapshot().jobs:
-		if job.state == "running": return
+		if job.state in ["queued", "running"]: return
 		if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false): return
 	_refresh_snapshot(true, true)
 
