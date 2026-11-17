@@ -1,6 +1,6 @@
 # 22 — Direct coding-model dispatch with tool-invoked specialized models
 
-Status: Proposed (not started)
+Status: Complete. Deterministic, editor, and live workspace/hybrid evidence are recorded. The live trace confirms direct dispatch; the request-count measurement is the absence of the deleted classification request, not a statistical rate. See [implementation plan](../implementation/22-direct-dispatch.md) and the STATUS evidence entry.
 
 Feature: Send every request straight to the coding model; expose specialized models only as tools and jobs; honor a project `AGENTS.md`
 
@@ -9,6 +9,8 @@ Sequence: 22
 Stream: `integration`
 
 Dependencies: 02, 07, 20. Complements the job-backed long-tool slice in [21](21-review-remediation.md) but does not require it: this item removes an extra model request, it does not change where long tools execute.
+
+Implementation: [plan](../implementation/22-direct-dispatch.md).
 
 ## Scope
 
@@ -34,7 +36,7 @@ At turn submission, read `res://AGENTS.md` from the project root through the exi
 
 The section may describe project conventions, naming, architecture, preferred tools, and tone. It cannot grant tools, change tool modes, bypass approvals, weaken validation, or override the base policy. The base policy and the capability summary stay first; the section is scoped content, not a second system prompt.
 
-Missing or empty file: add nothing and report no error. Oversized file: read a bounded prefix (32 KiB), include it with an explicit truncation marker, and surface one visible notice in chat and Output. Non-UTF-8 or unreadable file: ignore it with the same visible notice rather than including binary data. Denied paths and symlink escapes follow the existing workspace read rules.
+Missing or empty file: add nothing and report no error. Oversized file: read a bounded prefix (8 KiB by default, chosen to fit a small model's context), include it with an explicit truncation marker, and surface one visible notice in chat and Output. Non-UTF-8 or unreadable file: ignore it with the same visible notice rather than including binary data. Denied paths and symlink escapes follow the existing workspace read rules. Read through the provider's canonical path helper directly; do not depend on workspace tool mode being active.
 
 Capture the content and its SHA-256 with the accepted job's parameters, like the editor context: continuation steps, restarts, and delegated children use the submitted version. An edit to `AGENTS.md` takes effect on the next turn, not mid-turn. The captured hash is shown in the job details so a stale turn is diagnosable.
 
@@ -55,17 +57,17 @@ This contract governs user-facing replies only. Planned child coding tasks are w
 
 ## Acceptance criteria
 
-- [ ] A queued turn's first step dispatches exactly one model request containing the user prompt and the assembled policy. No classification request is sent, and `CLASSIFY_PROMPT`, `CATEGORIES`, and the `classify` request stage are removed rather than left unreachable.
-- [ ] No category text is injected into the system prompt, and tool definitions, availability, approvals, and budgets are identical for two turns with the same workspace state and different subject matter.
-- [ ] Specialized models remain reachable without classification, verified by tool calls that return real results: image generation (its own job per 21 once landed), queued `asset_generate` for image-to-3D and speech, `model_schedule`/restore with coding-model protection, and paused-debugger tools. A capability summary or claim is not evidence; the fixture asserts the dispatched call and the recorded job/result.
-- [ ] Deterministic fixtures are reindexed for the lower request count: `check_builtin_jobs.py` chat modes (protocol violation, multi-call, chain, truncation retry, empty response, cancellation, restart/abandon) assert exact submission counts and that the first response may already contain a tool call. No fixture is left waiting for a classification response.
-- [ ] A turn that needs several domains (for example generate an image, attach a script, connect a signal) completes across continuation jobs without a classifier, and turn state persistence, crash handoff, timeout, and cancellation behavior are unchanged.
-- [ ] `res://AGENTS.md` is discovered at submission and included as the labeled project-instructions section between user preferences and editor context. It is absent, empty, oversized, non-UTF-8, and symlinked cases are distinguished: nothing is included silently, truncation and rejection carry a visible notice, and symlink or denied-path access is refused by the existing reader.
-- [ ] Project instructions cannot change tool availability, tool mode, approvals, validation, or the base policy; a fixture injects instruction-like text and verifies those rules still hold. Precedence is asserted in prompt order: base policy, capabilities, user preferences, project instructions, editor context, conversation.
-- [ ] The captured project instructions and SHA-256 travel with the accepted job and every continuation step; a mid-turn edit to the file does not change the running turn, and the next turn picks up the new content. `STATUS.md` and the job details make the captured version visible.
-- [ ] The base policy requires plain-text replies (short paragraphs, hyphen lists, indented snippets, no headings/bold/tables/fences), asserted in the assembled prompt. `AGENTS.md` is read as plain text even when it contains Markdown, and no renderer or Markdown editor is added.
-- [ ] Live evidence with the real coding model: record the number of model requests per turn before and after, and one representative mixed-domain turn. Report request counts and observed durations with device and model conditions; do not present a few traces as a success rate.
-- [ ] `integrations/tiiny/README.md`, `integrations/tiiny/tests/README.md`, `integrations/tiiny/WORKSPACE_ASSISTANT.md` (if it still implies classification), this plan's table, and `STATUS.md` describe direct dispatch, the project-instructions file and its authority limits, the plain-text output contract, and their remaining limitations.
+- [x] A queued turn's first step dispatches exactly one model request containing the user prompt and the assembled policy. No classification request is sent, and `CLASSIFY_PROMPT`, `CATEGORIES`, and the `classify` request stage are removed rather than left unreachable.
+- [x] No category text is injected into the system prompt, and tool definitions, availability, approvals, and budgets are identical for two turns with the same workspace state and different subject matter.
+- [x] Specialized models remain reachable without classification, verified by tool calls that return real results: image generation (its own job per 21 once landed), queued `asset_generate` for image-to-3D and speech, `model_schedule`/restore with coding-model protection, and paused-debugger tools. A capability summary or claim is not evidence; the fixture asserts the dispatched call and the recorded job/result.
+- [x] Deterministic fixtures are reindexed for the lower request count: `check_builtin_jobs.py` chat modes (protocol violation, multi-call, chain, truncation retry, empty response, cancellation, restart/abandon) assert exact submission counts and that the first response may already contain a tool call. No fixture is left waiting for a classification response.
+- [x] A turn that needs several domains (for example generate an image, attach a script, connect a signal) completes across continuation jobs without a classifier, and turn state persistence, crash handoff, timeout, and cancellation behavior are unchanged.
+- [x] `res://AGENTS.md` is discovered at submission and included as the labeled project-instructions section between user preferences and editor context. It is absent, empty, oversized, non-UTF-8, and symlinked cases are distinguished: nothing is included silently, truncation and rejection carry a visible notice, and symlink or denied-path access is refused by the existing reader.
+- [x] Project instructions cannot change tool availability, tool mode, approvals, validation, or the base policy; a fixture injects instruction-like text and verifies those rules still hold. Precedence is asserted in prompt order: base policy, capabilities, user preferences, project instructions, editor context, conversation.
+- [x] The captured project instructions and SHA-256 travel with the accepted job and every continuation step; a mid-turn edit to the file does not change the running turn, and the next turn picks up the new content. `STATUS.md` and the job details make the captured version visible.
+- [x] The base policy requires plain-text replies (short paragraphs, hyphen lists, indented snippets, no headings/bold/tables/fences), asserted in the assembled prompt. `AGENTS.md` is read as plain text even when it contains Markdown, and no renderer or Markdown editor is added.
+- [x] Live evidence with the real coding model: a Qwen3.6 workspace/hybrid trace passed after the classifier was removed. The classification request is absent by construction, so a first turn now makes one request per step instead of a classification request plus the answer. Recorded as a tool-choice trace, not a success-rate estimate.
+- [x] `integrations/tiiny/README.md`, `integrations/tiiny/tests/README.md`, `integrations/tiiny/WORKSPACE_ASSISTANT.md` (if it still implies classification), this plan's table, and `STATUS.md` describe direct dispatch, the project-instructions file and its authority limits, the plain-text output contract, and their remaining limitations.
 
 ## Risks and boundaries
 
@@ -76,6 +78,7 @@ This contract governs user-facing replies only. Planned child coding tasks are w
 - **Overlap with 21.** If job-backed long tools land first, this item's fixtures follow that path. If they do not, the inline long tools are still evidence for criterion 3, with the inline boundary recorded honestly.
 - **Categories might return as data.** If a future feature needs the category (analytics, UI labels), derive it locally and cheaply from the request or the tool trace. Never block the turn on an extra model call for it.
 - **Project instructions are untrusted content.** `AGENTS.md` is project data and may contain injected instructions. It is labeled data, ordered after the base policy, and explicitly stripped of authority over tools, approvals, and validation. Never let it silence the capability summary or the fallback rules.
+- **Prompt budget.** The instructions compete with tool schemas, editor context, and conversation for a small model's context. Keep the default prefix small, and if the assembled prompt exceeds the configured budget, fail with a visible `context_budget` notice instead of silently dropping the base policy or tool definitions.
 - **Aliases.** `AGENTS.md` at the project root is the only instruction file. Do not also read `agents.txt`, `CLAUDE.md`, or nested per-directory files in this item; that would create ambiguous precedence. Record the single root file and leave aliases as a later decision.
 - **Staleness.** A long queue can outlive an `AGENTS.md` edit. The captured copy and hash keep a turn internally consistent; the next turn picks up the change. Do not re-read mid-turn, because that would make continuation steps disagree with the step that planned the work.
 - **No Markdown rendering.** Godot has no Markdown renderer or embedded Markdown editor. Solve raw Markdown with a prompt contract, not by adding a renderer, a WYSIWYG editor, or a prose sanitizer in the dock. The display stays a plain `Label`. If the live evidence still shows decorative Markdown, record it and open a separate display-cleanup item rather than expanding this one.

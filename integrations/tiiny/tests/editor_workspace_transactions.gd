@@ -695,8 +695,8 @@ func _run() -> void:
 		_fail("Unavailable tool remained in the payload"); return
 	if _error_code(await registry.execute("add_rectangular_collision_shape", {"parent_path": "Enemy", "width": 1, "height": 1})) != "unavailable":
 		_fail("Unavailable registry tool did not return unavailable"); return
-	var prompt: String = registry.build_system_prompt("Prefer concise answers.", "Scene: res://main.tscn")
-	if not ("Tool capabilities" in prompt and "User preferences" in prompt and "Editor context" in prompt and "workspace-first" in prompt.to_lower()):
+	var prompt: String = registry.build_system_prompt("Prefer concise answers.", "Keep names short.", "Scene: res://main.tscn")
+	if not ("Tool capabilities" in prompt and "User preferences" in prompt and "Project instructions" in prompt and "Editor context" in prompt and "workspace-first" in prompt.to_lower() and "plain text" in prompt.to_lower()):
 		_fail("Prompt sections are incomplete"); return
 	var ledger: Dictionary = registry.ledger_entry(through_registry, "turn-fixture")
 	if ledger.turn != "turn-fixture" or not ledger.ok or ledger.call != "call-registry":
@@ -734,7 +734,7 @@ func _run() -> void:
 	chat.pending_key = "fixture-key"
 	chat.pending_model = "fixture-model"
 	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 32768)
-	chat._start_answer("code")
+	chat._start_answer()
 	if chat.submissions.is_empty(): _fail("Registry chat did not submit a payload: " + chat.status.text); return
 	var payload: Dictionary = chat.submissions.back()
 	if not payload.get("tools") is Array or not Array(payload.tools).any(func(tool): return str(tool.function.name) == "add_rectangular_collision_shape"):
@@ -764,7 +764,7 @@ func _run() -> void:
 	undo_button.pressed.emit()
 	await get_tree().process_frame
 	if root.get_node_or_null("Enemy/CollisionShape2D") != null: _fail("Action card Undo did not remove the shape"); return
-	chat._start_answer("code")
+	chat._start_answer()
 	var unknown_call := {"id": "call-unknown", "type": "function", "function": {"name": "unsupported_fixture_tool", "arguments": "{}"}}
 	var unknown_reply := {"choices": [{"message": {"role": "assistant", "tool_calls": [unknown_call]}}]}
 	await chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify(unknown_reply).to_utf8_buffer())
@@ -777,7 +777,7 @@ func _run() -> void:
 	var failed_card: Control = cards.back().card
 	if failed_card == null or failed_card.find_child("ActionRetry", true, false) == null:
 		_fail("Failed action card has no retry path"); return
-	chat._start_answer("code")
+	chat._start_answer()
 	var file_call := {"id": "call-file", "type": "function", "function": {"name": "create_gdscript", "arguments": JSON.stringify({"path": "res://action_card.gd", "source": "extends Node\n", "reason": "action card fixture"})}}
 	var file_reply := {"choices": [{"message": {"role": "assistant", "tool_calls": [file_call]}}]}
 	await chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify(file_reply).to_utf8_buffer())

@@ -290,14 +290,15 @@ func start_next() -> Dictionary:
 	if error.is_empty() and not _data.is_empty() and not _data.paused and _data.stop_reason.is_empty():
 		var can_start := true
 		for job in _data.jobs:
-			if job.state in ["running", "failed", "interrupted"]:
+			if job.state == "running" or job.state == "interrupted" or (job.state == "failed" and not bool(job.get("contained", false))):
 				can_start = false
 				break
 		if can_start:
 			for job in _data.jobs:
-				if job.state == "queued":
+				if job.state == "queued" and _eligible(job):
 					job.state = "running"
 					job.attempts.append({"number": job.attempts.size() + 1, "state": "running", "started_at": Time.get_unix_time_from_system()})
+					_inject_dependency_results(job)
 					if _save():
 						result = job.duplicate(true)
 					break
@@ -589,7 +590,14 @@ func _finish_locked(id: String, state: String, result: Dictionary, persist: bool
 				job.attempts.back().state = state
 				job.attempts.back()["result"] = result.duplicate(true)
 				job.attempts.back().finished_at = Time.get_unix_time_from_system()
-				if state != "completed":
+				var contained := state != "completed" and state != "interrupted" and str(job.parameters.get("role", "")) == "task"
+				if contained:
+					result["contained"] = true
+					job["contained"] = true
+					job.attempts.back()["contained"] = true
+					job.result = result.duplicate(true)
+					job.attempts.back()["result"] = result.duplicate(true)
+				if state != "completed" and not contained:
 					_data.stop_reason = str(result.get("error", state))
 					if _data.stop_reason.is_empty():
 						_data.stop_reason = state
@@ -623,8 +631,254 @@ func finish_with_successor(id: String, result: Dictionary, operation: String, pa
 	_mutex.unlock()
 	return ok
 
-# A user may skip a known failure or explicitly abandon an uncertain device
-# outcome. Preserve the tool error and its continuation in the same commit.
+# Commit a plan submission: append every child and complete the coordinator in
+# one store write. A restart observes either a running coordinator with no
+# children or a completed one linked to all of them.
+func finish_with_plan(id: String, result: Dictionary, children: Array, validator: Callable) -> bool:
+	_mutex.lock()
+	var before := _data.duplicate(true)
+	var accepted: Array = []
+	var ok := true
+	for child in children:
+		if not child is Dictionary: ok = false; break
+		var appended := _append_locked(str(child.get("key", "")), "chat_turn", child.get("parameters", {}), validator, false)
+		if not appended.has("id") or appended.get("duplicate", false):
+			ok = false
+			break
+		accepted.append(appended.id)
+	if ok:
+		var completed := result.duplicate(true)
+		completed["children"] = accepted
+		if _finish_locked(id, "completed", completed, false):
+			for job in _data.jobs:
+				if job.id == id and job.state == "completed":
+					ok = _save()
+					break
+		else:
+			ok = false
+	if not ok: _data = before
+	_mutex.unlock()
+	return ok
+
+func plan_task_count(root_id: String) -> int:
+	_mutex.lock()
+	var seen := {}
+	for job in _data.get("jobs", []):
+		if job.get("operation") != "chat_turn": continue
+		var parameters: Dictionary = job.get("parameters", {})
+		if str(parameters.get("plan_root", "")) != root_id: continue
+		var task_id := str(parameters.get("task_id", ""))
+		if not task_id.is_empty(): seen[task_id] = true
+	_mutex.unlock()
+	return seen.size()
+
+# Append joins for awaiting plans whose latest task attempts are all resolved.
+# The join is never queued at submission, so a retry appended later still runs
+# before it. The submission key makes recovery idempotent.
+func commit_ready_joins(validator: Callable) -> int:
+	_mutex.lock()
+	var count := 0
+	var changed := false
+	for job in _data.get("jobs", []):
+		if job.get("state") != "completed": continue
+		var result: Dictionary = job.get("result", {})
+		if not bool(result.get("plan_pending", false)) or result.has("join_job"):
+			continue
+		if bool(result.get("plan_cancelled", false)):
+			var cancel_params := _plan_join_parameters(job, [], true)
+			if cancel_params.is_empty(): continue
+			var cancel_append := _append_locked("plan-join:" + str(job.id), "chat_turn", cancel_params, validator, false)
+			if cancel_append.has("id") and not cancel_append.get("duplicate", false):
+				result["join_job"] = cancel_append.id
+				result["plan_rollup"] = "cancelled"
+				count += 1
+				changed = true
+			continue
+		var tasks: Array = result.get("plan", {}).get("tasks", [])
+		var outcomes: Array = []
+		var ready := not tasks.is_empty()
+		for task in tasks:
+			if not task is Dictionary: ready = false; break
+			var latest := _latest_plan_child(str(job.id), str(task.get("id", "")))
+			if latest.is_empty() or str(latest.get("state", "")) in ["queued", "running", "failed", "interrupted"]:
+				ready = false
+				break
+			var record: Dictionary = latest.get("result", {}).get("structured_result", {})
+			outcomes.append({
+				"id": str(task.get("id", "")),
+				"title": str(task.get("title", "")),
+				"state": str(latest.get("state", "")),
+				"status": str(record.get("status", "unverified")),
+				"job_id": str(latest.get("id", "")),
+				"attempt": int(latest.get("parameters", {}).get("attempt", 1)),
+				"summary": str(record.get("summary", latest.get("result", {}).get("summary", ""))),
+				"changes": record.get("changes", []),
+				"verification": record.get("verification", []),
+			})
+		if not ready: continue
+		var parameters := _plan_join_parameters(job, outcomes)
+		if parameters.is_empty(): continue
+		var appended := _append_locked("plan-join:" + str(job.id), "chat_turn", parameters, validator, false)
+		if appended.has("id") and not appended.get("duplicate", false):
+			result["join_job"] = appended.id
+			result["plan_rollup"] = _plan_rollup(outcomes)
+			count += 1
+			changed = true
+	var ok := true
+	if changed: ok = _save()
+	_mutex.unlock()
+	return count if ok else 0
+
+func _inject_dependency_results(job: Dictionary) -> void:
+	var parameters: Dictionary = job.get("parameters", {})
+	if str(parameters.get("role", "")) != "task": return
+	var parent_id := str(parameters.get("parent_job", ""))
+	var blocks: Array[String] = []
+	for dependency in parameters.get("depends_on", []):
+		var latest := _latest_plan_child(parent_id, str(dependency))
+		if latest.is_empty(): continue
+		var record: Dictionary = latest.get("result", {}).get("structured_result", {})
+		if record.is_empty(): continue
+		var block := "Task " + str(dependency) + ": " + str(record.get("summary", "")).left(1500)
+		if record.get("changes", []) is Array and not record.changes.is_empty():
+			block += "\nChanges: " + JSON.stringify(record.changes).left(2000)
+		if record.get("verification", []) is Array and not record.verification.is_empty():
+			block += "\nVerification: " + JSON.stringify(record.verification).left(1500)
+		blocks.append(block)
+	if blocks.is_empty(): return
+	var joined := "\n\n".join(blocks).left(8000)
+	parameters["prompt"] = str(parameters.get("prompt", "")) + "\n\nDependency results (recorded, revalidate scene state):\n" + joined
+	parameters["dependency_results"] = joined
+
+func _eligible(job: Dictionary) -> bool:
+	var parameters: Dictionary = job.get("parameters", {})
+	if str(parameters.get("role", "")) != "task":
+		return true
+	var parent_id := str(parameters.get("parent_job", ""))
+	for dependency in parameters.get("depends_on", []):
+		var latest := _latest_plan_child(parent_id, str(dependency))
+		if latest.is_empty() or str(latest.get("state", "")) != "completed":
+			return false
+	return true
+
+func record_intervention(id: String, proposal: Dictionary) -> bool:
+	_mutex.lock()
+	var ok := false
+	for job in _data.get("jobs", []):
+		if job.id != id or job.get("state") != "failed": continue
+		job.result["intervention_proposal"] = proposal.duplicate(true)
+		ok = _save()
+		break
+	_mutex.unlock()
+	return ok
+
+func skip_plan_task(id: String) -> bool:
+	_mutex.lock()
+	var ok := false
+	for job in _data.get("jobs", []):
+		if job.id != id or job.get("state") != "failed" or str(job.get("parameters", {}).get("role", "")) != "task":
+			continue
+		job.state = "skipped"
+		job.result = {"error": "Task skipped", "contained": true}
+		job["contained"] = true
+		if not job.get("attempts", []).is_empty():
+			job.attempts.back().state = "cancelled"
+			job.attempts.back()["result"] = job.result.duplicate(true)
+		_cancel_dependents(str(job.parameters.get("parent_job", "")), str(job.parameters.get("task_id", "")))
+		ok = _save()
+		break
+	_mutex.unlock()
+	return ok
+
+func _cancel_dependents(parent_id: String, task_id: String) -> void:
+	for job in _data.get("jobs", []):
+		if job.get("state") != "queued": continue
+		var parameters: Dictionary = job.get("parameters", {})
+		if str(parameters.get("parent_job", "")) != parent_id: continue
+		if not task_id in parameters.get("depends_on", []): continue
+		job.state = "cancelled"
+		job.result = {"error": "Dependency failed", "contained": true, "dependency_failed": task_id}
+		job["contained"] = true
+		if not job.get("attempts", []).is_empty():
+			job.attempts.back().state = "cancelled"
+			job.attempts.back()["result"] = job.result.duplicate(true)
+		_cancel_dependents(parent_id, str(parameters.get("task_id", "")))
+
+func cancel_plan(parent_id: String, validator: Callable) -> bool:
+	_mutex.lock()
+	var ok := false
+	for job in _data.get("jobs", []):
+		if job.id != parent_id or not bool(job.get("result", {}).get("plan_pending", false)) or job.get("result", {}).has("join_job"):
+			continue
+		job.result["plan_cancelled"] = true
+		for child in _data.get("jobs", []):
+			if str(child.get("parameters", {}).get("plan_root", "")) != parent_id: continue
+			if child.get("state") == "queued":
+				child.state = "cancelled"
+				child.result = {"error": "Plan cancelled", "contained": true}
+				child["contained"] = true
+				if not child.get("attempts", []).is_empty():
+					child.attempts.back().state = "cancelled"
+					child.attempts.back()["result"] = child.result.duplicate(true)
+		ok = _save()
+		break
+	_mutex.unlock()
+	return ok
+
+func _latest_plan_child(root_id: String, task_id: String) -> Dictionary:
+	var latest: Dictionary = {}
+	var latest_attempt := 0
+	for job in _data.get("jobs", []):
+		if job.get("operation") != "chat_turn": continue
+		var parameters: Dictionary = job.get("parameters", {})
+		var parent_id := str(parameters.get("parent_job", parameters.get("plan_root", "")))
+		if parent_id != root_id or str(parameters.get("task_id", "")) != task_id:
+			continue
+		var attempt := int(parameters.get("attempt", 1))
+		if attempt > latest_attempt:
+			latest_attempt = attempt
+			latest = job
+	return latest
+
+func _plan_rollup(outcomes: Array) -> String:
+	if outcomes.is_empty(): return "failed"
+	var completed := 0
+	var failed := 0
+	for outcome in outcomes:
+		var state := str(outcome.get("state", ""))
+		var status := str(outcome.get("status", ""))
+		if state == "completed" and status == "completed": completed += 1
+		elif state in ["failed", "skipped", "cancelled"]: failed += 1
+	if completed == outcomes.size(): return "completed"
+	if failed == outcomes.size(): return "failed"
+	return "partial"
+
+func _plan_join_parameters(parent: Dictionary, outcomes: Array, cancelled := false) -> Dictionary:
+	var result: Dictionary = parent.get("result", {})
+	var turn_value: Variant = result.get("join_turn", {})
+	var call: Variant = result.get("plan_call", {})
+	if not turn_value is Dictionary or not call is Dictionary or not call.get("id") is String:
+		return {}
+	var turn: Dictionary = turn_value.duplicate(true)
+	var tool_result := {
+		"ok": not cancelled,
+		"tool": "submit_plan",
+		"call_id": str(call.id),
+		"summary": "Plan cancelled." if cancelled else "Plan finished: " + _plan_rollup(outcomes) + ".",
+		"data": {"tasks": outcomes, "rollup": "cancelled" if cancelled else _plan_rollup(outcomes)},
+		"affected": [],
+	}
+	if cancelled:
+		tool_result["error"] = {"code": "plan_cancelled", "message": "The user cancelled this plan."}
+	turn.messages.append({"role": "tool", "tool_call_id": str(call.id), "content": JSON.stringify(tool_result)})
+	turn.ledger.append({"turn": str(turn.get("id", "")), "call": str(call.id), "tool": "submit_plan", "ok": not cancelled, "summary": tool_result.summary, "affected": [], "undo_group": "", "error": tool_result.get("error", null)})
+	var parameters: Dictionary = parent.get("parameters", {}).duplicate(true)
+	parameters.erase("turn")
+	parameters["conversation"] = turn.messages
+	parameters["turn"] = turn
+	return parameters
+
+
 func skip_with_successor(id: String, decision: String, operation: String, parameters: Dictionary, validator: Callable) -> bool:
 	_mutex.lock()
 	var before := _data.duplicate(true)
@@ -635,7 +889,7 @@ func skip_with_successor(id: String, decision: String, operation: String, parame
 			target = job
 		elif decision == "abandon" and job.state == "interrupted" and not job.attempts.is_empty():
 			var attempt: Dictionary = job.attempts.back()
-			if attempt.get("device_started", false) and not attempt.has("mutation") and not attempt.has("publication"):
+			if job.operation == "shell_exec" or (attempt.get("device_started", false) and not attempt.has("mutation") and not attempt.has("publication")):
 				target = job
 		break
 	var ok := false
@@ -694,6 +948,23 @@ func cancel_queued(id: String) -> bool:
 # The user explicitly abandons a device-uncertain job after confirming its
 # remote outcome. Only device work without a recorded workspace effect
 # qualifies; publication and scene mutations still need their verifier.
+# Record the owned process identity while a shell job runs. A restart observes
+# the pid in the attempt; it is never used to kill a process after restart.
+func record_process(id: String, info: Dictionary) -> bool:
+	_mutex.lock()
+	var ok := false
+	if error.is_empty() and _json_safe(info):
+		for job in _data.jobs:
+			if job.id == id and job.state == "running" and not job.attempts.is_empty():
+				var attempt: Dictionary = job.attempts.back()
+				if attempt.get("process") == info:
+					break
+				attempt["process"] = info.duplicate(true)
+				ok = _save()
+				break
+	_mutex.unlock()
+	return ok
+
 func abandon(id: String) -> bool:
 	_mutex.lock()
 	var ok := false
@@ -701,7 +972,7 @@ func abandon(id: String) -> bool:
 		for job in _data.jobs:
 			if job.id == id and job.state == "interrupted" and not job.attempts.is_empty():
 				var attempt: Dictionary = job.attempts.back()
-				if not attempt.get("device_started", false) or attempt.has("mutation") or attempt.has("publication"):
+				if job.operation != "shell_exec" and (not attempt.get("device_started", false) or attempt.has("mutation") or attempt.has("publication")):
 					break
 				job.state = "skipped"
 				job["resolution"] = {"decision": "abandon", "at": Time.get_unix_time_from_system()}

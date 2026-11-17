@@ -55,7 +55,20 @@ func _tick_impl() -> void:
 				result["error"] = cancel_reason
 				status.state = "failed" if cancel_reason != "Cancelled by user" else "cancelled"
 		var finished := false
-		if status.state == "completed" and status.get("continuation") is Dictionary:
+		if status.state == "completed" and status.get("plan") is Dictionary:
+			if worker.get("validator") is Callable:
+				var plan: Dictionary = status.plan
+				var plan_result: Dictionary = result.duplicate(true)
+				plan_result["plan_pending"] = true
+				plan_result["plan"] = plan.get("plan", {})
+				plan_result["join_turn"] = plan.get("join_turn", {})
+				plan_result["plan_call"] = plan.get("plan_call", {})
+				finished = queue.finish_with_plan(current.id, plan_result, plan.get("children", []), worker.validator)
+			if not finished and queue.error.is_empty():
+				status.state = "failed"
+				result = {"error": "Could not commit the plan; no child jobs were queued."}
+				finished = queue.finish(current.id, status.state, result)
+		elif status.state == "completed" and status.get("continuation") is Dictionary:
 			if worker.get("validator") is Callable:
 				var operation: Variant = status.get("continuation_operation", "chat_turn")
 				if operation is String and not operation.is_empty():

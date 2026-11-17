@@ -117,6 +117,7 @@ func _initialize() -> void:
 
 	await _path_tests()
 	await _read_tests()
+	await _project_instruction_tests()
 	await _write_tests()
 	await _patch_tests()
 	await _move_delete_tests()
@@ -183,6 +184,27 @@ func _read_tests() -> void:
 	check(regex.get("ok", false) and Array(regex.data.matches).size() > 0, "explicit regex search works")
 	var bad_regex: Dictionary = workspace.execute("search_text", {"query": "(", "regex": true})
 	check(error_code(bad_regex) == "invalid_arguments", "invalid regex is rejected")
+
+func _project_instruction_tests() -> void:
+	var path := project.path_join("AGENTS.md")
+	write_file(path, "Project conventions.\n- keep names short\n")
+	var read: Dictionary = workspace.read_project_instructions()
+	check(read.get("ok", false) and "keep names short" in str(read.text) and str(read.sha256) == FileAccess.get_sha256(path) and not bool(read.truncated), "project instructions are read with a hash")
+	DirAccess.remove_absolute(path)
+	check(error_code(workspace.read_project_instructions()) == "not_found", "missing project instructions report not_found")
+	write_file(path, "x".repeat(9000))
+	var large: Dictionary = workspace.read_project_instructions()
+	check(large.get("ok", false) and bool(large.truncated) and str(large.text).length() <= 8192, "project instructions are bounded and report truncation")
+	var invalid := FileAccess.open(path, FileAccess.WRITE)
+	invalid.store_buffer(PackedByteArray([0xff, 0xfe, 0x00]))
+	invalid.close()
+	check(error_code(workspace.read_project_instructions()) == "not_utf8", "invalid project instructions are rejected")
+	DirAccess.remove_absolute(path)
+	var dir := DirAccess.open(project)
+	dir.create_link(outside.path_join("secret.txt"), path)
+	check(error_code(workspace.read_project_instructions()) == "symlink_rejected", "symlinked project instructions are rejected")
+	DirAccess.remove_absolute(path)
+
 
 func _write_tests() -> void:
 	var created: Dictionary = await workspace.execute("write_file", {"path": "res://scripts/new.gd", "content": "extends Node\n"})

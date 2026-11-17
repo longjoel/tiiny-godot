@@ -16,6 +16,12 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
+func _tool_result_for(messages: Array, call_id: String) -> Variant:
+	for message in messages:
+		if message.get("role") == "tool" and message.get("tool_call_id") == call_id:
+			return JSON.parse_string(str(message.get("content", "")))
+	return null
+
 func _unused_publish(_job: Dictionary, _artifact: Dictionary) -> Dictionary:
 	return {"error": "Not used by append fixture"}
 
@@ -259,10 +265,6 @@ func _run() -> void:
 			if not attempt.get("device_started", false) or (mode != "model_preflight_stale" and attempt.device_operations.back().state != "verified"):
 				_fail("Chat preflight did not durably verify restoration")
 				return
-			var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-			await fake_chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-			while fake_chat.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-				await get_tree().create_timer(0.05).timeout
 			await fake_chat._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "done"}}]}).to_utf8_buffer())
 			while jobs.get_job_status(accepted.id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
 				await get_tree().create_timer(0.05).timeout
@@ -697,12 +699,7 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Protocol chat did not dispatch classification"); return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Protocol chat did not dispatch an answer"); return
+		if fake.submissions.size() < 1: _fail("Protocol chat did not dispatch an answer"); return
 		var first := {"id": "one", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
 		var second := {"id": "two", "type": "function", "function": {"name": "get_workspace_context", "arguments": "{}"}}
 		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first, second]}}]}).to_utf8_buffer()
@@ -717,9 +714,9 @@ func _run() -> void:
 			_fail("Multi-call step did not name its continuation"); return
 		if fake.tool_call_count != 2:
 			_fail("Multi-call tool count was not preserved: " + str(fake.tool_call_count)); return
-		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3:
+		if fake.submissions.size() < 2:
 			_fail("Continuation step did not dispatch: submissions=" + str(fake.submissions.size())); return
 		var tool_messages: Array = fake.turn_messages.slice(-2)
 		if tool_messages.size() != 2 or tool_messages[0].get("tool_call_id") != "one" or tool_messages[1].get("tool_call_id") != "two":
@@ -757,12 +754,7 @@ func _run() -> void:
 		var first_id: String = store.snapshot().jobs.back().id
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Chain chat did not dispatch classification"); return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Chain chat did not dispatch the first answer"); return
+		if fake.submissions.size() < 1: _fail("Chain chat did not dispatch the first answer"); return
 		var round_one := {"id": "chain-one", "type": "function", "function": {"name": "get_scene_tree", "arguments": "{}"}}
 		var reply_one := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [round_one]}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply_one)
@@ -779,9 +771,9 @@ func _run() -> void:
 		var second_id := str(step_one.get("result", {}).get("next_job", ""))
 		if step_one.get("state") != "completed" or not bool(step_one.get("result", {}).get("continued", false)) or second_id.is_empty():
 			_fail("Chain step one did not continue: " + str(step_one)); return
-		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3: _fail("Chain step two did not dispatch"); return
+		if fake.submissions.size() < 2: _fail("Chain step two did not dispatch"); return
 		var round_two := {"id": "chain-two", "type": "function", "function": {"name": "get_workspace_context", "arguments": "{}"}}
 		var reply_two := JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [round_two]}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), reply_two)
@@ -793,9 +785,9 @@ func _run() -> void:
 			_fail("Chain step two did not continue: " + str(step_two)); return
 		if int(step_two.get("parameters", {}).get("turn", {}).get("step", 0)) != 2 or int(step_two.get("parameters", {}).get("turn", {}).get("rounds", 0)) != 1:
 			_fail("Chain step two did not restore its step and round counters: " + str(step_two.get("parameters", {}))); return
-		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 4: _fail("Chain step three did not dispatch"); return
+		if fake.submissions.size() < 3: _fail("Chain step three did not dispatch"); return
 		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Chain complete."}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), final_text)
 		while jobs.get_job_status(third_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
@@ -910,12 +902,7 @@ func _run() -> void:
 		var first_id: String = store.snapshot().jobs.back().id
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Truncation chat did not dispatch classification"); return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Truncation chat did not dispatch an answer"); return
+		if fake.submissions.size() < 1: _fail("Truncation chat did not dispatch an answer"); return
 		var truncated := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "length"}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), truncated)
 		while jobs.get_job_status(first_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
@@ -924,10 +911,10 @@ func _run() -> void:
 		var retry_id := str(first_step.get("result", {}).get("next_job", ""))
 		if first_step.get("state") != "completed" or not bool(first_step.get("result", {}).get("continued", false)) or retry_id.is_empty():
 			_fail("Truncated response did not queue a concise retry: " + str(first_step)); return
-		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3: _fail("Truncation retry did not dispatch"); return
-		var last_message: Dictionary = Array(fake.submissions[2].messages).back()
+		if fake.submissions.size() < 2: _fail("Truncation retry did not dispatch"); return
+		var last_message: Dictionary = Array(fake.submissions[1].messages).back()
 		if last_message.get("role") != "user" or not str(last_message.get("content", "")).contains("cut off"):
 			_fail("Truncation retry did not include the concise continuation prompt: " + str(last_message)); return
 		var final_text := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Arena complete."}}]}).to_utf8_buffer()
@@ -958,12 +945,7 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 10000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Empty-response chat did not classify"); return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Empty-response chat did not answer"); return
+		if fake.submissions.size() < 1: _fail("Empty-response chat did not answer"); return
 		var empty := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}}]}).to_utf8_buffer()
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), empty)
 		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
@@ -995,11 +977,7 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Stale image classification did not start"); return
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Stale image answer did not start"); return
+		if fake.submissions.size() < 1: _fail("Stale image answer did not start"); return
 		jobs.queue.set_paused(true)
 		var call := {"id": "stale-image", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
@@ -1036,17 +1014,13 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Image handoff classification did not start"); return
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Image handoff answer did not start"); return
+		if fake.submissions.size() < 1: _fail("Image handoff answer did not start"); return
 		var image_call := {"id": "image-one", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
 		var status_call := {"id": "status-two", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": first_id})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [image_call, status_call]}}]}).to_utf8_buffer())
-		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3: _fail("Image handoff did not resume the model: " + str(jobs.queue.snapshot())); return
+		if fake.submissions.size() < 2: _fail("Image handoff did not resume the model: " + str(jobs.queue.snapshot())); return
 		var messages: Array = fake.submissions.back().messages
 		var tool_messages: Array = messages.filter(func(message): return message.get("role") == "tool")
 		if tool_messages.size() != 2 or tool_messages[0].get("tool_call_id") != "image-one" or tool_messages[1].get("tool_call_id") != "status-two":
@@ -1064,7 +1038,7 @@ func _run() -> void:
 		print("Built-in Jobs chat_image_handoff passed")
 		get_tree().quit()
 		return
-	elif mode == "chat_image_uncertain":
+	elif mode in ["chat_image_uncertain", "chat_image_failure", "chat_image_abandon"]:
 		var actual := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		actual.remove_from_group("tiiny_setup_manager")
 		var image_manager := WarmImageManager.new()
@@ -1073,7 +1047,8 @@ func _run() -> void:
 		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/image_model", "fixture-image")
 		var fake = load("res://fake_queued_chat.gd").new()
 		add_child(fake)
-		fake.image_timeout_fixture = true
+		fake.image_timeout_fixture = mode != "chat_image_failure"
+		fake.image_failure_fixture = mode == "chat_image_failure"
 		fake.jobs_service = jobs
 		jobs.chat_service = fake
 		fake.prompt.text = "Generate an image."
@@ -1082,11 +1057,7 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Image fixture classification did not start"); return
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer())
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2: _fail("Image fixture answer did not start"); return
+		if fake.submissions.size() < 1: _fail("Image fixture answer did not start"); return
 		var call := {"id": "image-call", "type": "function", "function": {"name": "generate_image", "arguments": JSON.stringify({"prompt": "fixture"})}}
 		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [call]}}]}).to_utf8_buffer())
 		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
@@ -1099,9 +1070,600 @@ func _run() -> void:
 			await get_tree().create_timer(0.05).timeout
 			stopped = jobs.get_job_status(str(chain.back().id))
 		var marker: Dictionary = jobs._device_marker()
-		if stopped.get("operation") != "asset_generate" or stopped.get("state") != "interrupted" or marker.get("model") != "fixture-image" or not jobs.device_recovery_pending() or jobs.queue.snapshot().jobs.size() != 2:
-			_fail("Uncertain image request did not stop without a continuation: " + str(stopped)); return
-		print("Built-in Jobs chat_image_uncertain passed")
+		if stopped.get("operation") != "asset_generate" or jobs.queue.snapshot().jobs.size() != 2:
+			_fail("Image failure did not stop without a continuation: " + str(stopped)); return
+		if mode == "chat_image_failure":
+			if stopped.get("state") != "failed" or jobs.device_recovery_pending(): _fail("Known image failure was not reported as failed"); return
+			jobs._on_clear_job(str(stopped.id))
+		elif stopped.get("state") != "interrupted" or marker.get("model") != "fixture-image" or not jobs.device_recovery_pending():
+			_fail("Uncertain image request did not stop for recovery: " + str(stopped)); return
+		elif mode == "chat_image_abandon":
+			jobs.abandon_id = str(stopped.id)
+			jobs._on_abandon_confirmed()
+			if not jobs.queue.snapshot().paused: _fail("Abandonment did not pause the queue"); return
+			jobs.queue.set_paused(false)
+		if mode != "chat_image_uncertain":
+			while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < 2: _fail("Image failure did not resume the turn after explicit resolution"); return
+			var messages: Array = fake.submissions.back().messages
+			var tool_messages: Array = messages.filter(func(message): return message.get("role") == "tool")
+			var returned: Variant = JSON.parse_string(str(tool_messages.back().content)) if not tool_messages.is_empty() else null
+			var expected_code := "image_job_failed" if mode == "chat_image_failure" else "outcome_unknown"
+			if not returned is Dictionary or returned.get("ok", true) or str(returned.get("error", {}).get("code", "")) != expected_code:
+				_fail("The resumed turn did not receive the actual image failure: " + str(returned)); return
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Image was not completed."}}]}).to_utf8_buffer())
+			var final_id: String = jobs.queue.snapshot().jobs.back().id
+			while jobs.get_job_status(final_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(final_id).get("state") != "completed": _fail("Resolved image turn did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode in ["chat_shell_handoff", "chat_shell_failure", "chat_shell_approval", "chat_shell_headless"]:
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/advanced/allow_shell_commands", true)
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		fake.workspace_inspector_script = load("res://tiiny_inspector.gd")
+		fake.workspace_transactions_script = load("res://tiiny_transactions.gd")
+		fake.workspace_registry_script = load("res://tiiny_registry.gd")
+		fake.workspace_coding_script = load("res://tiiny_workspace.gd")
+		jobs.chat_service = fake
+		if not fake._ensure_workspace_registry():
+			_fail("Shell fixture could not build the workspace registry"); return
+		var provider: Object = fake.workspace_coding
+		provider.allow_shell_commands = true
+		var denied := mode == "chat_shell_approval"
+		provider.approve_command = func(_command: String, _cwd: String) -> bool: return not denied
+		provider.approve_headless = func(_args: Array, _root: String) -> bool: return not denied
+		fake.prompt.text = "Run a shell tool."
+		fake._generate()
+		var chat_id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 60000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Shell fixture answer did not start"); return
+		var shell_call: Dictionary
+		if mode == "chat_shell_headless":
+			shell_call = {"id": "shell-call", "type": "function", "function": {"name": "run_godot_headless", "arguments": JSON.stringify({"args": ["--quit"], "timeout_ms": 30000})}}
+		else:
+			var command := "printf 'shell-ok\\n'" if mode != "chat_shell_failure" else "printf 'shell-bad\\n' >&2; exit 7"
+			shell_call = {"id": "shell-call", "type": "function", "function": {"name": "run_command", "arguments": JSON.stringify({"command": command, "timeout_ms": 30000})}}
+		var status_call := {"id": "status-two", "type": "function", "function": {"name": "get_job_status", "arguments": JSON.stringify({"id": chat_id})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [shell_call, status_call]}}]}).to_utf8_buffer())
+		if mode == "chat_shell_approval":
+			while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < 2: _fail("Denied shell approval did not resume the turn"); return
+			if jobs.queue.snapshot().jobs.any(func(job): return job.operation == "shell_exec"):
+				_fail("Denied shell approval still queued a job"); return
+			var denied_messages: Array = fake.submissions[1].messages
+			var denied_result: Variant = _tool_result_for(denied_messages, "shell-call")
+			if not denied_result is Dictionary or denied_result.get("ok", true) or str(denied_result.get("error", {}).get("code", "")) != "approval_required":
+				_fail("Denied shell approval did not return approval_required: " + str(denied_result)); return
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Not approved."}}]}).to_utf8_buffer())
+			var denied_final: String = jobs.queue.snapshot().jobs[0].id
+			while jobs.get_job_status(denied_final).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(denied_final).get("state") != "completed": _fail("Denied shell turn did not finish"); return
+			print("Built-in Jobs %s passed" % mode)
+			get_tree().quit()
+			return
+		if mode == "chat_shell_headless":
+			var headless_id := ""
+			while Time.get_ticks_msec() < deadline:
+				var headless_chain: Array = jobs.queue.snapshot().jobs
+				if headless_chain.size() >= 2:
+					var running_headless: Dictionary = jobs.get_job_status(str(headless_chain[1].id))
+					var running_pid := int(running_headless.get("attempts", [{}])[0].get("process", {}).get("pid", 0)) if running_headless.get("state") == "running" else 0
+					if running_pid > 0:
+						headless_id = str(running_headless.id)
+						break
+				await get_tree().create_timer(0.05).timeout
+			if headless_id.is_empty(): _fail("Headless shell job did not start"); return
+			var headless_job: Dictionary = jobs.get_job_status(headless_id)
+			if str(headless_job.get("parameters", {}).get("kind", "")) != "headless" or not Array(headless_job.get("parameters", {}).get("argv", [])).has("--headless"):
+				_fail("Headless shell job did not carry normalized arguments: " + str(headless_job)); return
+			if int(headless_job.get("attempts", [{}])[0].get("process", {}).get("pid", 0)) <= 0:
+				_fail("Headless shell job did not record its process identity"); return
+			jobs.executor.cancel_current()
+			while jobs.get_job_status(headless_id).get("state") == "running" and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(headless_id).get("state") not in ["cancelled", "failed"]:
+				_fail("Cancelled headless shell job did not stop"); return
+			jobs._on_clear_job(headless_id)
+			while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < 2: _fail("Cancelled headless shell job did not resume the turn"); return
+			var stopped_result: Variant = _tool_result_for(fake.submissions[1].messages, "shell-call")
+			if not stopped_result is Dictionary or stopped_result.get("ok", true) or str(stopped_result.get("error", {}).get("code", "")) != "shell_job_failed":
+				_fail("Cancelled headless shell job did not return a failure: " + str(stopped_result)); return
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "The headless run was cancelled."}}]}).to_utf8_buffer())
+			var headless_final: String = jobs.queue.snapshot().jobs.back().id
+			while jobs.get_job_status(headless_final).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(headless_final).get("state") != "completed": _fail("Headless shell turn did not finish"); return
+			print("Built-in Jobs %s passed" % mode)
+			get_tree().quit()
+			return
+		var shell_id := ""
+		while Time.get_ticks_msec() < deadline:
+			var chain: Array = jobs.queue.snapshot().jobs
+			if chain.size() >= 2:
+				shell_id = str(chain[1].id)
+				var shell_state := str(jobs.get_job_status(shell_id).get("state", ""))
+				if mode == "chat_shell_failure" and shell_state == "failed": break
+				if mode != "chat_shell_failure" and shell_state == "completed" and fake.submissions.size() >= 2: break
+			await get_tree().create_timer(0.05).timeout
+		var shell_chain: Array = jobs.queue.snapshot().jobs
+		if shell_chain.size() < 2 or shell_chain[1].operation != "shell_exec":
+			_fail("Shell tool did not create a queued shell job: " + str(shell_chain)); return
+		var shell_job: Dictionary = jobs.get_job_status(str(shell_chain[1].id))
+		if mode == "chat_shell_failure":
+			if shell_job.get("state") != "failed": _fail("Failed shell job did not stop: " + str(shell_job)); return
+			jobs._on_clear_job(str(shell_job.id))
+			while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < 2: _fail("Shell failure did not resume the turn"); return
+			var failed_result: Variant = _tool_result_for(fake.submissions[1].messages, "shell-call")
+			if not failed_result is Dictionary or failed_result.get("ok", true) or str(failed_result.get("error", {}).get("code", "")) != "command_failed":
+				_fail("Shell failure did not return command_failed: " + str(failed_result)); return
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "The command failed."}}]}).to_utf8_buffer())
+			var failure_final: String = jobs.queue.snapshot().jobs.back().id
+			while jobs.get_job_status(failure_final).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(failure_final).get("state") != "completed": _fail("Failed shell turn did not finish"); return
+		else:
+			if shell_job.get("state") != "completed": _fail("Shell job did not complete: " + str(shell_job)); return
+			if fake.submissions.size() < 2: _fail("Shell handoff did not resume the model"); return
+			if shell_chain.size() < 3 or shell_chain[2].operation != "chat_turn":
+				_fail("Shell handoff did not use independent FIFO jobs: " + str(shell_chain)); return
+			var success_result: Variant = _tool_result_for(fake.submissions.back().messages, "shell-call")
+			if not success_result is Dictionary or not success_result.get("ok", false):
+				_fail("Shell handoff did not return the command result: " + str(success_result)); return
+			if mode == "chat_shell_headless":
+				if int(success_result.get("data", {}).get("exit_code", -1)) != 0:
+					_fail("Headless command did not exit successfully: " + str(success_result)); return
+			elif not str(success_result.get("data", {}).get("stdout", "")).contains("shell-ok"):
+				_fail("Shell command output was not returned: " + str(success_result)); return
+			if not fake.submissions.back().messages.any(func(message): return message.get("role") == "tool" and message.get("tool_call_id") == "status-two"):
+				_fail("The remaining tool call was not retained in order"); return
+			var pid := int(shell_job.get("attempts", [{}])[0].get("process", {}).get("pid", 0))
+			if pid <= 0: _fail("Shell job did not record its process identity"); return
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "The command finished."}}]}).to_utf8_buffer())
+			var shell_final: String = jobs.queue.snapshot().jobs.back().id
+			while jobs.get_job_status(shell_final).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if jobs.get_job_status(shell_final).get("state") != "completed": _fail("Shell turn did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_success":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Build a two-part scene."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Plan fixture did not dispatch"); return
+		var root_id: String = jobs.queue.snapshot().jobs.back().id
+		var plan_call := {"id": "plan-call", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Build two parts", "tasks": [
+			{"id": "first", "title": "First part", "brief": "Do the first part.", "depends_on": []},
+			{"id": "second", "title": "Second part", "brief": "Do the second part.", "depends_on": []},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while jobs.queue.snapshot().jobs.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var root: Dictionary = jobs.get_job_status(root_id)
+		if root.get("state") != "completed" or not bool(root.get("result", {}).get("plan_pending", false)) or Array(root.get("result", {}).get("children", [])).size() != 2:
+			_fail("Plan submission did not append two children and an awaiting parent: " + str(root)); return
+		var responses := 0
+		while responses < 2 and Time.get_ticks_msec() < deadline:
+			while fake.submissions.size() < responses + 2 and Time.get_ticks_msec() < deadline:
+				await get_tree().create_timer(0.05).timeout
+			if fake.submissions.size() < responses + 2: break
+			var task_text := str(fake.submissions[responses + 1].messages.back().get("content", ""))
+			var summary := "Completed " + task_text.split("\n")[0]
+			var result_call := {"id": "result-" + str(responses), "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "task", "status": "completed", "summary": summary, "verification": [{"check": "fixture", "result": "passed"}]})}}
+			await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [result_call]}}]}).to_utf8_buffer())
+			responses += 1
+		if responses != 2: _fail("Plan tasks did not both run: responses=" + str(responses)); return
+		while jobs.queue.snapshot().jobs.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var chain: Array = jobs.queue.snapshot().jobs
+		if chain.size() < 4 or chain[3].operation != "chat_turn":
+			_fail("Plan join was not appended: " + str(chain)); return
+		var joined: Dictionary = jobs.get_job_status(str(chain[3].id))
+		var tool_messages: Array = Array(joined.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "plan-call")
+		if tool_messages.is_empty(): _fail("Plan join did not answer the plan call"); return
+		var plan_result: Variant = JSON.parse_string(str(tool_messages.back().content))
+		if not plan_result is Dictionary or str(plan_result.get("data", {}).get("rollup", "")) != "completed":
+			_fail("Plan join did not report a completed rollup: " + str(plan_result)); return
+		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 4: _fail("Plan join did not resume the model: " + str(jobs.get_job_status(str(chain[3].id)))); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Plan complete."}}]}).to_utf8_buffer())
+		var join_id: String = str(chain[3].id)
+		while jobs.get_job_status(join_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(join_id).get("state") != "completed" or not str(jobs.get_job_status(join_id).get("result", {}).get("response", "")).contains("Plan complete"):
+			_fail("Plan turn did not finish: " + str(jobs.get_job_status(join_id))); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_failure_retry":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Build two parts with a retry."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Failure plan did not dispatch"); return
+		var root_id: String = jobs.queue.snapshot().jobs.back().id
+		var plan_call := {"id": "plan-fail", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Two parts", "tasks": [
+			{"id": "first", "title": "First part", "brief": "Do the first part.", "depends_on": []},
+			{"id": "second", "title": "Second part", "brief": "Do the second part.", "depends_on": []},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("First task did not dispatch"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}}]}).to_utf8_buffer())
+		var failed_id := ""
+		while Time.get_ticks_msec() < deadline:
+			for job in jobs.queue.snapshot().jobs:
+				if str(job.get("parameters", {}).get("role", "")) == "task" and job.get("state") == "failed" and str(job.get("parameters", {}).get("task_id", "")) == "first":
+					failed_id = str(job.id)
+			if not failed_id.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if failed_id.is_empty(): _fail("First task did not fail"); return
+		if not bool(jobs.get_job_status(failed_id).get("contained", false)) or not str(jobs.queue.snapshot().stop_reason).is_empty():
+			_fail("Contained task failure stopped the queue: " + str(jobs.queue.snapshot())); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Independent second task did not continue"); return
+		var second_call := {"id": "second-result", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "Second part", "status": "completed", "summary": "Second part done."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_call]}}]}).to_utf8_buffer())
+		while jobs.queue.snapshot().jobs.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if not jobs.retry_task(failed_id, "Do the first part, but write the result to FirstPart.txt."):
+			_fail("Task retry was not accepted"); return
+		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 4: _fail("Task retry did not dispatch"); return
+		var retry_job: Dictionary = jobs.queue.snapshot().jobs.back()
+		if int(retry_job.get("parameters", {}).get("attempt", 0)) != 2 or not retry_job.get("parameters", {}).has("prior_attempt"):
+			_fail("Task retry did not carry attempt and prior context: " + str(retry_job)); return
+		var retry_call := {"id": "retry-result", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "First part", "status": "completed", "summary": "First part retried."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [retry_call]}}]}).to_utf8_buffer())
+		while jobs.queue.snapshot().jobs.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var final_chain: Array = jobs.queue.snapshot().jobs
+		var join_job: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			for candidate in jobs.queue.snapshot().jobs:
+				if str(candidate.get("submission_key", "")).begins_with("plan-join:"):
+					join_job = jobs.get_job_status(str(candidate.id))
+			if not join_job.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if join_job.is_empty(): _fail("Retry plan did not append a join: " + str(final_chain)); return
+		var plan_message: Array = Array(join_job.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "plan-fail")
+		if plan_message.is_empty(): _fail("Retry plan did not join"); return
+		var plan_result: Variant = JSON.parse_string(str(plan_message.back().content))
+		if not plan_result is Dictionary or str(plan_result.get("data", {}).get("rollup", "")) != "completed":
+			_fail("Retry plan did not report completed: " + str(plan_result)); return
+		while fake.submissions.size() < 5 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 5: _fail("Retry plan join did not resume the model"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Retry complete."}}]}).to_utf8_buffer())
+		var join_id: String = str(join_job.get("id", ""))
+		while jobs.get_job_status(join_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(join_id).get("state") != "completed": _fail("Retry plan did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_planner_retry":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Build two parts with planner guidance."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Planner fixture did not dispatch"); return
+		var plan_call := {"id": "plan-planner", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Two parts", "tasks": [
+			{"id": "first", "title": "First part", "brief": "Do the first part.", "depends_on": []},
+			{"id": "second", "title": "Second part", "brief": "Do the second part.", "depends_on": []},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}}]}).to_utf8_buffer())
+		var failed_id := ""
+		while Time.get_ticks_msec() < deadline:
+			for job in jobs.queue.snapshot().jobs:
+				if str(job.get("parameters", {}).get("task_id", "")) == "first" and job.get("state") == "failed":
+					failed_id = str(job.id)
+			if not failed_id.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if failed_id.is_empty(): _fail("Planner fixture task did not fail"); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var second_call := {"id": "second-done", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "Second part", "status": "completed", "summary": "Second part done."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_call]}}]}).to_utf8_buffer())
+		if not jobs.ask_planner(failed_id): _fail("Planner review was not queued"); return
+		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 4: _fail("Planner review did not dispatch"); return
+		var revise_call := {"id": "revise", "type": "function", "function": {"name": "revise_task", "arguments": JSON.stringify({"task_id": "first", "instruction": "Write the result to FirstPart.txt.", "diagnosis": "The previous brief omitted the output file."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [revise_call]}}]}).to_utf8_buffer())
+		var proposal: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			proposal = jobs.get_job_status(failed_id).get("result", {}).get("intervention_proposal", {})
+			if not proposal.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if str(proposal.get("kind", "")) != "revise" or not str(proposal.get("instruction", "")).contains("FirstPart.txt"):
+			_fail("Planner proposal was not stored: " + str(proposal)); return
+		if not jobs.retry_task(failed_id, str(proposal.instruction)): _fail("Confirmed planner retry was not queued"); return
+		while fake.submissions.size() < 5 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 5: _fail("Planner retry did not dispatch"); return
+		var retry_call := {"id": "retry-done", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "First part", "status": "completed", "summary": "First part retried with planner guidance."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [retry_call]}}]}).to_utf8_buffer())
+		var join_job: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			for candidate in jobs.queue.snapshot().jobs:
+				if str(candidate.get("submission_key", "")).begins_with("plan-join:"):
+					join_job = jobs.get_job_status(str(candidate.id))
+			if not join_job.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if join_job.is_empty(): _fail("Planner retry did not join"); return
+		var plan_message: Array = Array(join_job.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "plan-planner")
+		var plan_result: Variant = JSON.parse_string(str(plan_message.back().content)) if not plan_message.is_empty() else null
+		if not plan_result is Dictionary or str(plan_result.get("data", {}).get("rollup", "")) != "completed":
+			_fail("Planner retry plan did not complete: " + str(plan_result)); return
+		while fake.submissions.size() < 6 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Planner complete."}}]}).to_utf8_buffer())
+		var join_id := str(join_job.get("id", ""))
+		while jobs.get_job_status(join_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(join_id).get("state") != "completed": _fail("Planner plan did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_skip":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Build three parts and skip the failed one."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var root_id: String = jobs.queue.snapshot().jobs.back().id
+		var plan_call := {"id": "plan-skip", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Three parts", "tasks": [
+			{"id": "first", "title": "First part", "brief": "Do the first part.", "depends_on": []},
+			{"id": "second", "title": "Second part", "brief": "Do the second part.", "depends_on": []},
+			{"id": "third", "title": "Third part", "brief": "Do the third part.", "depends_on": ["first"]},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": ""}}]}).to_utf8_buffer())
+		var failed_id := ""
+		while Time.get_ticks_msec() < deadline:
+			for job in jobs.queue.snapshot().jobs:
+				if str(job.get("parameters", {}).get("task_id", "")) == "first" and job.get("state") == "failed":
+					failed_id = str(job.id)
+			if not failed_id.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if failed_id.is_empty(): _fail("Skip plan task did not fail"); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var second_call := {"id": "second-skip", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "Second part", "status": "completed", "summary": "Second part done."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_call]}}]}).to_utf8_buffer())
+		if not jobs.skip_plan_task(failed_id): _fail("Task skip was not accepted"); return
+		var third: Dictionary = {}
+		var join_job: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			for job in jobs.queue.snapshot().jobs:
+				if str(job.get("parameters", {}).get("task_id", "")) == "third": third = job
+				if str(job.get("submission_key", "")).begins_with("plan-join:"): join_job = jobs.get_job_status(str(job.id))
+			if not join_job.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if third.get("state") != "cancelled" or str(third.get("result", {}).get("dependency_failed", "")) != "first":
+			_fail("Dependent task was not cancelled with its dependency: " + str(third)); return
+		if join_job.is_empty(): _fail("Skipped plan did not join"); return
+		var plan_message: Array = Array(join_job.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "plan-skip")
+		var plan_result: Variant = JSON.parse_string(str(plan_message.back().content)) if not plan_message.is_empty() else null
+		if not plan_result is Dictionary or str(plan_result.get("data", {}).get("rollup", "")) != "partial":
+			_fail("Skipped plan did not report partial: " + str(plan_result)); return
+		while fake.submissions.size() < 4 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Skip complete."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_cancel":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Cancel a running plan."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var root_id: String = jobs.queue.snapshot().jobs.back().id
+		var plan_call := {"id": "plan-cancel", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Two parts", "tasks": [
+			{"id": "first", "title": "First part", "brief": "Do the first part.", "depends_on": []},
+			{"id": "second", "title": "Second part", "brief": "Do the second part.", "depends_on": []},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if not jobs.cancel_plan(root_id): _fail("Plan cancellation was not accepted"); return
+		var cancel_result := {"id": "cancel-done", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "First part", "status": "completed", "summary": "Finished before cancellation."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [cancel_result]}}]}).to_utf8_buffer())
+		var join_job: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			for job in jobs.queue.snapshot().jobs:
+				if str(job.get("submission_key", "")).begins_with("plan-join:"):
+					join_job = jobs.get_job_status(str(job.id))
+			if not join_job.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		if join_job.is_empty(): _fail("Cancelled plan did not append a termination step"); return
+		var plan_message: Array = Array(join_job.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "plan-cancel")
+		var plan_result: Variant = JSON.parse_string(str(plan_message.back().content)) if not plan_message.is_empty() else null
+		if not plan_result is Dictionary or str(plan_result.get("error", {}).get("code", "")) != "plan_cancelled":
+			_fail("Cancelled plan did not answer its plan call: " + str(plan_result)); return
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3:
+			var states: Array = []
+			for job in jobs.queue.snapshot().jobs: states.append([job.id, job.state, job.operation, job.get("parameters", {}).get("task_id", ""), job.get("contained", false)])
+			_fail("Cancelled plan did not resume the model: " + str(states) + " / queue " + str(jobs.queue.snapshot().paused) + " / stop " + str(jobs.queue.snapshot().stop_reason)); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Plan cancelled."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_invalid":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Submit an invalid plan."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var invalid := {"id": "bad-plan", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Cycle", "tasks": [
+			{"id": "a", "title": "A", "brief": "A.", "depends_on": ["b"]},
+			{"id": "b", "title": "B", "brief": "B.", "depends_on": ["a"]},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [invalid]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("Invalid plan did not return a tool error"); return
+		var error_result: Variant = _tool_result_for(fake.submissions[1].messages, "bad-plan")
+		if not error_result is Dictionary or error_result.get("ok", true) or str(error_result.get("error", {}).get("code", "")) != "invalid_arguments":
+			_fail("Invalid plan was not rejected: " + str(error_result)); return
+		if jobs.queue.snapshot().jobs.any(func(job): return str(job.get("parameters", {}).get("role", "")) == "task"): _fail("Invalid plan appended children"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Invalid plan rejected."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_overclaim":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Overclaim a plan result."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var plan_call := {"id": "over-plan", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "One task", "tasks": [{"id": "one", "title": "One", "brief": "Do one.", "depends_on": []}]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var overclaim := {"id": "over-result", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "One", "status": "completed", "summary": "I changed the scene.", "changes": [{"kind": "node", "target": "World", "detail": "added"}]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [overclaim]}}]}).to_utf8_buffer())
+		var join_job: Dictionary = {}
+		while Time.get_ticks_msec() < deadline:
+			for candidate in jobs.queue.snapshot().jobs:
+				if str(candidate.get("submission_key", "")).begins_with("plan-join:"): join_job = jobs.get_job_status(str(candidate.id))
+			if not join_job.is_empty(): break
+			await get_tree().create_timer(0.05).timeout
+		var plan_message: Array = Array(join_job.get("parameters", {}).get("turn", {}).get("messages", [])).filter(func(message): return message.get("tool_call_id") == "over-plan")
+		var plan_result: Variant = JSON.parse_string(str(plan_message.back().content)) if not plan_message.is_empty() else null
+		if not plan_result is Dictionary or str(plan_result.get("data", {}).get("tasks", [{}])[0].get("status", "")) != "unverified":
+			_fail("Overclaim was not downgraded: " + str(plan_result)); return
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "plan_dependency":
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Run a dependent plan."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var plan_call := {"id": "dep-plan", "type": "function", "function": {"name": "submit_plan", "arguments": JSON.stringify({"goal": "Dependent", "tasks": [
+			{"id": "first", "title": "First", "brief": "Do first.", "depends_on": []},
+			{"id": "second", "title": "Second", "brief": "Do second.", "depends_on": ["first"]},
+		]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [plan_call]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		var first_result := {"id": "dep-first", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "First", "status": "completed", "summary": "First wrote the shared file.", "changes": [{"kind": "file", "target": "shared.txt", "detail": "created"}]})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [first_result]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 3: _fail("Dependent task did not dispatch"); return
+		var dependent_prompt := str(fake.submissions[2].messages.back().get("content", ""))
+		if not dependent_prompt.contains("Dependency results") or not dependent_prompt.contains("First wrote the shared file"):
+			_fail("Dependency result was not injected: " + dependent_prompt); return
+		var second_result := {"id": "dep-second", "type": "function", "function": {"name": "submit_result", "arguments": JSON.stringify({"task": "Second", "status": "completed", "summary": "Second done."})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [second_result]}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
+	elif mode == "chat_project_instructions":
+		var agents := FileAccess.open("res://AGENTS.md", FileAccess.WRITE)
+		agents.store_string("Keep names short.\nUse snake_case for files.\n")
+		agents.close()
+		EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 131072)
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		fake.workspace_inspector_script = load("res://tiiny_inspector.gd")
+		fake.workspace_transactions_script = load("res://tiiny_transactions.gd")
+		fake.workspace_registry_script = load("res://tiiny_registry.gd")
+		fake.workspace_coding_script = load("res://tiiny_workspace.gd")
+		jobs.chat_service = fake
+		if not fake._ensure_workspace_registry(): _fail("Project instructions fixture could not build the registry"); return
+		fake.prompt.text = "Name the next feature."
+		fake._generate()
+		var project_id: String = jobs.queue.snapshot().jobs.back().id
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Project instructions did not dispatch"); return
+		var system_text := str(fake.submissions[0].messages[0].get("content", ""))
+		if not system_text.contains("Project instructions") or not system_text.contains("Keep names short"):
+			_fail("Project instructions were not added to the prompt"); return
+		var captured: Dictionary = jobs.get_job_status(project_id).get("parameters", {})
+		if str(captured.get("project_instructions", "")).find("Keep names short") < 0 or str(captured.get("project_instructions_sha256", "")).length() != 64:
+			_fail("Project instructions were not captured with the job: " + str(captured)); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "done"}}]}).to_utf8_buffer())
+		while jobs.get_job_status(project_id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if jobs.get_job_status(project_id).get("state") != "completed": _fail("Project instructions turn did not finish"); return
+		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return
 	elif mode == "chat_second_request_uncertain":
@@ -1115,13 +1677,9 @@ func _run() -> void:
 		var deadline := Time.get_ticks_msec() + 30000
 		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 1: _fail("Classification did not start"); return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("Answer request did not dispatch"); return
 		var running: Dictionary = jobs.get_job_status(id)
-		if fake.submissions.size() < 2 or running.attempts.back().get("device_confirmed", false) or not jobs.device_recovery_pending():
+		if running.attempts.back().get("device_confirmed", false) or not jobs.device_recovery_pending():
 			_fail("The answer request did not establish a fresh uncertainty boundary: " + str(running)); return
 		await fake._request_completed(HTTPRequest.RESULT_TIMEOUT, 0, PackedStringArray(), PackedByteArray())
 		while jobs.get_job_status(id).get("state") in ["queued", "running"] and Time.get_ticks_msec() < deadline:
@@ -1169,18 +1727,10 @@ func _run() -> void:
 		if fake.submissions.size() < 1:
 			_fail("Queued chat did not dispatch")
 			return
-		if str(fake.submissions[0].messages.back().content) != "Original request":
-			_fail("Classification did not use the accepted prompt")
+		if not str(fake.submissions[0].messages.back().content).begins_with("Original request"):
+			_fail("Direct dispatch did not use the accepted prompt")
 			return
-		var classified := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "general"}}]}).to_utf8_buffer()
-		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), classified)
-		await get_tree().process_frame
-		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
-			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 2:
-			_fail("Classified chat did not dispatch an answer")
-			return
-		var messages: Array = fake.submissions[1].messages
+		var messages: Array = fake.submissions[0].messages
 		var answer_text := str(messages.back().content)
 		if not answer_text.contains("Original request") or answer_text.contains("Changed after acceptance") or not answer_text.contains("Marker: original"):
 			_fail("Queued chat did not retain accepted context")
@@ -1210,9 +1760,9 @@ func _run() -> void:
 		if snapshot.jobs.back().operation != "resource_shape" or snapshot.jobs.back().sequence != 5 or not resource_callback.is_empty():
 			_fail("Resource generation did not append behind current work")
 			return
-		while fake.submissions.size() < 3 and Time.get_ticks_msec() < deadline:
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
 			await get_tree().create_timer(0.05).timeout
-		if fake.submissions.size() < 3:
+		if fake.submissions.size() < 2:
 			_fail("Continuation step did not dispatch after preceding jobs")
 			return
 		var reply := JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Fixture answer"}}]}).to_utf8_buffer()

@@ -33,6 +33,9 @@ var cancel_button: Button
 var acknowledge_button: Button
 var recovery_dialog: AcceptDialog
 var abandon_dialog: ConfirmationDialog
+var intervention_dialog: ConfirmationDialog
+var intervention_text: TextEdit
+var intervention_id := ""
 var acknowledge_dialog: ConfirmationDialog
 var abandon_id := ""
 var elapsed_update := 0.0
@@ -214,6 +217,42 @@ class AssetWorker extends RefCounted:
 		if is_instance_valid(owner):
 			owner.finalize_asset_job(state)
 
+class ShellWorker extends RefCounted:
+	var chat: WeakRef
+	var validator: Callable
+	var job: Dictionary
+	var polled := false
+	var cancelled_before_start := false
+	func _init(owner: Node, p_validator: Callable) -> void:
+		chat = weakref(owner)
+		validator = p_validator
+	func start(value: Dictionary) -> String:
+		job = value.duplicate(true)
+		var owner: Object = chat.get_ref()
+		if not is_instance_valid(owner) or not owner.has_method("begin_shell_job"):
+			return "Shell handler unavailable"
+		return str(owner.begin_shell_job(job))
+	func poll() -> Dictionary:
+		if cancelled_before_start:
+			return {"state": "cancelled", "result": {"error": "Cancelled before shell execution"}}
+		var owner: Object = chat.get_ref()
+		if not is_instance_valid(owner):
+			return {"state": "running", "stage": "Shell handler unavailable; outcome requires recovery"}
+		polled = true
+		return owner.poll_shell_job(job)
+	func cancel() -> void:
+		var owner: Object = chat.get_ref()
+		if not is_instance_valid(owner):
+			return
+		if not polled:
+			cancelled_before_start = true
+		else:
+			owner.cancel_shell_job(job.id)
+	func committed(state: String) -> void:
+		var owner: Object = chat.get_ref()
+		if is_instance_valid(owner):
+			owner.finalize_shell_job(state)
+
 class ModelWorker extends RefCounted:
 	var manager: WeakRef
 	var job: Dictionary
@@ -374,6 +413,19 @@ func _build_ui() -> void:
 	abandon_dialog.ok_button_text = "Abandon job"
 	abandon_dialog.confirmed.connect(_on_abandon_confirmed)
 	add_child(abandon_dialog)
+	intervention_dialog = ConfirmationDialog.new()
+	intervention_dialog.title = "Fix failed task"
+	intervention_dialog.ok_button_text = "Retry task"
+	intervention_dialog.add_button("Skip task", true, "skip")
+	intervention_dialog.add_button("Ask planner", true, "planner")
+	intervention_dialog.add_button("Cancel plan", true, "cancel")
+	intervention_text = TextEdit.new()
+	intervention_text.custom_minimum_size = Vector2(520, 160)
+	intervention_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	intervention_dialog.add_child(intervention_text)
+	intervention_dialog.confirmed.connect(_on_intervention_retry)
+	intervention_dialog.custom_action.connect(_on_intervention_action)
+	add_child(intervention_dialog)
 	acknowledge_dialog = ConfirmationDialog.new()
 	acknowledge_dialog.title = "Acknowledge uncertain device record"
 	acknowledge_dialog.ok_button_text = "Clear device record"
@@ -437,6 +489,8 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 		return ""
 	if operation == "chat_turn":
 		return _validate_chat(parameters)
+	if operation == "shell_exec":
+		return _validate_shell(parameters)
 	if operation == "attach_tree_to_scene":
 		return _validate_attachment(parameters)
 	if operation != "create_tree":
@@ -467,10 +521,55 @@ func _validate_tree_path(path: Variant) -> String:
 		return "Destination folder does not exist"
 	return ""
 
+func _validate_shell(parameters: Dictionary) -> String:
+	for key in parameters:
+		if str(key) not in ["kind", "command", "argv", "cwd", "timeout_ms", "approval", "chat_handoff"]:
+			return "Invalid shell job parameters"
+	var kind := str(parameters.get("kind", ""))
+	if kind not in ["command", "headless"]:
+		return "Invalid shell job kind"
+	var cwd := str(parameters.get("cwd", ""))
+	if not cwd.begins_with("res://") or cwd.contains("\\") or cwd.contains(".."):
+		return "Invalid shell working directory"
+	if not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 300000:
+		return "Invalid shell time limit"
+	var approval: Variant = parameters.get("approval", {})
+	if not approval is Dictionary or approval.size() != 3 or not approval.get("at") is int or not approval.get("tool") is String or not approval.get("digest") is String or approval.digest.length() != 64 or not approval.digest.is_valid_hex_number(false):
+		return "Invalid shell approval"
+	if approval.tool != ("run_command" if kind == "command" else "run_godot_headless"):
+		return "Shell approval does not match the requested tool"
+	if kind == "command":
+		if parameters.has("argv") or not parameters.get("command") is String or str(parameters.command).strip_edges().is_empty() or str(parameters.command).length() > 4000 or str(parameters.command).contains("\n"):
+			return "Invalid shell command"
+	else:
+		if parameters.has("command"):
+			return "Headless jobs do not take a command string"
+		var argv: Variant = parameters.get("argv", [])
+		if not argv is Array or argv.is_empty() or argv.size() > 128:
+			return "Invalid headless arguments"
+		for value in argv:
+			if not value is String or str(value).is_empty() or str(value).length() > 512 or str(value).contains("\n"):
+				return "Invalid headless argument"
+	if parameters.has("chat_handoff"):
+		var handoff: Variant = parameters.chat_handoff
+		if not handoff is Dictionary or handoff.size() != 3 or not handoff.get("chat") is Dictionary or not handoff.chat.has("turn") or not handoff.get("call") is Dictionary or not handoff.get("remaining") is Array:
+			return "Invalid shell turn handoff"
+		if not _validate_chat(handoff.chat).is_empty() or not _valid_pending_calls([handoff.call] + handoff.remaining):
+			return "Invalid shell turn handoff"
+		var expected := "run_command" if kind == "command" else "run_godot_headless"
+		if str(handoff.call.get("name", "")) != expected or str(handoff.call.get("id", "")) not in handoff.chat.turn.calls:
+			return "Shell turn handoff does not match the request"
+		for pending in handoff.remaining:
+			if pending.id in handoff.chat.turn.calls: return "Pending tool call was already executed"
+		if JSON.stringify(parameters).to_utf8_buffer().size() > 24 * 1024 * 1024: return "Shell turn handoff is too large"
+	return ""
+
 func _validate_chat(parameters: Dictionary) -> String:
 	var strings := ["prompt", "context", "custom_prompt", "model", "connection_hash"]
-	if parameters.size() not in [7, 8]:
-		return "Invalid chat job parameters"
+	var allowed := ["prompt", "context", "custom_prompt", "model", "connection_hash", "conversation", "timeout_ms", "turn", "project_instructions", "project_instructions_sha256", "role", "plan_root", "parent_job", "task_id", "task_title", "depends_on", "attempt", "depth", "plan_goal", "prior_attempt", "purpose", "failed_job", "dependency_results"]
+	for key in parameters:
+		if str(key) not in allowed:
+			return "Invalid chat job parameters"
 	for key in strings:
 		if not parameters.get(key) is String:
 			return "Invalid chat job parameters"
@@ -478,8 +577,42 @@ func _validate_chat(parameters: Dictionary) -> String:
 		return "Invalid chat request"
 	if not parameters.get("conversation") is Array:
 		return "Invalid chat context"
+	if parameters.has("project_instructions") != parameters.has("project_instructions_sha256"):
+		return "Invalid project instructions"
+	if parameters.has("project_instructions"):
+		if not parameters.project_instructions is String or parameters.project_instructions.length() > 8192 or not parameters.project_instructions_sha256 is String:
+			return "Invalid project instructions"
+		var digest := str(parameters.project_instructions_sha256)
+		if not digest.is_empty() and (digest.length() != 64 or not digest.is_valid_hex_number(false)):
+			return "Invalid project instructions digest"
 	if not parameters.get("timeout_ms") is int or parameters.timeout_ms < 0 or parameters.timeout_ms > 86400000:
 		return "Invalid time limit"
+	if parameters.has("role"):
+		if not parameters.role is String or str(parameters.role) not in ["", "task", "intervention"]:
+			return "Invalid turn role"
+	if parameters.has("depth"):
+		if not parameters.depth is int or parameters.depth < 0 or parameters.depth > 2:
+			return "Invalid plan depth"
+	if parameters.has("attempt"):
+		if not parameters.attempt is int or parameters.attempt < 1 or parameters.attempt > 3:
+			return "Invalid task attempt"
+	for key in ["plan_root", "parent_job", "task_id", "task_title", "plan_goal", "purpose", "failed_job"]:
+		if parameters.has(key) and (not parameters.get(key) is String or str(parameters.get(key)).length() > 512):
+			return "Invalid plan field"
+	if parameters.has("dependency_results") and (not parameters.dependency_results is String or parameters.dependency_results.length() > 8000):
+		return "Invalid dependency results"
+	if parameters.has("depends_on"):
+		if not parameters.depends_on is Array or parameters.depends_on.size() > 3:
+			return "Invalid task dependencies"
+		for value in parameters.depends_on:
+			if not value is String or str(value).length() > 32:
+				return "Invalid task dependency"
+	if parameters.has("prior_attempt"):
+		if not parameters.prior_attempt is Dictionary or JSON.stringify(parameters.prior_attempt).to_utf8_buffer().size() > 16384:
+			return "Invalid prior attempt"
+	if str(parameters.get("role", "")) == "task":
+		if not parameters.has("plan_root") or not parameters.has("parent_job") or not parameters.has("task_id") or not parameters.has("attempt"):
+			return "Task turns require plan lineage"
 	if parameters.has("turn"):
 		var turn: Variant = parameters.turn
 		if not turn is Dictionary or turn.size() not in [10, 11, 12]:
@@ -761,6 +894,8 @@ func _make_worker(job: Dictionary) -> RefCounted:
 		return ResourceWorker.new(chat_service) if is_instance_valid(chat_service) else null
 	if job.operation == "asset_generate":
 		return AssetWorker.new(chat_service, _validate) if is_instance_valid(chat_service) else null
+	if job.operation == "shell_exec":
+		return ShellWorker.new(chat_service, _validate) if is_instance_valid(chat_service) else null
 	if job.operation == "chat_turn":
 		return ChatWorker.new(chat_service, _validate) if is_instance_valid(chat_service) else null
 	if job.operation == "attach_tree_to_scene":
@@ -771,6 +906,90 @@ func _make_worker(job: Dictionary) -> RefCounted:
 	var path := root_path.path_join(".godot/tiiny/asset_jobs").path_join(job.id + "-" + str(attempt))
 	var publisher: RefCounted = publisher_script.new(queue, root_path, EditorInterface.get_resource_filesystem())
 	return worker_script.new(path, OS.get_executable_path(), publisher, Callable(self, "append_job"))
+
+func begin_shell_job(job: Dictionary) -> String:
+	if not is_instance_valid(chat_service) or not chat_service.has_method("begin_shell_job"):
+		return "Shell handler unavailable"
+	return str(chat_service.begin_shell_job(job))
+
+func poll_shell_job(job: Dictionary) -> Dictionary:
+	if not is_instance_valid(chat_service) or not chat_service.has_method("poll_shell_job"):
+		return {"state": "running", "stage": "Shell handler unavailable; outcome requires recovery"}
+	return chat_service.poll_shell_job(job)
+
+func cancel_shell_job(id: String) -> void:
+	if is_instance_valid(chat_service) and chat_service.has_method("cancel_shell_job"):
+		chat_service.cancel_shell_job(id)
+
+func finalize_shell_job(state: String) -> void:
+	if is_instance_valid(chat_service) and chat_service.has_method("finalize_shell_job"):
+		chat_service.finalize_shell_job(state)
+
+func plan_task_count(root_id: String) -> int:
+	return queue.plan_task_count(root_id)
+
+func retry_task(id: String, instruction: String) -> bool:
+	var job := get_job_status(id)
+	if job.has("error") or str(job.get("state", "")) != "failed" or str(job.get("parameters", {}).get("role", "")) != "task":
+		return false
+	if not is_instance_valid(chat_service) or not chat_service.has_method("prepare_task_retry"):
+		return false
+	var parameters: Dictionary = chat_service.prepare_task_retry(job, instruction)
+	if parameters.is_empty():
+		return false
+	var root := str(parameters.get("plan_root", ""))
+	var task := str(parameters.get("task_id", ""))
+	var attempt := int(parameters.get("attempt", 1))
+	var appended: Dictionary = queue.append("task:" + root + ":" + task + ":" + str(attempt), "chat_turn", parameters, _validate)
+	if appended.has("error"):
+		return false
+	_resume_if_queued()
+	_refresh()
+	return true
+
+func record_intervention(id: String, proposal: Dictionary) -> bool:
+	var ok: bool = queue.record_intervention(id, proposal)
+	if ok: _refresh()
+	return ok
+
+func ask_planner(id: String) -> bool:
+	var job := get_job_status(id)
+	if job.has("error") or str(job.get("state", "")) != "failed" or str(job.get("parameters", {}).get("role", "")) != "task":
+		return false
+	if not is_instance_valid(chat_service) or not chat_service.has_method("prepare_plan_intervention"):
+		return false
+	var reviews := 0
+	for candidate in queue.snapshot().jobs:
+		if str(candidate.get("parameters", {}).get("purpose", "")) == "intervention" and str(candidate.get("parameters", {}).get("failed_job", "")) == id:
+			reviews += 1
+	if reviews >= 2:
+		summary.text = "The planner review limit for this task was reached."
+		return false
+	var parameters: Dictionary = chat_service.prepare_plan_intervention(id)
+	if parameters.is_empty():
+		return false
+	var appended: Dictionary = queue.append("intervention:" + id + ":" + str(reviews + 1), "chat_turn", parameters, _validate)
+	if appended.has("error"):
+		return false
+	_resume_if_queued()
+	_refresh()
+	return true
+
+func skip_plan_task(id: String) -> bool:
+	var ok: bool = queue.skip_plan_task(id)
+	if ok: _refresh()
+	return ok
+
+func cancel_plan(id: String) -> bool:
+	var ok: bool = queue.cancel_plan(id, _validate)
+	if ok: _refresh()
+	return ok
+
+func record_shell_process(id: String, pid: int, label: String) -> void:
+	var job := get_job_status(id)
+	if job.has("error") or job.get("attempts", []).is_empty() or int(job.attempts.back().get("process", {}).get("pid", 0)) == pid:
+		return
+	queue.record_process(id, {"pid": pid, "command": label, "at": Time.get_unix_time_from_system()})
 
 func _process(delta: float) -> void:
 	if not available:
@@ -788,6 +1007,8 @@ func _process(delta: float) -> void:
 	elapsed_update += delta
 	if elapsed_update >= 0.25:
 		elapsed_update = 0.0
+		if available:
+			queue.commit_ready_joins(_validate)
 		_refresh()
 
 func _start_recovery() -> void:
@@ -817,6 +1038,8 @@ func _on_cancel() -> void:
 func _is_abandonable(job: Dictionary) -> bool:
 	if job.get("state") != "interrupted" or not job.get("attempts") is Array or job.attempts.is_empty():
 		return false
+	if job.get("operation") == "shell_exec":
+		return true
 	var attempt: Dictionary = job.attempts.back()
 	return attempt.get("device_started", false) and not attempt.has("mutation") and not attempt.has("publication")
 
@@ -855,7 +1078,13 @@ func _job_title(job: Dictionary) -> String:
 		return label + " — Schedule " + str(job.parameters.get("model", "specialized model"))
 	if job.operation == "asset_generate":
 		return label + " — " + str(job.parameters.get("kind", "asset")) + " " + str(job.parameters.get("model", ""))
+	if job.operation == "shell_exec":
+		return label + " — " + _preview(str(job.parameters.get("command", "headless Godot")), 90)
 	if job.operation == "chat_turn":
+		if str(job.parameters.get("role", "")) == "task":
+			return label + " — task " + str(job.parameters.get("task_id", "")) + " (attempt " + str(job.parameters.get("attempt", 1)) + ")"
+		if bool(job.get("result", {}).get("plan_pending", false)):
+			return label + " — plan: " + _preview(str(job.get("result", {}).get("plan", {}).get("goal", "")), 70)
 		var step := ""
 		if job.parameters.get("turn") is Dictionary:
 			step = " (step %d)" % int(job.parameters.turn.get("step", 1))
@@ -933,14 +1162,20 @@ func _make_card(job: Dictionary) -> PanelContainer:
 	elif job.state == "queued":
 		buttons.add_child(_card_button("Cancel", func(): _on_cancel_queued(str(job.id))))
 	elif job.state in ["failed", "cancelled"]:
-		buttons.add_child(_card_button("Retry", func(): _on_retry_job(str(job.id))))
-		buttons.add_child(_card_button("Clear", func(): _on_clear_job(str(job.id))))
+		if str(job.get("parameters", {}).get("role", "")) == "task" and job.state == "failed":
+			buttons.add_child(_card_button("Fix task", func(): _on_fix_task(str(job.id))))
+			buttons.add_child(_card_button("Skip task", func(): skip_plan_task(str(job.id))))
+		else:
+			buttons.add_child(_card_button("Retry", func(): _on_retry_job(str(job.id))))
+			buttons.add_child(_card_button("Clear", func(): _on_clear_job(str(job.id))))
 	elif job.state == "interrupted":
 		if job.operation == "attach_tree_to_scene" or (not job.attempts.is_empty() and job.attempts.back().has("device_operations")):
 			buttons.add_child(_card_button("Check", func(): _on_check_job(str(job.id))))
 		if _is_abandonable(job):
 			buttons.add_child(_card_button("Skip", func(): _on_skip_job(str(job.id))))
 	elif job.state in ["completed", "skipped"]:
+		if job.operation == "chat_turn" and bool(job.get("result", {}).get("plan_pending", false)) and not job.get("result", {}).has("join_job"):
+			buttons.add_child(_card_button("Cancel plan", func(): cancel_plan(str(job.id))))
 		buttons.add_child(_card_button("Clear", func(): _on_clear_job(str(job.id))))
 	return card
 
@@ -996,12 +1231,68 @@ func _on_cancel_queued_all() -> void:
 	_refresh()
 
 func _skip_with_tool_result(job: Dictionary, decision: String) -> bool:
-	if job.get("operation") == "asset_generate" and job.get("parameters", {}).has("chat_handoff"):
-		if not is_instance_valid(chat_service) or not chat_service.has_method("prepare_image_tool_successor"):
+	if job.get("operation") in ["asset_generate", "shell_exec"] and job.get("parameters", {}).has("chat_handoff"):
+		if not is_instance_valid(chat_service):
 			return false
-		var continuation: Dictionary = chat_service.prepare_image_tool_successor(job, job.get("result", {}), true, decision == "abandon")
+		var continuation: Dictionary = {}
+		if job.operation == "asset_generate":
+			if not chat_service.has_method("prepare_image_tool_successor"):
+				return false
+			continuation = chat_service.prepare_image_tool_successor(job, job.get("result", {}), true, decision == "abandon")
+		else:
+			if not chat_service.has_method("prepare_shell_tool_successor"):
+				return false
+			continuation = chat_service.prepare_shell_tool_successor(job, job.get("result", {}), true, decision == "abandon")
 		return not continuation.is_empty() and queue.skip_with_successor(str(job.id), decision, "chat_turn", continuation, _validate)
 	return queue.abandon(str(job.id)) if decision == "abandon" else queue.resolve(str(job.id), "skip")
+
+func _on_fix_task(id: String) -> void:
+	var job := get_job_status(id)
+	if job.has("error") or str(job.get("state", "")) != "failed" or str(job.get("parameters", {}).get("role", "")) != "task":
+		return
+	intervention_id = id
+	var raw_error: Variant = job.get("result", {}).get("error", "")
+	var error_text := str(raw_error.get("message", "")) if raw_error is Dictionary else str(raw_error)
+	var proposal: Dictionary = job.get("result", {}).get("intervention_proposal", {})
+	var proposal_text := ""
+	if str(proposal.get("kind", "")) == "revise":
+		proposal_text = "\n\nPlanner diagnosis: " + str(proposal.get("diagnosis", ""))
+	elif str(proposal.get("kind", "")) == "skip":
+		proposal_text = "\n\nPlanner recommends skipping: " + str(proposal.get("reason", ""))
+	intervention_dialog.dialog_text = "Task %s (attempt %d) failed.\n\n%s%s\n\nEdit the instruction, then retry. Recorded work from the failed attempt is passed to the retry; it is not replayed." % [str(job.get("parameters", {}).get("task_title", "")), int(job.get("parameters", {}).get("attempt", 1)), error_text.left(1200), proposal_text]
+	intervention_text.text = str(proposal.get("instruction", job.get("parameters", {}).get("prompt", "")))
+	intervention_dialog.popup_centered()
+
+func _on_intervention_retry() -> void:
+	if intervention_id.is_empty():
+		return
+	var id := intervention_id
+	intervention_id = ""
+	if not retry_task(id, intervention_text.text):
+		summary.text = "Could not queue the task retry."
+		_refresh()
+
+func _on_intervention_action(action: StringName) -> void:
+	if intervention_id.is_empty():
+		return
+	var id := intervention_id
+	var job := get_job_status(id)
+	var root := str(job.get("parameters", {}).get("plan_root", ""))
+	intervention_id = ""
+	intervention_dialog.hide()
+	match str(action):
+		"skip":
+			if not skip_plan_task(id):
+				summary.text = "Could not skip the task."
+				_refresh()
+		"cancel":
+			if not cancel_plan(root):
+				summary.text = "Could not cancel the plan."
+				_refresh()
+		"planner":
+			if not ask_planner(id):
+				summary.text = "Could not queue planner guidance."
+				_refresh()
 
 func _on_clear_job(id: String) -> void:
 	if not available:
@@ -1067,6 +1358,8 @@ func _on_skip_job(id: String) -> void:
 	abandon_id = id
 	if job.operation in ["model_apply", "model_restore", "model_schedule"]:
 		abandon_dialog.dialog_text = "Job %s was interrupted during a model operation. Its remote outcome is unknown, and the device lease is held until this is resolved.\n\nAbandoning marks the job skipped and releases the lease. Refresh the device and check the configuration before trying again. Continue?" % id
+	elif job.operation == "shell_exec":
+		abandon_dialog.dialog_text = "Job %s was interrupted while running a host command. Its process may still be running, and skipping does not kill a process that outlived the editor.\n\nSkipping marks the outcome unknown, resumes the turn with that error, and keeps the recorded process id in the job details. Continue?" % id
 	else:
 		abandon_dialog.dialog_text = "Job %s was interrupted after the device request started. Its remote outcome is unknown, and the device lease is held until this is resolved.\n\nAbandoning marks the job skipped and releases the lease. A response that was never recorded, or a tool effect it performed, will not be recovered. Continue?" % id
 	abandon_dialog.popup_centered()
@@ -1186,6 +1479,16 @@ func _job_details_text(id: String) -> String:
 	if job.operation == "chat_turn":
 		lines.append("Prompt: " + _preview(job.parameters.get("prompt", "")))
 		lines.append("Model: " + str(job.parameters.get("model", "")))
+		if str(job.parameters.get("role", "")) == "task":
+			lines.append("Plan task: " + str(job.parameters.get("task_id", "")) + " (attempt " + str(job.parameters.get("attempt", 1)) + ")")
+			lines.append("Plan: " + str(job.parameters.get("plan_root", "")) + " · depth " + str(job.parameters.get("depth", 0)))
+			if job.parameters.has("depends_on"): lines.append("Depends on: " + str(job.parameters.depends_on))
+		if bool(job.get("result", {}).get("plan_pending", false)):
+			lines.append("Plan goal: " + str(job.get("result", {}).get("plan", {}).get("goal", "")))
+			for task in job.get("result", {}).get("plan", {}).get("tasks", []): lines.append("Task " + str(task.get("id", "")) + ": " + str(task.get("title", "")))
+			lines.append("Rollup: " + str(job.get("result", {}).get("plan_rollup", "pending")))
+		if job.get("result", {}).has("structured_result"):
+			lines.append("Structured result: " + JSON.stringify(job.result.structured_result, "  "))
 		if job.get("result", {}).has("reasoning"):
 			lines.append("Reasoning:\n" + str(job.result.reasoning))
 	elif job.operation == "resource_shape":
@@ -1208,6 +1511,17 @@ func _job_details_text(id: String) -> String:
 		if job.parameters.has("image_path"): lines.append("Reference: " + str(job.parameters.image_path))
 		if job.parameters.has("image_artifact_id"): lines.append("Image artifact: " + str(job.parameters.image_artifact_id))
 		if job.parameters.has("text"): lines.append("Text: " + _preview(job.parameters.text))
+	elif job.operation == "shell_exec":
+		lines.append("Kind: " + str(job.parameters.get("kind", "")))
+		if job.parameters.has("command"): lines.append("Command: " + _preview(job.parameters.command))
+		if job.parameters.has("argv"): lines.append("Arguments: " + _preview(" ".join(PackedStringArray(job.parameters.argv))))
+		lines.append("Working directory: " + str(job.parameters.get("cwd", "")))
+		var approval: Dictionary = job.parameters.get("approval", {})
+		lines.append("Pre-approved: " + Time.get_datetime_string_from_unix_time(int(approval.get("at", 0))) + " UTC")
+		if not job.attempts.is_empty() and job.attempts.back().has("process"):
+			var process: Dictionary = job.attempts.back().process
+			lines.append("Process: pid %d · %s" % [int(process.get("pid", 0)), str(process.get("command", ""))])
+			lines.append("A process that outlived the editor may still be running; skipping does not kill it.")
 	if _is_abandonable(job):
 		lines.append("Remote outcome: unknown. Skip abandons this job and releases the device lease.")
 	if job.state == "running":

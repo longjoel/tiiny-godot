@@ -35,6 +35,13 @@ var approve_discard: Callable
 var before_commit: Callable
 var allow_shell_commands := false
 var cancel_requested := false
+# One owned shell job at a time; the queue is serial. The dock starts the
+# coroutine and polls it so the editor thread never blocks.
+var shell_job_running := false
+var shell_job_cancelled := false
+var shell_job_pid := 0
+var shell_job_stage := ""
+var shell_job_result: Dictionary = {}
 
 func _init(p_root := "") -> void:
 	project_root = str(p_root).strip_edges()
@@ -289,6 +296,35 @@ func _existing_file(path: String) -> Dictionary:
 	return {}
 
 ### Read tools
+
+const MAX_PROJECT_INSTRUCTIONS_BYTES := 8192
+
+# Root project instructions. This is project data, read directly rather than
+# through the workspace tool mode. Invalid UTF-8 and symlinks are rejected.
+func read_project_instructions() -> Dictionary:
+	var resolved := _canonical("res://AGENTS.md", false)
+	if resolved.has("error"): return resolved
+	if not FileAccess.file_exists(str(resolved.absolute)):
+		return _error("not_found", "AGENTS.md is not present.")
+	var file := FileAccess.open(str(resolved.absolute), FileAccess.READ)
+	if file == null:
+		return _error("unreadable", "AGENTS.md could not be read.")
+	var total := int(file.get_length())
+	var bytes := file.get_buffer(mini(total, MAX_PROJECT_INSTRUCTIONS_BYTES))
+	file.close()
+	var truncated := total > MAX_PROJECT_INSTRUCTIONS_BYTES
+	var text := bytes.get_string_from_utf8()
+	if text.to_utf8_buffer() != bytes:
+		# A byte-bounded prefix may cut a multi-byte character. Trim only while
+		# the file was truncated; otherwise the file itself is not UTF-8.
+		while truncated and not bytes.is_empty() and text.to_utf8_buffer() != bytes:
+			bytes = bytes.slice(0, bytes.size() - 1)
+			text = bytes.get_string_from_utf8()
+		if text.to_utf8_buffer() != bytes:
+			return _error("not_utf8", "AGENTS.md is not valid UTF-8 text.")
+	if text.find(String.chr(0)) >= 0:
+		return _error("not_utf8", "AGENTS.md is not text.")
+	return {"ok": true, "text": text, "sha256": text.sha256_text(), "truncated": truncated}
 
 func _list_files(arguments: Dictionary) -> Dictionary:
 	var resolved := _canonical(str(arguments.get("path", "res://")))
@@ -886,6 +922,18 @@ func _git_log(arguments: Dictionary) -> Dictionary:
 ### Execution
 
 func _run_godot_headless(arguments: Dictionary) -> Dictionary:
+	var spec := _headless_spec(arguments)
+	if spec.has("error"): return spec
+	if not allow_shell_commands:
+		return _error("command_disabled", "Headless project execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve each run, because --script executes project code on the host.")
+	var approved := false
+	if approve_headless.is_valid():
+		approved = bool(await approve_headless.call(spec.argv.duplicate(), project_root))
+	if not approved:
+		return _error("approval_required", "The user did not approve running project code headlessly.")
+	return await _execute_shell_spec(spec)
+
+func _headless_spec(arguments: Dictionary) -> Dictionary:
 	var raw_args: Variant = arguments.get("args", [])
 	if not raw_args is Array or raw_args.is_empty():
 		return _error("invalid_arguments", "run_godot_headless requires a non-empty args array.")
@@ -924,34 +972,9 @@ func _run_godot_headless(arguments: Dictionary) -> Dictionary:
 		args.push_front("--headless")
 	args.push_front(project_root)
 	args.push_front("--path")
-	if not allow_shell_commands:
-		return _error("command_disabled", "Headless project execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve each run, because --script executes project code on the host.")
-	var approved := false
-	if approve_headless.is_valid():
-		approved = bool(await approve_headless.call(args.duplicate(), project_root))
-	if not approved:
-		return _error("approval_required", "The user did not approve running project code headlessly.")
-	var timeout_ms := clampi(int(arguments.get("timeout_ms", 60000)), 1000, MAX_COMMAND_TIMEOUT_MS)
-	var run: Dictionary = await _spawn(OS.get_executable_path(), args, project_root, timeout_ms)
-	if run.has("error"): return run
-	if bool(run.timed_out):
-		return _error("timeout", "The headless command exceeded %d ms and its process group was stopped." % timeout_ms, {"exit_code": int(run.exit_code), "stdout": _redact(str(run.stdout)), "stderr": _redact(str(run.stderr))})
-	var ok := int(run.exit_code) == 0
-	var summary := "Headless Godot exited %d in %d ms%s." % [int(run.exit_code), int(run.duration_ms), " with bounded output" if bool(run.output_truncated) else ""]
-	if not ok: summary += " " + _first_line(str(run.stderr))
-	var result := {
-		"ok": ok,
-		"summary": summary,
-		"data": {"exit_code": int(run.exit_code), "stdout": _redact(str(run.stdout)), "stderr": _redact(str(run.stderr)), "truncated": bool(run.output_truncated), "timed_out": false, "duration_ms": int(run.duration_ms)},
-		"affected": [],
-	}
-	if not ok:
-		result["error"] = {"code": "command_failed", "message": _first_line(str(run.stderr))}
-	return result
+	return {"kind": "headless", "argv": args, "cwd_res": "res://", "cwd_abs": project_root, "timeout_ms": clampi(int(arguments.get("timeout_ms", 60000)), 1000, MAX_COMMAND_TIMEOUT_MS)}
 
-func _run_command(arguments: Dictionary) -> Dictionary:
-	if not allow_shell_commands:
-		return _error("command_disabled", "Host command execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve a command explicitly.")
+func _command_spec(arguments: Dictionary) -> Dictionary:
 	var command := str(arguments.get("command", "")).strip_edges()
 	if command.is_empty() or command.length() > 4000 or _has_nul(command):
 		return _error("invalid_arguments", "The command is empty or too long.")
@@ -959,28 +982,162 @@ func _run_command(arguments: Dictionary) -> Dictionary:
 	if cwd.has("error"): return cwd
 	if not DirAccess.dir_exists_absolute(str(cwd.absolute)):
 		return _error("not_found", "The working directory does not exist: " + str(cwd.res))
+	return {"kind": "command", "command": command, "cwd_res": str(cwd.res), "cwd_abs": str(cwd.absolute), "timeout_ms": clampi(int(arguments.get("timeout_ms", 60000)), 1000, MAX_COMMAND_TIMEOUT_MS)}
+
+func _run_command(arguments: Dictionary) -> Dictionary:
+	if not allow_shell_commands:
+		return _error("command_disabled", "Host command execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve a command explicitly.")
+	var spec := _command_spec(arguments)
+	if spec.has("error"): return spec
 	var approved := false
 	if approve_command.is_valid():
-		approved = bool(await approve_command.call(command, str(cwd.res)))
+		approved = bool(await approve_command.call(str(spec.command), str(spec.cwd_res)))
 	if not approved:
 		return _error("approval_required", "The user did not approve running this host command.")
-	var timeout_ms := clampi(int(arguments.get("timeout_ms", 60000)), 1000, MAX_COMMAND_TIMEOUT_MS)
-	var run: Dictionary = await _spawn("/bin/sh", ["-c", command], str(cwd.absolute), timeout_ms)
+	return await _execute_shell_spec(spec)
+
+func _execute_shell_spec(spec: Dictionary, cancelled_check: Callable = Callable()) -> Dictionary:
+	var timeout_ms := int(spec.get("timeout_ms", 60000))
+	var note_pid := Callable(self, "_note_shell_pid") if shell_job_running else Callable()
+	var run: Dictionary
+	if spec.kind == "command":
+		run = await _spawn("/bin/sh", ["-c", str(spec.command)], str(spec.cwd_abs), timeout_ms, cancelled_check, note_pid)
+	else:
+		var argv: Array = spec.argv
+		run = await _spawn(OS.get_executable_path(), argv.duplicate(), str(spec.cwd_abs), timeout_ms, cancelled_check, note_pid)
 	if run.has("error"): return run
-	if bool(run.timed_out):
-		return _error("timeout", "The command exceeded %d ms and its process group was stopped." % timeout_ms)
+	if bool(run.get("cancelled", false)):
+		return _error("cancelled", "The command was cancelled and its process group was stopped.")
+	if bool(run.get("timed_out", false)):
+		return _error("timeout", "The command exceeded %d ms and its process group was stopped." % timeout_ms, {"exit_code": int(run.exit_code), "stdout": _redact(str(run.stdout)), "stderr": _redact(str(run.stderr))})
 	var ok := int(run.exit_code) == 0
+	var command_label := str(spec.command) if spec.kind == "command" else " ".join(PackedStringArray(spec.argv))
+	var summary := ("Command" if spec.kind == "command" else "Headless Godot") + " exited %d in %d ms%s." % [int(run.exit_code), int(run.duration_ms), " with bounded output" if bool(run.output_truncated) else ""]
+	if not ok: summary += " " + _first_line(str(run.stderr))
 	var result := {
 		"ok": ok,
-		"summary": "Command exited %d in %d ms%s." % [int(run.exit_code), int(run.duration_ms), " with bounded output" if bool(run.output_truncated) else ""],
-		"data": {"command": _redact(command), "cwd": str(cwd.res), "exit_code": int(run.exit_code), "stdout": _redact(str(run.stdout)), "stderr": _redact(str(run.stderr)), "truncated": bool(run.output_truncated), "timed_out": false, "duration_ms": int(run.duration_ms)},
+		"summary": summary,
+		"data": {"command": _redact(command_label), "cwd": str(spec.cwd_res), "exit_code": int(run.exit_code), "stdout": _redact(str(run.stdout)), "stderr": _redact(str(run.stderr)), "truncated": bool(run.output_truncated), "timed_out": false, "duration_ms": int(run.duration_ms)},
 		"affected": [],
 	}
 	if not ok:
 		result["error"] = {"code": "command_failed", "message": "The command exited with a non-zero status."}
 	return result
 
-func _spawn(executable: String, args: Array, cwd: String, timeout_ms: int) -> Dictionary:
+# Pre-approve a shell tool call and return job parameters. Approval happens once,
+# before the job is queued; execution revalidates the setting and the digest.
+func prepare_shell_job(tool_name: String, arguments: Dictionary) -> Dictionary:
+	if not allow_shell_commands:
+		return _error("command_disabled", "Host command execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve a command explicitly.")
+	var spec: Dictionary
+	if tool_name == "run_command":
+		spec = _command_spec(arguments)
+	elif tool_name == "run_godot_headless":
+		spec = _headless_spec(arguments)
+	else:
+		return _error("invalid_arguments", "Unsupported shell tool: " + tool_name)
+	if spec.has("error"): return spec
+	var approved := false
+	if tool_name == "run_command":
+		if approve_command.is_valid():
+			approved = bool(await approve_command.call(str(spec.command), str(spec.cwd_res)))
+	else:
+		if approve_headless.is_valid():
+			approved = bool(await approve_headless.call(spec.argv.duplicate(), project_root))
+	if not approved:
+		return _error("approval_required", "The user did not approve this command." if tool_name == "run_command" else "The user did not approve running project code headlessly.")
+	var parameters := {
+		"kind": str(spec.kind),
+		"cwd": str(spec.cwd_res),
+		"timeout_ms": int(spec.timeout_ms),
+		"approval": {"at": int(Time.get_unix_time_from_system()), "tool": tool_name},
+	}
+	if spec.kind == "command":
+		parameters["command"] = str(spec.command)
+	else:
+		parameters["argv"] = spec.argv.duplicate()
+	parameters.approval["digest"] = _shell_digest(parameters)
+	return {"ok": true, "parameters": parameters}
+
+func _execute_shell_parameters(parameters: Dictionary) -> Dictionary:
+	if not allow_shell_commands:
+		return _error("command_disabled", "Host command execution is disabled. Enable tiiny_ai/advanced/allow_shell_commands.")
+	var approval: Variant = parameters.get("approval", {})
+	if not approval is Dictionary or str(approval.get("digest", "")) != _shell_digest(parameters):
+		return _error("approval_invalid", "The shell approval does not match this job; queue it again.")
+	var cwd := _canonical(str(parameters.get("cwd", "res://")))
+	if cwd.has("error"): return cwd
+	if not DirAccess.dir_exists_absolute(str(cwd.absolute)):
+		return _error("not_found", "The working directory does not exist: " + str(cwd.res))
+	var spec := {
+		"kind": str(parameters.get("kind", "")),
+		"cwd_res": str(cwd.res),
+		"cwd_abs": str(cwd.absolute),
+		"timeout_ms": clampi(int(parameters.get("timeout_ms", 60000)), 1000, MAX_COMMAND_TIMEOUT_MS),
+	}
+	if spec.kind == "command":
+		var command := str(parameters.get("command", ""))
+		if command.strip_edges().is_empty() or command.length() > 4000 or _has_nul(command):
+			return _error("invalid_arguments", "The command is empty or too long.")
+		spec["command"] = command
+	else:
+		var argv: Variant = parameters.get("argv", [])
+		if not argv is Array or argv.is_empty() or argv.size() > 128:
+			return _error("invalid_arguments", "Headless arguments are missing or too long.")
+		for value in argv:
+			if not value is String or str(value).is_empty() or str(value).length() > 512 or str(value).contains("\n") or _has_nul(str(value)):
+				return _error("invalid_arguments", "Headless arguments must be bounded non-empty strings.")
+		spec["argv"] = Array(argv).duplicate()
+	return await _execute_shell_spec(spec, Callable(self, "_shell_cancelled"))
+
+func _shell_digest(parameters: Dictionary) -> String:
+	var payload := {
+		"kind": str(parameters.get("kind", "")),
+		"cwd": str(parameters.get("cwd", "")),
+		"timeout_ms": int(parameters.get("timeout_ms", 0)),
+	}
+	if str(parameters.get("kind", "")) == "command":
+		payload["command"] = str(parameters.get("command", ""))
+	else:
+		var argv_value: Variant = parameters.get("argv", [])
+		payload["argv"] = argv_value.duplicate() if argv_value is Array else []
+	return JSON.stringify(payload).sha256_text()
+
+func start_shell_job(parameters: Dictionary) -> String:
+	if shell_job_running:
+		return "A shell job is already running."
+	shell_job_running = true
+	shell_job_cancelled = false
+	shell_job_pid = 0
+	shell_job_result = {}
+	shell_job_stage = "Starting " + ("headless Godot" if str(parameters.get("kind", "")) == "headless" else "host command")
+	_run_shell_job(parameters)
+	return ""
+
+func _run_shell_job(parameters: Dictionary) -> void:
+	var result: Dictionary = await _execute_shell_parameters(parameters)
+	shell_job_result = result
+	shell_job_stage = "Finished"
+	shell_job_running = false
+
+func poll_shell_job() -> Dictionary:
+	if shell_job_running:
+		return {"state": "running", "stage": shell_job_stage, "pid": shell_job_pid}
+	if shell_job_result.is_empty():
+		return {"state": "running", "stage": "Starting"}
+	return {"state": "completed" if bool(shell_job_result.get("ok", false)) else "failed", "result": shell_job_result}
+
+func cancel_shell_job() -> void:
+	shell_job_cancelled = true
+
+func _shell_cancelled() -> bool:
+	return shell_job_cancelled
+
+func _note_shell_pid(pid: int) -> void:
+	shell_job_pid = pid
+	shell_job_stage = "Running (pid %d)" % pid
+
+func _spawn(executable: String, args: Array, cwd: String, timeout_ms: int, cancel_check: Callable = Callable(), on_start: Callable = Callable()) -> Dictionary:
 	if executable.contains("/") and not FileAccess.file_exists(executable):
 		return _error("not_found", "Executable not found: " + executable)
 	var search_path := OS.get_environment("PATH")
@@ -1009,12 +1166,14 @@ func _spawn(executable: String, args: Array, cwd: String, timeout_ms: int) -> Di
 	if info.is_empty():
 		return _error("spawn_failed", "Could not start the owned process.")
 	var pid := int(info.pid)
+	if on_start.is_valid(): on_start.call(pid)
 	var stdio: FileAccess = info.stdio
 	var stderr_pipe: FileAccess = info.stderr
 	var stdout := PackedByteArray()
 	var stderr := PackedByteArray()
 	var output_truncated := false
 	var timed_out := false
+	var cancelled := false
 	var started := Time.get_ticks_msec()
 	var deadline := started + timeout_ms
 	while true:
@@ -1026,7 +1185,11 @@ func _spawn(executable: String, args: Array, cwd: String, timeout_ms: int) -> Di
 			break
 		if not OS.is_process_running(pid):
 			break
-		if cancel_requested or Time.get_ticks_msec() >= deadline:
+		if cancel_requested or (cancel_check.is_valid() and bool(cancel_check.call())):
+			cancelled = true
+			_kill_owned(pid)
+			break
+		if Time.get_ticks_msec() >= deadline:
 			timed_out = true
 			_kill_owned(pid)
 			break
@@ -1042,6 +1205,7 @@ func _spawn(executable: String, args: Array, cwd: String, timeout_ms: int) -> Di
 		"stderr": stderr.get_string_from_utf8(),
 		"output_truncated": output_truncated,
 		"timed_out": timed_out,
+		"cancelled": cancelled,
 		"duration_ms": Time.get_ticks_msec() - started,
 	}
 
