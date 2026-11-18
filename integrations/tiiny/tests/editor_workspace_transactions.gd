@@ -808,7 +808,7 @@ func _run() -> void:
 	chat.pending_prompt = "Add a rectangular collision shape to Enemy, 32 wide and 48 tall."
 	chat.pending_key = "fixture-key"
 	chat.pending_model = "fixture-model"
-	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 32768)
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 65536)
 	chat._start_answer()
 	if chat.submissions.is_empty(): _fail("Registry chat did not submit a payload: " + chat.status.text); return
 	var payload: Dictionary = chat.submissions.back()

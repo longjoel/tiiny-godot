@@ -56,6 +56,7 @@ private:
 protected:
 	static void _bind_methods();
 	bool initialized = false;
+	bool native_symbols_ready = false;
 	HashMap<StringName, LSP::DocumentSymbol> native_symbols;
 
 	// Absolute paths that are known to point to res://
@@ -76,6 +77,7 @@ public:
 	HashMap<StringName, ClassMembers> native_members;
 
 public:
+	void initialize_native_symbols();
 	Error initialize();
 
 	String get_file_path(const String &p_uri);

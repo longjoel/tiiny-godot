@@ -232,9 +232,9 @@ void GDScriptWorkspace::list_script_files(const String &p_root_dir, List<String>
 
 #define HANDLE_DOC(m_string) ((is_native ? DTR(m_string) : (m_string)).strip_edges())
 
-Error GDScriptWorkspace::initialize() {
-	if (initialized) {
-		return OK;
+void GDScriptWorkspace::initialize_native_symbols() {
+	if (native_symbols_ready) {
+		return;
 	}
 
 	DocTools *doc = EditorHelp::get_doc_data();
@@ -361,8 +361,6 @@ Error GDScriptWorkspace::initialize() {
 		native_symbols.insert(class_name, class_symbol);
 	}
 
-	reload_all_workspace_scripts();
-
 	if (GDScriptLanguageProtocol::get_singleton()->is_smart_resolve_enabled()) {
 		for (const KeyValue<StringName, LSP::DocumentSymbol> &E : native_symbols) {
 			ClassMembers members;
@@ -375,8 +373,20 @@ Error GDScriptWorkspace::initialize() {
 		}
 	}
 
+	native_symbols_ready = true;
+}
+
+Error GDScriptWorkspace::initialize() {
+	if (initialized) {
+		return OK;
+	}
+
+	initialize_native_symbols();
+	reload_all_workspace_scripts();
+
 	EditorNode *editor_node = EditorNode::get_singleton();
 	editor_node->connect("script_add_function_request", callable_mp(this, &GDScriptWorkspace::apply_new_signal));
+	initialized = true;
 
 	return OK;
 }

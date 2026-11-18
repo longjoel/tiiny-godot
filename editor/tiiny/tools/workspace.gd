@@ -370,6 +370,17 @@ func definitions() -> Array:
 			}, "required": ["source"], "additionalProperties": false},
 			"risk": "read", "timeout_ms": 5000, "mode": "both",
 		},
+		{
+			"name": "lookup_docs",
+			"title": "Look up Godot docs",
+			"description": "Look up the built-in Godot class reference offline. Use class_name for a class summary, member for a method, property, signal, or constant (exact or partial), or query to search class names. Returns signatures and documentation; read-only and no process.",
+			"parameters": {"type": "object", "properties": {
+				"class_name": {"type": "string", "minLength": 1, "maxLength": 128},
+				"member": {"type": "string", "minLength": 1, "maxLength": 128},
+				"query": {"type": "string", "minLength": 1, "maxLength": 128},
+			}, "additionalProperties": false},
+			"risk": "read", "timeout_ms": 15000, "mode": "both",
+		},
 	]
 
 func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> Dictionary:
@@ -393,6 +404,7 @@ func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> 
 		"reload_scene": return await _reload_scene(arguments)
 		"scan_filesystem": return _scan_filesystem()
 		"check_gdscript": return _check_gdscript(arguments)
+		"lookup_docs": return _lookup_docs(arguments)
 	return _error("unknown_tool", "Unknown workspace tool: " + name)
 
 ### Paths
@@ -1075,6 +1087,164 @@ func _git_log(arguments: Dictionary) -> Dictionary:
 	return await _git(["log", "--no-color", "--oneline", "-n", str(count)], "Git log", 20000)
 
 ### Execution
+
+func _lookup_docs(arguments: Dictionary) -> Dictionary:
+	var native_class := str(arguments.get("class_name", "")).strip_edges()
+	var member := str(arguments.get("member", "")).strip_edges()
+	var query := str(arguments.get("query", "")).strip_edges()
+	if native_class.is_empty() and query.is_empty():
+		return _error("invalid_arguments", "Provide class_name, query, or Class.member.")
+	if native_class.is_empty():
+		var dot := query.find(".")
+		if dot > 0:
+			native_class = query.substr(0, dot).strip_edges()
+			if member.is_empty():
+				member = query.substr(dot + 1).strip_edges()
+		elif ClassDB.class_exists(query):
+			native_class = query
+		else:
+			return _docs_search(query)
+	if native_class.is_empty():
+		return _error("invalid_arguments", "A class name is required before the dot.")
+	if not member.is_empty() and member.length() > 128:
+		return _error("invalid_arguments", "member is too long.")
+	var protocol: Variant = Engine.get_singleton("GDScriptLanguageProtocol")
+	if protocol == null:
+		return _error("docs_unavailable", "The GDScript language service is unavailable; built-in docs cannot be read.")
+	var raw: Variant = protocol.get_native_docs(native_class, "")
+	if not raw is Dictionary:
+		var matches := _docs_class_matches(native_class)
+		if not matches.is_empty():
+			return {
+				"ok": true,
+				"summary": "No exact class named %s. Matches: %s." % [native_class, ", ".join(PackedStringArray(matches))],
+				"data": {"query": native_class, "matches": matches, "truncated": matches.size() >= 20},
+				"affected": [],
+			}
+		return _error("not_found", "No Godot class named " + native_class + ".", {"class": native_class})
+	var children := _docs_children(raw)
+	if member.is_empty():
+		return _docs_class_summary(native_class, raw, children)
+	var exact: Dictionary = {}
+	var partial: Array = []
+	var lower := member.to_lower()
+	for child in children:
+		if not child is Dictionary: continue
+		var child_name := str(child.get("name", ""))
+		if child_name == member:
+			exact = child
+			break
+		if child_name.to_lower().contains(lower):
+			partial.append(child)
+	if not exact.is_empty():
+		return _docs_member_result(native_class, exact)
+	if not partial.is_empty():
+		var matches: Array = []
+		for child in partial:
+			matches.append(_docs_member_line(child))
+			if matches.size() >= 20: break
+		return {
+			"ok": true,
+			"summary": "%d member%s in %s match '%s'." % [matches.size(), "" if matches.size() == 1 else "s", native_class, member],
+			"data": {"class": native_class, "member": member, "matches": matches, "truncated": partial.size() > matches.size()},
+			"affected": [],
+		}
+	return _error("not_found", "No member named %s in %s. Use a partial member name or omit member for the class summary." % [member, native_class], {"class": native_class, "member": member})
+
+func _docs_search(query: String) -> Dictionary:
+	var matches := _docs_class_matches(query)
+	if matches.is_empty():
+		return _error("not_found", "No Godot class matches '" + query + "'.")
+	if matches.size() == 1:
+		var protocol: Variant = Engine.get_singleton("GDScriptLanguageProtocol")
+		if protocol != null:
+			var raw: Variant = protocol.get_native_docs(str(matches[0]), "")
+			if raw is Dictionary:
+				return _docs_class_summary(str(matches[0]), raw, _docs_children(raw))
+	return {
+		"ok": true,
+		"summary": "Classes matching '%s': %s." % [query, ", ".join(PackedStringArray(matches))],
+		"data": {"query": query, "matches": matches, "truncated": matches.size() >= 20},
+		"affected": [],
+	}
+
+func _docs_class_matches(query: String) -> Array:
+	var lower := query.to_lower()
+	var matches: Array = []
+	for name in ClassDB.get_class_list():
+		if str(name).to_lower().contains(lower):
+			matches.append(str(name))
+	matches.sort_custom(func(a, b):
+		var a_lower := str(a).to_lower()
+		var b_lower := str(b).to_lower()
+		var a_exact := a_lower == lower
+		var b_exact := b_lower == lower
+		if a_exact != b_exact: return a_exact
+		var a_prefix := a_lower.begins_with(lower)
+		var b_prefix := b_lower.begins_with(lower)
+		if a_prefix != b_prefix: return a_prefix
+		return str(a) < str(b))
+	return matches.slice(0, 20)
+
+func _docs_class_summary(native_class: String, raw: Dictionary, children: Array) -> Dictionary:
+	var members: Array = []
+	for child in children:
+		if not child is Dictionary: continue
+		members.append(_docs_member_line(child))
+		if members.size() >= 80: break
+	var detail := str(raw.get("detail", "class " + native_class))
+	var documentation := str(raw.get("documentation", "")).left(4000)
+	return {
+		"ok": true,
+		"summary": ("%s (%d member%s%s)." % [detail, children.size(), "" if children.size() == 1 else "s", ", first 80 shown" if children.size() > members.size() else ""]).left(1200),
+		"data": {
+			"class": native_class,
+			"detail": detail,
+			"documentation": documentation,
+			"members": members,
+			"member_count": children.size(),
+			"truncated": children.size() > members.size(),
+		},
+		"affected": [],
+	}
+
+func _docs_member_result(native_class: String, member: Dictionary) -> Dictionary:
+	var name := str(member.get("name", ""))
+	var detail := str(member.get("detail", ""))
+	var kind := _docs_kind_name(int(member.get("kind", 0)))
+	return {
+		"ok": true,
+		"summary": ("%s.%s (%s): %s" % [native_class, name, kind, detail]).left(1200),
+		"data": {
+			"class": native_class,
+			"member": name,
+			"kind": kind,
+			"detail": detail,
+			"documentation": str(member.get("documentation", "")).left(6000),
+			"deprecated": bool(member.get("deprecated", false)),
+		},
+		"affected": [],
+	}
+
+func _docs_member_line(member: Dictionary) -> Dictionary:
+	return {
+		"name": str(member.get("name", "")),
+		"detail": str(member.get("detail", "")),
+		"kind": _docs_kind_name(int(member.get("kind", 0))),
+		"deprecated": bool(member.get("deprecated", false)),
+	}
+
+func _docs_kind_name(kind: int) -> String:
+	var names := {
+		5: "class", 6: "method", 7: "property", 8: "field", 9: "constructor",
+		10: "enum", 11: "interface", 12: "function", 13: "variable", 14: "constant",
+		22: "enum member", 23: "struct", 24: "event", 25: "operator", 26: "type parameter",
+	}
+	return str(names.get(kind, "symbol"))
+
+func _docs_children(raw: Dictionary) -> Array:
+	var value: Variant = raw.get("children", [])
+	return value if value is Array else []
 
 func _check_gdscript(arguments: Dictionary) -> Dictionary:
 	var source := str(arguments.get("source", ""))

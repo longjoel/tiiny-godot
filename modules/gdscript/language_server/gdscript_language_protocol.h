@@ -137,6 +137,8 @@ public:
 
 	_FORCE_INLINE_ bool is_initialized() const { return _initialized; }
 
+	Variant get_native_docs(const String &p_class, const String &p_member = String());
+
 	void poll(int p_limit_usec);
 	Error start(int p_port, const IPAddress &p_bind_ip);
 	void stop();

@@ -107,6 +107,7 @@ func _run() -> void:
 	await _case("Restore the original window width", "editor", "set_project_setting", {"name": "display/window/size/viewport_width", "value": 1152}, func(_result): return int(ProjectSettings.get_setting("display/window/size/viewport_width")) == 1152)
 	await _save()
 
+	await _case("Look up CharacterBody2D movement docs", "editor", "lookup_docs", {"class_name": "CharacterBody2D", "member": "move_and_slide"}, func(result): return "CharacterBody2D.move_and_slide" in str(result.data.detail) and not str(result.data.documentation).is_empty())
 	await _case("List workspace files", "workspace", "list_files", {"path": "res://"}, func(result): return Array(result.data.entries).size() >= 1)
 	await _case("Read the player script", "workspace", "read_file", {"path": "res://player.gd"}, func(result): return "SPEED" in str(result.data.content))
 	await _case("Find the speed constant", "workspace", "search_text", {"query": "SPEED"}, func(result): return Array(result.data.matches).size() >= 1)

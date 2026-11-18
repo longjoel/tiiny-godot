@@ -175,9 +175,25 @@ String GDScriptLanguageProtocol::format_output(const String &p_text) {
 	return header + p_text;
 }
 
+Variant GDScriptLanguageProtocol::get_native_docs(const String &p_class, const String &p_member) {
+	if (p_class.is_empty() || !workspace.is_valid()) {
+		return Variant();
+	}
+	workspace->initialize_native_symbols();
+	LSP::NativeSymbolInspectParams params;
+	params.native_class = p_class;
+	params.symbol_name = p_member;
+	const LSP::DocumentSymbol *symbol = workspace->resolve_native_symbol(params);
+	if (symbol == nullptr) {
+		return Variant();
+	}
+	return symbol->to_json(true);
+}
+
 void GDScriptLanguageProtocol::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_text_document"), &GDScriptLanguageProtocol::get_text_document);
 	ClassDB::bind_method(D_METHOD("get_workspace"), &GDScriptLanguageProtocol::get_workspace);
+	ClassDB::bind_method(D_METHOD("get_native_docs", "native_class", "symbol_name"), &GDScriptLanguageProtocol::get_native_docs, DEFVAL(String()));
 	ClassDB::bind_method(D_METHOD("is_smart_resolve_enabled"), &GDScriptLanguageProtocol::is_smart_resolve_enabled);
 	ClassDB::bind_method(D_METHOD("is_initialized"), &GDScriptLanguageProtocol::is_initialized);
 

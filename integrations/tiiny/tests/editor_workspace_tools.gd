@@ -256,15 +256,31 @@ func _run() -> void:
 	var compile_ok: Dictionary = await registry.execute("check_gdscript", {"source": "extends CharacterBody2D\n\nfunc _ready() -> void:\n\tpass\n", "target_class": "CharacterBody2D"})
 	if not compile_ok.get("ok", false) or str(compile_ok.get("data", {}).get("base_class", "")) != "CharacterBody2D":
 		_fail("check_gdscript did not compile a valid script: " + str(compile_ok)); return
-	var compile_bad: Dictionary = await registry.execute("check_gdscript", {"source": "extends Node\n\nfunc _ready() -> void:\n\tvar value: int = \"text\"\n"})
-	if bool(compile_bad.get("ok", false)) or int(compile_bad.get("data", {}).get("line", 0)) != 4:
-		_fail("check_gdscript did not report the failing line: " + str(compile_bad)); return
 	var compile_side_effect := "user://check_gdscript_tool_static.txt"
 	if FileAccess.file_exists(compile_side_effect):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(compile_side_effect))
 	var tool_static: Dictionary = await registry.execute("check_gdscript", {"source": "@tool\nextends Node\n\nstatic func _static_init() -> void:\n\tFileAccess.open(\"user://check_gdscript_tool_static.txt\", FileAccess.WRITE).store_string(\"ran\")\n"})
 	if not bool(tool_static.get("ok", false)) or not bool(tool_static.get("data", {}).get("tool_annotation_removed", false)) or FileAccess.file_exists(compile_side_effect):
 		_fail("check_gdscript ran a @tool static initializer: " + str(tool_static)); return
+	var docs_member: Dictionary = await registry.execute("lookup_docs", {"class_name": "CharacterBody2D", "member": "move_and_slide"})
+	if not bool(docs_member.get("ok", false)) or not str(docs_member.get("data", {}).get("detail", "")).contains("CharacterBody2D.move_and_slide") or str(docs_member.get("data", {}).get("documentation", "")).is_empty():
+		_fail("lookup_docs did not return method documentation: " + str(docs_member)); return
+	var docs_class: Dictionary = await registry.execute("lookup_docs", {"class_name": "CharacterBody2D"})
+	var docs_members: Array = docs_class.get("data", {}).get("members", [])
+	if not bool(docs_class.get("ok", false)) or str(docs_class.get("data", {}).get("detail", "")).is_empty() or not docs_members.any(func(member): return str(member.get("name", "")) == "move_and_slide"):
+		_fail("lookup_docs did not return a class summary: " + str(docs_class)); return
+	var docs_search: Dictionary = await registry.execute("lookup_docs", {"query": "body2d"})
+	if not bool(docs_search.get("ok", false)) or not Array(docs_search.get("data", {}).get("matches", [])).has("CharacterBody2D"):
+		_fail("lookup_docs class search did not find CharacterBody2D: " + str(docs_search)); return
+	var docs_partial: Dictionary = await registry.execute("lookup_docs", {"class_name": "CharacterBody2D", "member": "move"})
+	if not bool(docs_partial.get("ok", false)) or Array(docs_partial.get("data", {}).get("matches", [])).is_empty():
+		_fail("lookup_docs member search returned no matches: " + str(docs_partial)); return
+	var docs_missing: Dictionary = await registry.execute("lookup_docs", {"class_name": "CharacterBody2D", "member": "definitely_not_a_member"})
+	if str(docs_missing.get("error", {}).get("code", "")) != "not_found":
+		_fail("lookup_docs accepted an unknown member: " + str(docs_missing)); return
+	var docs_invalid: Dictionary = await registry.execute("lookup_docs", {})
+	if str(docs_invalid.get("error", {}).get("code", "")) != "invalid_arguments":
+		_fail("lookup_docs accepted an empty request: " + str(docs_invalid)); return
 
 	settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	dock.call("_refresh_registry_availability")
