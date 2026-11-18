@@ -589,6 +589,30 @@ func _bridge_tests() -> void:
 
 func _mode_tests() -> void:
 	var registry = Registry.new(null, null, null, workspace)
+	var definition_names := {}
+	for definition in registry.definitions():
+		var definition_name := str(definition.get("name", ""))
+		check(not definition_name.is_empty() and not definition_names.has(definition_name), "tool definitions have unique non-empty names")
+		definition_names[definition_name] = true
+		check(not str(definition.get("description", "")).strip_edges().is_empty(), "tool definition has a description: " + definition_name)
+		check(definition.get("parameters") is Dictionary, "tool definition has parameters: " + definition_name)
+		check(definition.get("risk") is String and not str(definition.risk).is_empty(), "tool definition has a risk: " + definition_name)
+		check(definition.get("timeout_ms") is int and int(definition.timeout_ms) > 0, "tool definition has a timeout: " + definition_name)
+	var append_definition: Dictionary = registry.definition("append_job")
+	check("does not run apply_editor_transaction" in str(append_definition.get("description", "")), "append_job description rejects scene edits")
+	registry.set_tool_mode("workspace")
+	var envelope: Dictionary = await registry.execute("list_files", {"path": "res://scripts"}, {"call_id": "usage-call"})
+	check(bool(envelope.get("ok", false)) and str(envelope.get("tool", "")) == "list_files" and str(envelope.get("call_id", "")) == "usage-call" and envelope.has("summary") and envelope.has("duration_ms"), "tool result has the structured envelope")
+	var ledger: Dictionary = registry.ledger_entry(envelope, "turn-usage")
+	check(str(ledger.get("turn", "")) == "turn-usage" and str(ledger.get("call", "")) == "usage-call" and bool(ledger.get("ok", false)), "ledger entry matches the tool call")
+	check(error_code(await registry.execute("not_a_tool", {})) == "unknown_tool", "unknown tools are rejected")
+	check(error_code(await registry.execute("list_files", {"path": "res://", "unexpected": true})) == "invalid_arguments", "schema rejects unknown fields")
+	check(error_code(await registry.execute("create_gdscript", {"path": "res://tool_usage_bad.gd", "source": "extends Node\n"})) == "invalid_arguments" and not FileAccess.file_exists(project.path_join("tool_usage_bad.gd")), "schema rejects a missing fallback reason without writing")
+	registry.set_available("list_files", false, "fixture unavailable")
+	check(error_code(await registry.execute("list_files", {"path": "res://"})) == "unavailable", "unavailable tools fail closed")
+	check(not Array(registry.tools_payload()).any(func(tool): return str(tool.function.name) == "list_files"), "unavailable tools are omitted from the payload")
+	registry.set_available("list_files", true)
+	registry.set_tool_mode("editor")
 	var editor_tools: Array = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))
 	var workspace_tools: Array = []
 	check("list_files" not in editor_tools and "run_command" not in editor_tools, "editor mode hides workspace tools")

@@ -1925,6 +1925,32 @@ func _run() -> void:
 		print("Built-in Jobs %s passed" % mode)
 		get_tree().quit()
 		return
+	elif mode == "chat_append_job_misuse":
+		var fake = load("res://fake_queued_chat.gd").new()
+		add_child(fake)
+		fake.jobs_service = jobs
+		jobs.chat_service = fake
+		fake.prompt.text = "Misuse append_job."
+		fake._generate()
+		var deadline := Time.get_ticks_msec() + 30000
+		while fake.submissions.size() < 1 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 1: _fail("append_job misuse fixture did not dispatch"); return
+		var before_jobs: int = jobs.queue.snapshot().jobs.size()
+		var misuse := {"id": "misuse-append", "type": "function", "function": {"name": "append_job", "arguments": JSON.stringify({"operation": "apply_editor_transaction", "text": "Create a Sprite2D under Player"})}}
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "tool_calls": [misuse]}}]}).to_utf8_buffer())
+		while fake.submissions.size() < 2 and Time.get_ticks_msec() < deadline:
+			await get_tree().create_timer(0.05).timeout
+		if fake.submissions.size() < 2: _fail("append_job misuse did not return a tool error"); return
+		var returned: Variant = _tool_result_for(fake.submissions[1].messages, "misuse-append")
+		if not returned is Dictionary or returned.get("ok", true) or not str(returned.get("error", {}).get("message", "")).contains("Call apply_editor_transaction directly"):
+			_fail("append_job misuse did not explain the direct tool: " + str(returned)); return
+		if jobs.queue.snapshot().jobs.size() != before_jobs + 1:
+			_fail("append_job misuse appended an extra job"); return
+		await fake._request_completed(HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), JSON.stringify({"choices": [{"message": {"role": "assistant", "content": "Misuse rejected."}}]}).to_utf8_buffer())
+		print("Built-in Jobs %s passed" % mode)
+		get_tree().quit()
+		return
 	elif mode == "chat_project_instructions":
 		var agents := FileAccess.open("res://AGENTS.md", FileAccess.WRITE)
 		agents.store_string("Keep names short.\nUse snake_case for files.\n")
