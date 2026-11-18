@@ -26,6 +26,17 @@ const BINARY_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "bmp", "tga", "svg", "
 const HEADLESS_FLAGS := ["--headless", "--path", "--script", "-s", "--quit", "--quit-after", "--check-only", "--import", "--verbose", "-v", "--debug", "--fixed-fps", "--time-scale", "--rendering-method", "--rendering-driver", "--display-driver", "--audio-driver", "--log-file", "--no-header", "--disable-vsync", "--single-threaded-scene", "--max-fps", "--resolution", "--position", "--write-movie"]
 const HEADLESS_VALUE_FLAGS := ["--path", "--script", "-s", "--quit-after", "--fixed-fps", "--time-scale", "--rendering-method", "--rendering-driver", "--display-driver", "--audio-driver", "--log-file", "--max-fps", "--resolution", "--position", "--write-movie"]
 
+const ASSET_KINDS := {
+	"png": "image", "jpg": "image", "jpeg": "image", "webp": "image", "svg": "image",
+	"bmp": "image", "tga": "image", "exr": "image", "hdr": "image", "dds": "image", "ktx": "image",
+	"glb": "model", "gltf": "model", "obj": "model", "fbx": "model", "blend": "model",
+	"dae": "model", "stl": "model", "ply": "model",
+	"wav": "audio", "ogg": "audio", "mp3": "audio",
+	"tscn": "scene", "scn": "scene",
+	"gd": "script", "cs": "script",
+	"tres": "resource", "res": "resource",
+}
+
 # Probe executed with --script in the user's project. It instantiates a saved
 # scene, steps physics, optionally presses input actions, and writes measured
 # body motion plus sampled positions to a JSON file. The editor side decides
@@ -154,6 +165,7 @@ func _pos(node: Node) -> Vector2:
 
 var project_root := ""
 var editor_bridge: Callable
+var asset_overview_cache := {"at": -100000, "text": ""}
 var approve_command: Callable
 var approve_edit: Callable
 var approve_headless: Callable
@@ -381,6 +393,19 @@ func definitions() -> Array:
 			}, "additionalProperties": false},
 			"risk": "read", "timeout_ms": 15000, "mode": "both",
 		},
+		{
+			"name": "find_assets",
+			"title": "Find project assets",
+			"description": "List existing project images, models, audio, scenes, scripts, and resources with size, image dimensions and average color, alpha, and files that reference them. Use it before generating or importing an asset; reuse an existing path instead of creating a duplicate.",
+			"parameters": {"type": "object", "properties": {
+				"kind": {"type": "string", "enum": ["all", "image", "model", "audio", "scene", "script", "resource"]},
+				"query": {"type": "string", "maxLength": 128},
+				"path": {"type": "string", "maxLength": 512},
+				"max": {"type": "integer", "minimum": 1, "maximum": 100},
+				"used": {"type": "boolean"},
+			}, "additionalProperties": false},
+			"risk": "read", "timeout_ms": 20000, "mode": "both",
+		},
 	]
 
 func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> Dictionary:
@@ -405,6 +430,7 @@ func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> 
 		"scan_filesystem": return _scan_filesystem()
 		"check_gdscript": return _check_gdscript(arguments)
 		"lookup_docs": return _lookup_docs(arguments)
+		"find_assets": return _find_assets(arguments)
 	return _error("unknown_tool", "Unknown workspace tool: " + name)
 
 ### Paths
@@ -1087,6 +1113,226 @@ func _git_log(arguments: Dictionary) -> Dictionary:
 	return await _git(["log", "--no-color", "--oneline", "-n", str(count)], "Git log", 20000)
 
 ### Execution
+
+func _find_assets(arguments: Dictionary) -> Dictionary:
+	var kind := str(arguments.get("kind", "all")).strip_edges()
+	if kind not in ["all", "image", "model", "audio", "scene", "script", "resource"]:
+		return _error("invalid_arguments", "Unknown asset kind: " + kind)
+	var query := str(arguments.get("query", "")).strip_edges().to_lower()
+	var max_results := clampi(int(arguments.get("max", 30)), 1, 100)
+	var root := _canonical(str(arguments.get("path", "res://")), true)
+	if root.has("error"): return root
+	if not DirAccess.dir_exists_absolute(str(root.absolute)):
+		return _error("not_found", "The asset path does not exist: " + str(root.res))
+	var scan := _scan_asset_files(str(root.absolute), str(root.res), 5000)
+	if scan.has("error"): return scan
+	var candidates: Array = []
+	for entry in scan.files:
+		if kind != "all" and str(entry.kind) != kind: continue
+		if not query.is_empty() and not str(entry.path).to_lower().contains(query): continue
+		candidates.append(entry)
+	var refs := _asset_references(scan.files, candidates)
+	if arguments.has("used"):
+		var wanted := bool(arguments.used)
+		var filtered: Array = []
+		for entry in candidates:
+			var used := not Array(refs.get(str(entry.path), [])).is_empty()
+			if used == wanted:
+				filtered.append(entry)
+		candidates = filtered
+	candidates.sort_custom(func(a, b):
+		var a_refs := Array(refs.get(str(a.path), [])).size()
+		var b_refs := Array(refs.get(str(b.path), [])).size()
+		if a_refs != b_refs: return a_refs > b_refs
+		if int(a.modified) != int(b.modified): return int(a.modified) > int(b.modified)
+		return str(a.path) < str(b.path))
+	var total := candidates.size()
+	var shown: Array = candidates.slice(0, max_results)
+	var assets: Array = []
+	for entry in shown:
+		var item := {
+			"path": str(entry.path),
+			"kind": str(entry.kind),
+			"bytes": int(entry.bytes),
+			"modified": str(entry.modified_text),
+			"imported": bool(entry.imported),
+		}
+		if str(entry.kind) == "image":
+			var metadata := _image_metadata(str(entry.absolute), int(entry.bytes))
+			for key in metadata:
+				item[key] = metadata[key]
+		var used_in: Array = refs.get(str(entry.path), [])
+		if not used_in.is_empty():
+			item["used_in"] = used_in.slice(0, 5)
+		assets.append(item)
+	var label := "asset" if kind == "all" else kind
+	var summary := "Found %d %s%s under %s." % [total, label, "" if total == 1 else "s", str(root.res)]
+	if total == 0:
+		summary += " No matching asset exists; generate one only if none fits."
+	elif assets.size() < total:
+		summary += " Showing %d; narrow with kind, query, path, or used." % assets.size()
+	else:
+		summary += " Reuse an existing path instead of creating a duplicate."
+	return {
+		"ok": true,
+		"summary": summary.left(1200),
+		"data": {
+			"path": str(root.res),
+			"kind": kind,
+			"count": total,
+			"assets": assets,
+			"truncated": assets.size() < total,
+			"scan_truncated": bool(scan.truncated),
+		},
+		"affected": [],
+	}
+
+func _asset_kind(path: String) -> String:
+	return str(ASSET_KINDS.get(path.get_extension().to_lower(), ""))
+
+func _scan_asset_files(base_absolute: String, base_res: String, limit: int) -> Dictionary:
+	var files: Array = []
+	var stack: Array = [{"absolute": base_absolute, "res": base_res}]
+	var truncated := false
+	while not stack.is_empty():
+		if files.size() >= limit:
+			truncated = true
+			break
+		var current: Dictionary = stack.pop_back()
+		var dir := DirAccess.open(str(current.absolute))
+		if dir == null: continue
+		dir.list_dir_begin()
+		var entry_name := dir.get_next()
+		while not entry_name.is_empty():
+			if entry_name == "." or entry_name == "..":
+				entry_name = dir.get_next()
+				continue
+			if dir.is_link(entry_name) or entry_name.begins_with("."):
+				entry_name = dir.get_next()
+				continue
+			if not _project_root_denies([entry_name.to_lower()]).is_empty():
+				entry_name = dir.get_next()
+				continue
+			var child_absolute := str(current.absolute).path_join(entry_name)
+			var child_res := str(current.res).path_join(entry_name)
+			if dir.current_is_dir():
+				stack.append({"absolute": child_absolute, "res": child_res})
+			else:
+				var kind := _asset_kind(entry_name)
+				if not kind.is_empty():
+					var bytes := 0
+					var file := FileAccess.open(child_absolute, FileAccess.READ)
+					if file != null:
+						bytes = int(file.get_length())
+						file.close()
+					var modified := int(FileAccess.get_modified_time(child_absolute))
+					files.append({
+						"path": child_res,
+						"absolute": child_absolute,
+						"kind": kind,
+						"bytes": bytes,
+						"modified": modified,
+						"modified_text": Time.get_datetime_string_from_unix_time(modified, true),
+						"imported": FileAccess.file_exists(child_absolute + ".import"),
+					})
+			entry_name = dir.get_next()
+		dir.list_dir_end()
+	return {"files": files, "truncated": truncated}
+
+func _asset_references(files: Array, candidates: Array) -> Dictionary:
+	var refs := {}
+	var paths: Array = []
+	for entry in candidates:
+		paths.append(str(entry.path))
+		refs[str(entry.path)] = []
+	if paths.is_empty(): return refs
+	if paths.size() > 500:
+		paths = paths.slice(0, 500)
+	var scanned := 0
+	var budget := 3 * 1024 * 1024
+	for entry in files:
+		if scanned >= 300 or budget <= 0: break
+		if str(entry.kind) not in ["scene", "script", "resource"]: continue
+		if int(entry.bytes) > 1024 * 1024: continue
+		var text := FileAccess.get_file_as_string(str(entry.absolute))
+		if text.is_empty(): continue
+		budget -= text.length()
+		scanned += 1
+		for asset_path in paths:
+			if text.contains(str(asset_path)):
+				var used_in: Array = refs[str(asset_path)]
+				if not used_in.has(str(entry.path)) and used_in.size() < 5:
+					used_in.append(str(entry.path))
+	return refs
+
+func _image_metadata(path: String, bytes: int) -> Dictionary:
+	if bytes <= 0 or bytes > 8 * 1024 * 1024:
+		return {}
+	if not _image_header_ok(path, path.get_extension().to_lower()):
+		return {}
+	var image := Image.load_from_file(path)
+	if image == null or image.is_empty():
+		return {}
+	var size := image.get_size()
+	var result := {"size": [size.x, size.y]}
+	if size.x <= 0 or size.y <= 0 or size.x * size.y > 16000000:
+		return result
+	var sample: Image = image.duplicate()
+	sample.resize(maxi(1, mini(8, int(size.x))), maxi(1, mini(8, int(size.y))), Image.INTERPOLATE_BILINEAR)
+	var total := Color(0, 0, 0, 0)
+	var has_alpha := false
+	for y in sample.get_height():
+		for x in sample.get_width():
+			var color: Color = sample.get_pixel(x, y)
+			total += color
+			if color.a < 0.99: has_alpha = true
+	var count := float(sample.get_width() * sample.get_height())
+	var average := Color(total.r / count, total.g / count, total.b / count, total.a / count)
+	result["average_color"] = "#" + average.to_html(false)
+	result["has_alpha"] = has_alpha
+	return result
+
+func _image_header_ok(path: String, extension: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null: return false
+	var prefix := file.get_buffer(16)
+	file.close()
+	match extension:
+		"png":
+			return prefix.size() >= 16 and prefix[0] == 0x89 and prefix[1] == 0x50 and prefix[2] == 0x4E and prefix[3] == 0x47 and prefix.slice(12, 16).get_string_from_ascii() == "IHDR"
+		"jpg", "jpeg":
+			return prefix.size() >= 3 and prefix[0] == 0xFF and prefix[1] == 0xD8 and prefix[2] == 0xFF
+		"webp":
+			return prefix.size() >= 12 and prefix.slice(0, 4).get_string_from_ascii() == "RIFF" and prefix.slice(8, 12).get_string_from_ascii() == "WEBP"
+		"bmp":
+			return prefix.size() >= 2 and prefix[0] == 0x42 and prefix[1] == 0x4D
+	return true
+
+func asset_overview() -> Dictionary:
+	var now := Time.get_ticks_msec()
+	if now - int(asset_overview_cache.at) < 5000:
+		return {"ok": true, "text": str(asset_overview_cache.text)}
+	if project_root.is_empty():
+		return {"ok": true, "text": ""}
+	var scan := _scan_asset_files(project_root, "res://", 5000)
+	if scan.has("error"): return scan
+	var counts := {"image": 0, "model": 0, "audio": 0, "scene": 0, "script": 0, "resource": 0}
+	var images: Array = []
+	for entry in scan.files:
+		var kind := str(entry.kind)
+		counts[kind] = int(counts.get(kind, 0)) + 1
+		if kind == "image" and images.size() < 4:
+			images.append(str(entry.path).trim_prefix("res://"))
+	var parts: Array = []
+	for kind in ["image", "model", "audio", "scene", "script", "resource"]:
+		var count := int(counts[kind])
+		if count > 0:
+			parts.append("%d %s%s" % [count, kind, "" if count == 1 else "s"])
+	var text := ", ".join(parts)
+	if not images.is_empty():
+		text += "; images include " + ", ".join(images)
+	asset_overview_cache = {"at": now, "text": text}
+	return {"ok": true, "text": text}
 
 func _lookup_docs(arguments: Dictionary) -> Dictionary:
 	var native_class := str(arguments.get("class_name", "")).strip_edges()

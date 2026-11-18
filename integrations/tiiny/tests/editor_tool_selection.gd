@@ -108,6 +108,7 @@ func _run() -> void:
 	await _save()
 
 	await _case("Look up CharacterBody2D movement docs", "editor", "lookup_docs", {"class_name": "CharacterBody2D", "member": "move_and_slide"}, func(result): return "CharacterBody2D.move_and_slide" in str(result.data.detail) and not str(result.data.documentation).is_empty())
+	await _case("Find the existing generated image asset", "editor", "find_assets", {"kind": "image", "query": "source"}, func(result): return Array(result.data.assets).any(func(asset): return str(asset.path).ends_with("source.png")))
 	await _case("List workspace files", "workspace", "list_files", {"path": "res://"}, func(result): return Array(result.data.entries).size() >= 1)
 	await _case("Read the player script", "workspace", "read_file", {"path": "res://player.gd"}, func(result): return "SPEED" in str(result.data.content))
 	await _case("Find the speed constant", "workspace", "search_text", {"query": "SPEED"}, func(result): return Array(result.data.matches).size() >= 1)

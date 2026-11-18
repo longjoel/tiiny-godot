@@ -96,6 +96,10 @@ func _initialize() -> void:
 	var binary_file := FileAccess.open(project.path_join("assets/binary.png"), FileAccess.WRITE)
 	binary_file.store_buffer(PackedByteArray([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]))
 	binary_file.close()
+	var asset_image := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	asset_image.fill(Color(0.2, 0.5, 0.9, 1.0))
+	asset_image.save_png(project.path_join("assets/real_asset.png"))
+	write_file(project.path_join("assets_used.tscn"), '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="Texture2D" path="res://assets/real_asset.png" id="1"]\n\n[node name="Root" type="Node2D"]\n')
 	write_file(project.path_join("assets/large.txt"), "x".repeat(300000))
 	write_file(outside.path_join("secret.txt"), "outside secret\n")
 	write_file(project.path_join("check.gd"), "extends SceneTree\n\nfunc _initialize() -> void:\n\tprint(\"TIINY_HEADLESS_OK\")\n\tquit(0)\n")
@@ -125,6 +129,7 @@ func _initialize() -> void:
 	await _command_tests()
 	await _bridge_tests()
 	await _check_script_tests()
+	await _asset_tests()
 	await _runtime_tests()
 	await _mode_tests()
 
@@ -608,6 +613,23 @@ func _check_script_tests() -> void:
 	check(error_code(await workspace.execute("check_gdscript", {"source": "  \n"})) == "invalid_arguments", "check_gdscript rejects empty source")
 	check(error_code(await workspace.execute("check_gdscript", {"source": "x".repeat(100001)})) == "invalid_arguments", "check_gdscript rejects oversized source")
 
+func _asset_tests() -> void:
+	var images: Dictionary = await workspace.execute("find_assets", {"kind": "image", "query": "real_asset"})
+	var entries: Array = images.get("data", {}).get("assets", [])
+	var image_entry: Dictionary = entries[0] if not entries.is_empty() else {}
+	var dimensions: Array = image_entry.get("size", [])
+	check(images.get("ok", false) and entries.size() == 1 and str(image_entry.get("path", "")) == "res://assets/real_asset.png" and dimensions.size() == 2 and int(dimensions[0]) == 2 and int(dimensions[1]) == 2 and str(image_entry.get("average_color", "")).begins_with("#") and Array(image_entry.get("used_in", [])).has("res://assets_used.tscn"), "find_assets reports image metadata and references")
+	var used: Dictionary = await workspace.execute("find_assets", {"kind": "image", "used": true})
+	check(Array(used.get("data", {}).get("assets", [])).any(func(entry): return str(entry.get("path", "")) == "res://assets/real_asset.png"), "find_assets filters referenced assets")
+	var unused: Dictionary = await workspace.execute("find_assets", {"kind": "image", "used": false})
+	check(not Array(unused.get("data", {}).get("assets", [])).any(func(entry): return str(entry.get("path", "")) == "res://assets/real_asset.png"), "find_assets filters unreferenced assets")
+	var scenes: Dictionary = await workspace.execute("find_assets", {"kind": "scene", "query": "assets_used"})
+	check(scenes.get("ok", false) and Array(scenes.get("data", {}).get("assets", [])).size() == 1, "find_assets filters by kind and query")
+	var limited: Dictionary = await workspace.execute("find_assets", {"kind": "image", "max": 1})
+	check(limited.get("ok", false) and Array(limited.get("data", {}).get("assets", [])).size() <= 1 and bool(limited.get("data", {}).get("truncated", false)), "find_assets bounds results and reports truncation")
+	var overview: Dictionary = workspace.asset_overview()
+	check(overview.get("ok", false) and str(overview.get("text", "")).contains("image"), "asset overview summarizes existing assets")
+
 func _runtime_tests() -> void:
 	write_file(project.path_join("runtime.tscn"), '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n')
 	var runtime_definition: Dictionary = {}
@@ -658,6 +680,7 @@ func _mode_tests() -> void:
 	var workspace_tools: Array = []
 	check("list_files" not in editor_tools and "run_command" not in editor_tools, "editor mode hides workspace tools")
 	check("check_gdscript" in editor_tools, "editor mode advertises the safe script check without host commands")
+	check("find_assets" in editor_tools, "editor mode advertises the asset inventory")
 	check("read_project_file" in editor_tools and "scan_filesystem" in editor_tools, "editor mode keeps shared file/scan tools")
 	check(registry.set_tool_mode("workspace"), "workspace mode is accepted")
 	workspace_tools = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))

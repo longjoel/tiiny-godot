@@ -2154,6 +2154,10 @@ func _editor_context() -> String:
 	lines.append("Display: %dx%d, stretch %s/%s" % [width, height, stretch_mode, stretch_aspect])
 	if not main_scene.is_empty(): lines.append("Main scene: " + main_scene)
 	if not renderer.is_empty(): lines.append("Renderer: " + renderer)
+	if workspace_coding != null and workspace_coding.has_method("asset_overview"):
+		var assets: Dictionary = workspace_coding.asset_overview()
+		if bool(assets.get("ok", false)) and not str(assets.get("text", "")).is_empty():
+			lines.append("Assets: " + str(assets.get("text", "")))
 	var root := EditorInterface.get_edited_scene_root()
 	if root == null:
 		lines.append("No scene is currently open.")
