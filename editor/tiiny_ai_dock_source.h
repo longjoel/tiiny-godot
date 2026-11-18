@@ -2540,6 +2540,8 @@ func _request_wrapup(reason := "tool budget") -> void:
 func _send_chat(system: String, user: Variant) -> void:
 	request.timeout = float(queued_chat_parameters.timeout_ms) / 1000.0 if queued_chat_started else _request_timeout()
 	var effective_system := system
+	if turn_role == "task":
+		effective_system += "\n\n--- Task protocol ---\nThis is a bounded task. Inspect the minimum relevant files, then make one concrete edit or call submit_result. Do not repeat a read-only call. If the scene, node, or script the task needs does not exist, call submit_result with status blocked and name the missing item; do not keep listing files. Claim only what a tool result proved."
 	if _wrap_up(): effective_system += "\n\nWork budget is spent. " + ("Call submit_result now with your structured result." if turn_role == "task" else "Do not call tools; summarize what was completed and what remains.")
 	var messages: Array = [{"role": "system", "content": effective_system}]
 	if request_stage == "answer":
@@ -2661,6 +2663,9 @@ func _editor_context() -> String:
 		return "\n\n--- Editor context ---\n" + "\n".join(lines)
 	var scene := root.scene_file_path if not root.scene_file_path.is_empty() else "(unsaved scene)"
 	lines.append("Scene: %s (%s)" % [scene, root.name])
+	lines.append("Scene nodes: %d" % root.get_child_count())
+	if root.get_child_count() == 0:
+		lines.append("Scene tree: empty")
 	var selected := EditorInterface.get_selection().get_selected_nodes()
 	if selected.is_empty():
 		lines.append("Selected nodes: none")
@@ -2889,6 +2894,15 @@ func _continue_agent() -> void:
 		send_button.disabled = false
 		_set_status("Could not continue after tool execution (error %d)." % error)
 
+func _is_read_only_tool(name: String) -> bool:
+	return name in ["list_files", "read_file", "read_project_file", "file_info", "search_text", "get_scene_tree", "get_workspace_context", "get_selection", "inspect_node", "inspect_resource", "list_signals", "get_project_settings", "lookup_docs", "find_assets", "check_gdscript"]
+
+func _turn_has_edits() -> bool:
+	for entry in turn_ledger:
+		if not Array(entry.get("affected", [])).is_empty() or not str(entry.get("undo_group", "")).is_empty():
+			return true
+	return false
+
 func _execute_turn_calls(parsed_calls: Array) -> void:
 	for index in parsed_calls.size():
 		var parsed_call: Dictionary = parsed_calls[index]
@@ -2899,18 +2913,23 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 		var repeat_count := int(turn_signature_counts.get(call_signature, 0)) + 1
 		turn_signature_counts[call_signature] = repeat_count
 		var repeated := repeat_count >= 3 or (call_signature == turn_last_signature and repeat_count >= 2)
+		if not repeated and turn_role == "task" and _is_read_only_tool(function_name) and repeat_count >= 2 and not _turn_has_edits():
+			repeated = true
 		if not repeated:
 			turn_last_signature = call_signature
 		if repeated:
 			tool_call_ids.append(call_id)
-			var repeated_result := {"ok": false, "tool": function_name, "call_id": call_id, "summary": "This exact tool call already ran; use the earlier result or choose a different action.", "error": {"code": "repeated_call", "message": "This exact tool call already ran."}, "data": {}, "affected": []}
+			var repeated_summary := "This exact tool call already ran; use the earlier result or choose a different action."
+			if turn_role == "task" and _is_read_only_tool(function_name):
+				repeated_summary = "This read-only call already ran. Stop inspecting and call submit_result with completed or blocked."
+			var repeated_result := {"ok": false, "tool": function_name, "call_id": call_id, "summary": repeated_summary, "error": {"code": "repeated_call", "message": repeated_summary}, "data": {}, "affected": []}
 			_append_chat_log("job=%s repeated tool %s -> %s" % [queued_chat_id, function_name, JSON.stringify(arguments)])
 			turn_messages.append({"role": "tool", "tool_call_id": call_id, "content": JSON.stringify(repeated_result)})
 			turn_failed_calls[call_signature] = true
 			conversation = turn_messages.duplicate(true)
 			_append_action_card(repeated_result, arguments)
 			_set_status("Repeated tool call detected; asking for a summary.")
-			_request_wrapup("repeated tool call")
+			_request_wrapup("repeated read-only call" if turn_role == "task" and _is_read_only_tool(function_name) else "repeated tool call")
 			return
 		tool_call_ids.append(call_id)
 		_set_status("Running tool %d of %d…" % [index + 1, parsed_calls.size()])

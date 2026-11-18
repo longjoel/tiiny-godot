@@ -322,6 +322,56 @@ func _run() -> void:
 	var trimmed_history: Array = dock.call("_trim_conversation", long_messages)
 	if trimmed_history.size() >= long_messages.size() or str(trimmed_history[0].get("role", "")) != "user" or not str(trimmed_history[0].get("content", "")).contains("trimmed"):
 		_fail("History trimming did not keep a bounded user-led history: " + str(trimmed_history.size())); return
+	var task_chat = load("res://fake_chat.gd").new()
+	add_child(task_chat)
+	await get_tree().process_frame
+	task_chat.workspace_inspector_script = dock.get("workspace_inspector_script")
+	task_chat.workspace_transactions_script = dock.get("workspace_transactions_script")
+	task_chat.workspace_registry_script = dock.get("workspace_registry_script")
+	task_chat.workspace_coding_script = dock.get("workspace_coding_script")
+	task_chat._ensure_workspace_registry()
+	task_chat.workspace_registry.set_tool_mode("workspace")
+	task_chat.turn_id = "task-read"
+	task_chat.turn_role = "task"
+	task_chat.turn_system = "task system"
+	task_chat.turn_messages.clear()
+	task_chat.turn_ledger.clear()
+	task_chat.turn_failed_calls.clear()
+	task_chat.turn_signature_counts.clear()
+	task_chat.turn_last_signature = ""
+	await task_chat._execute_turn_calls([{"id": "task-read-1", "name": "list_files", "arguments": {"path": "res://"}}])
+	await task_chat._execute_turn_calls([{"id": "task-read-2", "name": "list_files", "arguments": {"path": "res://"}}])
+	var repeated_task: Variant = JSON.parse_string(str(task_chat.turn_messages.back().get("content", "")))
+	if not repeated_task is Dictionary or str(repeated_task.get("error", {}).get("code", "")) != "repeated_call" or not str(repeated_task.get("summary", "")).contains("submit_result"):
+		_fail("Repeated read-only task call did not force a submit_result nudge: " + str(repeated_task)); return
+	task_chat.queue_free()
+	var edited_task = load("res://fake_chat.gd").new()
+	add_child(edited_task)
+	await get_tree().process_frame
+	edited_task.workspace_inspector_script = dock.get("workspace_inspector_script")
+	edited_task.workspace_transactions_script = dock.get("workspace_transactions_script")
+	edited_task.workspace_registry_script = dock.get("workspace_registry_script")
+	edited_task.workspace_coding_script = dock.get("workspace_coding_script")
+	edited_task._ensure_workspace_registry()
+	edited_task.workspace_registry.set_tool_mode("workspace")
+	edited_task.turn_id = "task-edited-read"
+	edited_task.turn_role = "task"
+	edited_task.turn_system = "task system"
+	edited_task.turn_messages.clear()
+	edited_task.turn_ledger.clear()
+	edited_task.turn_ledger.append({"affected": ["res://run-and-jump.tscn"], "undo_group": ""})
+	edited_task.turn_failed_calls.clear()
+	edited_task.turn_signature_counts.clear()
+	edited_task.turn_last_signature = ""
+	await edited_task._execute_turn_calls([{"id": "edited-read-1", "name": "list_files", "arguments": {"path": "res://"}}])
+	# A real edit result resets the consecutive-call marker. Clear it here so the
+	# second read exercises only the task read-only guard's edit exemption.
+	edited_task.turn_last_signature = ""
+	await edited_task._execute_turn_calls([{"id": "edited-read-2", "name": "list_files", "arguments": {"path": "res://"}}])
+	var post_edit_read: Variant = JSON.parse_string(str(edited_task.turn_messages.back().get("content", "")))
+	if not post_edit_read is Dictionary or not bool(post_edit_read.get("ok", false)) or str(post_edit_read.get("error", {}).get("code", "")) == "repeated_call":
+		_fail("Post-edit re-read was blocked by the task read-only guard: " + str(post_edit_read)); return
+	edited_task.queue_free()
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
 	await get_tree().process_frame
