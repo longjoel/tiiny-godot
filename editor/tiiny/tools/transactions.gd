@@ -737,6 +737,26 @@ func _action_name(recipe_name: String, built: Dictionary) -> String:
 
 func _register_default_recipes() -> void:
 	register_recipe({
+		"name": "add_rectangle_body",
+		"title": "Add rectangle body",
+		"description": "Create a 2D body (CharacterBody2D, StaticBody2D, RigidBody2D, or Area2D) with a colored rectangular Polygon2D visual and a matching RectangleShape2D collision shape. Use this for simple colored-rectangle prototypes; attach a GDScript controller separately. One undo action.",
+		"parameters": {"type": "object", "properties": {
+			"parent_path": {"type": "string", "maxLength": 512},
+			"node_name": {"type": "string", "maxLength": 128},
+			"body_class": {"type": "string", "enum": ["CharacterBody2D", "StaticBody2D", "RigidBody2D", "Area2D"]},
+			"width": {"type": "number", "exclusiveMinimum": 0, "maximum": 100000},
+			"height": {"type": "number", "exclusiveMinimum": 0, "maximum": 100000},
+			"position_x": {"type": "number", "minimum": -100000, "maximum": 100000},
+			"position_y": {"type": "number", "minimum": -100000, "maximum": 100000},
+			"color": {"type": "string", "minLength": 1, "maxLength": 64},
+		}, "required": ["width", "height"], "additionalProperties": false},
+		"risk": "mutating",
+		"timeout_ms": 30000,
+		"validate": Callable(self, "_validate_rectangle_body"),
+		"build": Callable(self, "_build_rectangle_body"),
+	})
+
+	register_recipe({
 		"name": "add_rectangular_collision_shape",
 		"title": "Add rectangular collision shape",
 		"description": "Create one CollisionShape2D under a physics body and assign an owned RectangleShape2D. One undo action.",
@@ -1043,6 +1063,56 @@ func _register_default_recipes() -> void:
 		"validate": Callable(self, "_validate_generic"),
 		"build": Callable(self, "_build_generic"),
 	})
+
+func _validate_rectangle_body(params: Dictionary, context: Dictionary) -> Dictionary:
+	var parent_path := str(params.get("parent_path", ".")).strip_edges()
+	if parent_path.is_empty(): parent_path = "."
+	var found: Dictionary = inspector.resolve_scene_node(context.root, parent_path)
+	if found.has("error"):
+		return {"ok": false, "code": str(found.error.code), "message": str(found.error.message)}
+	var parent: Node = found.node
+	if parent != context.root and parent.get_owner() != context.root:
+		return {"ok": false, "code": "read_only_instance", "message": "The rectangle parent must be owned by the edited scene."}
+	var width: Variant = params.get("width")
+	var height: Variant = params.get("height")
+	if not (width is int or width is float) or not is_finite(float(width)) or float(width) <= 0 or float(width) > 100000:
+		return {"ok": false, "code": "invalid_dimensions", "message": "width must be finite and greater than zero."}
+	if not (height is int or height is float) or not is_finite(float(height)) or float(height) <= 0 or float(height) > 100000:
+		return {"ok": false, "code": "invalid_dimensions", "message": "height must be finite and greater than zero."}
+	var body_class := str(params.get("body_class", "CharacterBody2D"))
+	if not body_class in ["CharacterBody2D", "StaticBody2D", "RigidBody2D", "Area2D"]:
+		return {"ok": false, "code": "invalid_class", "message": "body_class must be CharacterBody2D, StaticBody2D, RigidBody2D, or Area2D."}
+	var node_name := str(params.get("node_name", "")).strip_edges()
+	if node_name.is_empty(): node_name = _unique_name(parent, "RectangleBody")
+	elif not _valid_name(node_name):
+		return {"ok": false, "code": "invalid_name", "message": "Invalid rectangle body name."}
+	if parent.get_node_or_null(NodePath(node_name)) != null:
+		return {"ok": false, "code": "name_conflict", "message": "A node named " + node_name + " already exists."}
+	var color_text := str(params.get("color", "#4a90d9")).strip_edges()
+	var color := Color.from_string(color_text, Color.TRANSPARENT)
+	if color.a <= 0.0:
+		return {"ok": false, "code": "invalid_color", "message": "color must be a named or #rrggbb color."}
+	var position_x := float(params.get("position_x", 0.0))
+	var position_y := float(params.get("position_y", 0.0))
+	return {"ok": true, "request": {"parent_path": parent_path, "node_name": node_name, "body_class": body_class, "width": float(width), "height": float(height), "position": Vector2(position_x, position_y), "color": color}}
+
+func _build_rectangle_body(request: Dictionary) -> Dictionary:
+	var half := Vector2(float(request.width), float(request.height)) / 2.0
+	return {"ok": true, "action_name": "Add rectangle body (%s)" % request.node_name, "summary": "Added %s [%s] with a colored rectangle and collision under %s." % [request.node_name, request.body_class, request.parent_path], "ops": [
+		{"op": "create_node", "id": "body", "class": request.body_class, "name": request.node_name, "properties": {"position": request.position}},
+		{"op": "create_node", "id": "visual", "class": "Polygon2D", "name": "Visual"},
+		{"op": "set_property", "target": "visual", "property": "polygon", "value": [[-half.x, -half.y], [half.x, -half.y], [half.x, half.y], [-half.x, half.y]]},
+		{"op": "set_property", "target": "visual", "property": "color", "value": request.color},
+		{"op": "create_node", "id": "collision", "class": "CollisionShape2D", "name": "CollisionShape2D"},
+		{"op": "create_resource", "id": "box", "class": "RectangleShape2D", "properties": {"size": Vector2(float(request.width), float(request.height))}},
+		{"op": "set_property", "target": "collision", "property": "shape", "value": {"ref": "box"}},
+		{"op": "add_child", "parent": request.parent_path, "node": "body"},
+		{"op": "add_child", "parent": "body", "node": "visual"},
+		{"op": "add_child", "parent": "body", "node": "collision"},
+		{"op": "set_owner", "node": "body", "owner": "."},
+		{"op": "set_owner", "node": "visual", "owner": "."},
+		{"op": "set_owner", "node": "collision", "owner": "."},
+	]}
 
 func _validate_collision(params: Dictionary, context: Dictionary) -> Dictionary:
 	var parent_path := str(params.get("parent_path", ""))

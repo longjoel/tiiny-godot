@@ -86,6 +86,11 @@ func _run() -> void:
 	await _case("Create a sprite from the generated player image", "editor", "add_sprite_from_image", {"path": "res://generated/source.png", "parent_path": ".", "node_name": "SelectedSprite"}, func(_result): return root.get_node_or_null("SelectedSprite") is Sprite2D and root.get_node("SelectedSprite").texture != null)
 	await _save()
 
+	await _case("Create a blue player body from colored rectangles", "editor", "add_rectangle_body", {"node_name": "SelectedPlayerBody", "body_class": "CharacterBody2D", "width": 32, "height": 48, "position_x": 100, "position_y": 300, "color": "#3366ff"}, func(_result): return root.get_node_or_null("SelectedPlayerBody") is CharacterBody2D and root.get_node_or_null("SelectedPlayerBody/Visual") is Polygon2D and root.get_node_or_null("SelectedPlayerBody/CollisionShape2D") is CollisionShape2D)
+	await _save()
+	await _case("Create a green static platform from colored rectangles", "editor", "add_rectangle_body", {"node_name": "SelectedPlatformBody", "body_class": "StaticBody2D", "width": 200, "height": 24, "position_x": 320, "position_y": 430, "color": "#33aa55"}, func(_result): return root.get_node_or_null("SelectedPlatformBody") is StaticBody2D and root.get_node_or_null("SelectedPlatformBody/Visual") is Polygon2D and root.get_node_or_null("SelectedPlatformBody/CollisionShape2D") is CollisionShape2D)
+	await _save()
+
 	await _case("Add a rectangular collision shape to the player", "editor", "add_rectangular_collision_shape", {"parent_path": "Player", "width": 32, "height": 48, "node_name": "SelectedCollision"}, func(_result): return root.get_node_or_null("Player/SelectedCollision") is CollisionShape2D and root.get_node("Player/SelectedCollision").shape is RectangleShape2D)
 	await _save()
 

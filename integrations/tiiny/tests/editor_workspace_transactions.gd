@@ -479,6 +479,19 @@ func _run() -> void:
 	if not trace_call_undo[2].undo() or root.get_node_or_null("TracePlatformMain") != null or root.get_node_or_null("TracePlayerMain") != null:
 		_fail("Trace-shaped transaction undo failed"); return
 	root = EditorInterface.get_edited_scene_root()
+	EditorInterface.save_scene()
+	if not await _wait_for_scene("res://main.tscn"): _fail("Could not save before rectangle body test"); return
+	root = EditorInterface.get_edited_scene_root()
+	var rect_body: Dictionary = transactions.execute("add_rectangle_body", {"node_name": "RectPlayer", "body_class": "CharacterBody2D", "width": 32, "height": 48, "position_x": 100, "position_y": 200, "color": "#3366ff"})
+	var rect_node := root.get_node_or_null("RectPlayer") as CharacterBody2D
+	var rect_visual := root.get_node_or_null("RectPlayer/Visual") as Polygon2D
+	var rect_collision := root.get_node_or_null("RectPlayer/CollisionShape2D") as CollisionShape2D
+	if not rect_body.get("ok", false) or rect_node == null or rect_node.position != Vector2(100, 200) or rect_visual == null or not rect_visual.color.is_equal_approx(Color("#3366ff")) or rect_collision == null or not rect_collision.shape is RectangleShape2D or (rect_collision.shape as RectangleShape2D).size != Vector2(32, 48):
+		_fail("add_rectangle_body failed: " + str(rect_body)); return
+	var rect_undo := _history(root)
+	if not rect_undo[2].undo() or root.get_node_or_null("RectPlayer") != null:
+		_fail("add_rectangle_body undo failed"); return
+	root = EditorInterface.get_edited_scene_root()
 	var structural_ops := [
 		{"op": "duplicate_node", "target": "Player", "new_name": "PlayerCopy"},
 		{"op": "reparent_node", "target": "HudLabel", "parent": "MainCamera"},
