@@ -440,6 +440,45 @@ func _run() -> void:
 	if not trace_undo_again[2].undo():
 		_fail("Model-friendly transaction cleanup undo failed"); return
 	root = EditorInterface.get_edited_scene_root()
+
+	var name_history := _history_count(root)
+	var name_result: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [
+		{"op": "create_node", "id": "p2", "class": "StaticBody2D", "name": "TracePlatform2", "parent": ".", "properties": {"position": [100, 100]}},
+		{"op": "create_node", "id": "s2", "class": "Sprite2D", "name": "Sprite2D", "parent": "TracePlatform2"},
+		{"op": "create_node", "id": "c2", "class": "CollisionShape2D", "name": "CollisionShape2D", "parent": "TracePlatform2"},
+		{"op": "set_property", "parent": "TracePlatform2/Sprite2D", "path": "position", "target": "Sprite2D", "value": [10.0, 20.0]},
+		{"op": "create_node", "id": "inferred", "path": "TraceInferredLabel", "value": "Label", "parent": "."},
+	]})
+	var name_platform := root.get_node_or_null("TracePlatform2") as Node2D
+	var name_sprite := root.get_node_or_null("TracePlatform2/Sprite2D") as Sprite2D
+	var inferred_label := root.get_node_or_null("TraceInferredLabel") as Label
+	if not name_result.get("ok", false) or name_platform == null or name_sprite == null or name_sprite.position != Vector2(10, 20) or inferred_label == null:
+		_fail("Name-based parents, set_property aliases, or class inference failed: " + str(name_result)); return
+	var name_undo := _history(root)
+	if not name_undo[2].undo() or root.get_node_or_null("TracePlatform2") != null or root.get_node_or_null("TraceInferredLabel") != null:
+		_fail("Name-based transaction undo failed"); return
+	root = EditorInterface.get_edited_scene_root()
+
+	var trace_call: Dictionary = transactions.execute("apply_editor_transaction", {"operations": [
+		{"op": "create_node", "id": "platform", "name": "TracePlatformMain", "parent": ".", "properties": {"position": [576, 550]}},
+		{"op": "create_node", "id": "platform-sprite", "path": "Sprite2D", "parent": "TracePlatformMain"},
+		{"op": "create_node", "id": "platform-collision", "path": "CollisionShape2D", "parent": "TracePlatformMain"},
+		{"op": "set_property", "parent": "TracePlatformMain/Sprite2D", "path": "texture", "target": "Sprite2D", "value": "res://generated/source.png"},
+		{"op": "create_node", "id": "player", "name": "TracePlayerMain", "parent": ".", "properties": {"position": [576, 400]}},
+		{"op": "create_node", "id": "player-sprite", "path": "Sprite2D", "parent": "TracePlayerMain"},
+		{"op": "create_node", "id": "player-collision", "path": "CollisionShape2D", "parent": "TracePlayerMain"},
+		{"op": "set_property", "parent": "TracePlayerMain/Sprite2D", "path": "texture", "target": "Sprite2D", "value": "res://generated/source.png"},
+	]})
+	var trace_platform_node := root.get_node_or_null("TracePlatformMain") as Node2D
+	var trace_platform_sprite := root.get_node_or_null("TracePlatformMain/Sprite2D") as Sprite2D
+	var trace_player_node := root.get_node_or_null("TracePlayerMain") as Node2D
+	var trace_player_sprite := root.get_node_or_null("TracePlayerMain/Sprite2D") as Sprite2D
+	if not trace_call.get("ok", false) or trace_platform_node == null or trace_platform_node.position != Vector2(576, 550) or trace_player_node == null or trace_player_node.position != Vector2(576, 400) or trace_platform_sprite == null or trace_platform_sprite.texture == null or trace_player_sprite == null or trace_player_sprite.texture == null:
+		_fail("Trace-shaped transaction failed: " + str(trace_call)); return
+	var trace_call_undo := _history(root)
+	if not trace_call_undo[2].undo() or root.get_node_or_null("TracePlatformMain") != null or root.get_node_or_null("TracePlayerMain") != null:
+		_fail("Trace-shaped transaction undo failed"); return
+	root = EditorInterface.get_edited_scene_root()
 	var structural_ops := [
 		{"op": "duplicate_node", "target": "Player", "new_name": "PlayerCopy"},
 		{"op": "reparent_node", "target": "HudLabel", "parent": "MainCamera"},

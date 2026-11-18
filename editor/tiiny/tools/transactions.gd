@@ -92,6 +92,10 @@ func _execute(context: Dictionary, built: Dictionary, recipe_name: String, turn_
 		return _error("outcome_unknown", postcondition + " The edit may remain visible.")
 	var after: Dictionary = inspector.scene_context({})
 	var scene: Dictionary = after.get("scene", {})
+	for id in nodes:
+		var planned_node: Node = nodes[id]
+		if is_instance_valid(planned_node) and planned_node.has_meta("__tiiny_planned_parent"):
+			planned_node.remove_meta("__tiiny_planned_parent")
 	var created_nodes: Array = []
 	for id in nodes:
 		var node: Node = nodes[id]
@@ -271,6 +275,7 @@ func _validate_references(ops: Array, nodes: Dictionary, resources: Dictionary, 
 				if parent == null: return _error("target_missing", "add_child parent is missing.")
 				var node := _target_node(str(op.get("node", "")), root, nodes, op_by_id)
 				if node == null: return _error("target_missing", "add_child node is missing.")
+				node.set_meta("__tiiny_planned_parent", parent)
 				if node.get_parent() != null: return _error("invalid_operation", "Node already has a parent.")
 				if parent == node or node.is_ancestor_of(parent): return _error("invalid_parent", "Invalid parent cycle.")
 				if parent.get_node_or_null(NodePath(str(node.name))) != null: return _error("name_conflict", "A sibling already uses the node name.")
@@ -373,13 +378,44 @@ func _planned_parent(node: Node, ops: Array, root: Node, nodes: Dictionary, op_b
 
 func _target_node(id: String, root: Node, nodes: Dictionary, op_by_id: Dictionary) -> Node:
 	if nodes.has(id): return nodes[id]
+	var normalized := id.strip_edges()
+	if normalized.begins_with("./"): normalized = normalized.substr(2)
+	if normalized == "." or normalized.is_empty(): return root
+	if not normalized.contains("/"):
+		for key in nodes:
+			var candidate: Variant = nodes[key]
+			if not candidate is Node: continue
+			if str(candidate.name) == normalized:
+				return candidate
+	for key in nodes:
+		var candidate: Variant = nodes[key]
+		if not candidate is Node: continue
+		if _planned_path(candidate, root, nodes, op_by_id) == normalized:
+			return candidate
 	if op_by_id.has(id) and str(op_by_id[id].op) != "create_node": return null
 	var found: Dictionary = inspector.resolve_scene_node(root, id)
 	return found.node if found.has("node") else null
 
+func _planned_path(node: Node, root: Node, nodes: Dictionary, op_by_id: Dictionary) -> String:
+	var parts: Array[String] = []
+	var cursor := node
+	var guard := 0
+	while cursor != null and cursor != root and guard < 64:
+		parts.push_front(str(cursor.name))
+		if cursor.has_meta("__tiiny_planned_parent"):
+			cursor = cursor.get_meta("__tiiny_planned_parent")
+		else:
+			cursor = cursor.get_parent()
+		guard += 1
+	if cursor != root: return ""
+	return "/".join(parts)
+
+
 func _target_object(id: String, root: Node, nodes: Dictionary, resources: Dictionary, op_by_id: Dictionary) -> Object:
 	if nodes.has(id): return nodes[id]
 	if resources.has(id): return resources[id]
+	var node := _target_node(id, root, nodes, op_by_id)
+	if node != null: return node
 	var found: Dictionary = inspector.resolve_scene_node(root, id)
 	return found.node if found.has("node") else null
 
@@ -585,6 +621,9 @@ func _read_only(_object: Object, _name: String, info: Dictionary) -> bool:
 
 func _coerce_value(info: Dictionary, value: Variant) -> Variant:
 	var type := int(info.get("type", TYPE_NIL))
+	if type == TYPE_OBJECT and value is String and str(value).begins_with("res://"):
+		if ResourceLoader.exists(str(value)):
+			return ResourceLoader.load(str(value))
 	if type == TYPE_STRING_NAME and value is String: return StringName(value)
 	if type == TYPE_NODE_PATH and value is String: return NodePath(value)
 	if type in [TYPE_VECTOR2, TYPE_VECTOR2I] and value is String:
@@ -1296,6 +1335,20 @@ func _build_sprite(request: Dictionary) -> Dictionary:
 		ops.append({"op": "set_property", "target": "sprite", "property": "scale", "value": request.scale})
 	return {"ok": true, "action_name": "Add Sprite2D " + request.node_name, "summary": "Added Sprite2D %s under %s using %s (%s)." % [request.node_name, request.parent_path, request.path, str(request.size)], "data": {"artifact": request.path, "size": [request.size.x, request.size.y], "scale": [request.scale.x, request.scale.y]}, "ops": ops}
 
+func _infer_node_class(hint: String) -> String:
+	var candidate := hint.strip_edges()
+	var parts: PackedStringArray = candidate.split("/", false)
+	if not parts.is_empty(): candidate = str(parts[parts.size() - 1])
+	if _generic_class_ok(candidate, "Node"): return candidate
+	var lowered := candidate.to_lower()
+	if "sprite" in lowered: return "Sprite2D"
+	if "collision" in lowered: return "CollisionShape2D"
+	if "platform" in lowered or "ground" in lowered or "floor" in lowered or "wall" in lowered: return "StaticBody2D"
+	if "player" in lowered or "character" in lowered: return "CharacterBody2D"
+	if "camera" in lowered: return "Camera2D"
+	if "label" in lowered or "text" in lowered: return "Label"
+	return ""
+
 func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
 	var ops: Variant = params.get("operations")
 	if not ops is Array or ops.is_empty() or ops.size() > 16:
@@ -1308,16 +1361,40 @@ func _validate_generic(params: Dictionary, context: Dictionary) -> Dictionary:
 		return {"ok": false, "code": "stale_scene", "message": "The scene edit history changed; inspect it again."}
 	for index in ops.size():
 		var op: Variant = ops[index]
+		if op is Dictionary and str(op.get("op", "")) == "create_node" and str(op.get("class", "")).is_empty():
+			for hint in [op.get("value", ""), op.get("target", ""), op.get("name", ""), op.get("path", "")]:
+				var inferred := _infer_node_class(str(hint))
+				if not inferred.is_empty():
+					op["class"] = inferred
+					break
 		if op is Dictionary and str(op.get("op", "")) == "create_node" and str(op.get("name", "")).is_empty():
 			var alias := str(op.get("path", op.get("target", "")))
 			if not alias.is_empty():
 				var alias_parts: PackedStringArray = alias.split("/", false)
 				op["name"] = str(alias_parts[alias_parts.size() - 1]) if not alias_parts.is_empty() else alias
-		if op is Dictionary and str(op.get("op", "")) in ["create_node", "create_resource"] and str(op.get("id", "")).is_empty():
-			var auto_name := str(op.get("name", ""))
-			op["id"] = auto_name if not auto_name.is_empty() else "auto_" + str(index)
+		if op is Dictionary and str(op.get("op", "")) == "set_property":
+			if not op.has("property") and op.get("path") is String and not str(op.path).is_empty():
+				op["property"] = str(op.path)
+			if op.get("parent") is String and str(op.parent).contains("/") and op.get("target") is String and not str(op.target).contains("/"):
+				op["target"] = str(op.parent)
 		if op is Dictionary and str(op.get("op", "")) in ["set_property", "assign_resource"] and not op.has("target") and op.get("path") is String:
 			op["target"] = op.path
+	var reserved_ids := {}
+	for op in ops:
+		if op is Dictionary and op.get("id") is String and not str(op.id).is_empty():
+			reserved_ids[str(op.id)] = true
+	for index in ops.size():
+		var op: Variant = ops[index]
+		if op is Dictionary and str(op.get("op", "")) in ["create_node", "create_resource"] and str(op.get("id", "")).is_empty():
+			var auto_name := str(op.get("name", ""))
+			var base := auto_name if not auto_name.is_empty() else "auto_" + str(index)
+			var candidate := base
+			var suffix := 2
+			while reserved_ids.has(candidate):
+				candidate = base + "_" + str(suffix)
+				suffix += 1
+			op["id"] = candidate
+			reserved_ids[candidate] = true
 	var ids := {}
 	for op in ops:
 		if not op is Dictionary or not op.get("op") is String:
