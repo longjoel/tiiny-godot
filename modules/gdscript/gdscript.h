@@ -60,6 +60,9 @@ class GDScript : public Script {
 	bool valid = false;
 	bool reloading = false;
 	bool _is_abstract = false;
+	String last_error;
+	String last_error_kind;
+	int last_error_line = 0;
 
 	struct MemberInfo {
 		int index = 0;
@@ -233,6 +236,9 @@ public:
 	void cancel_pending_functions(bool warn);
 
 	virtual bool is_script_valid() const override { return valid; }
+	String get_last_error() const { return last_error; }
+	String get_last_error_kind() const { return last_error_kind; }
+	int get_last_error_line() const { return last_error_line; }
 
 	bool inherits_script(const Ref<Script> &p_script) const override;
 

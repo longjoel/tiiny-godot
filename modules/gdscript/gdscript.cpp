@@ -740,6 +740,10 @@ Error GDScript::reload(bool p_keep_state) {
 	}
 	reloading = true;
 
+	last_error = String();
+	last_error_kind = String();
+	last_error_line = 0;
+
 	bool has_instances;
 	{
 		MutexLock lock(GDScriptLanguage::singleton->mutex);
@@ -821,6 +825,10 @@ Error GDScript::reload(bool p_keep_state) {
 			GDScriptLanguage::get_singleton()->debug_break_parse(_get_debug_path(), parser.get_errors().front()->get().start_line, "Parser Error: " + parser.get_errors().front()->get().message);
 		}
 		// TODO: Show all error messages.
+		const GDScriptParser::ParserError first_error = parser.get_errors().front()->get();
+		last_error_kind = "parse";
+		last_error_line = first_error.start_line;
+		last_error = first_error.message;
 		_err_print_error("GDScript::reload", path.is_empty() ? "built-in" : (const char *)path.utf8().get_data(), parser.get_errors().front()->get().start_line, ("Parse Error: " + parser.get_errors().front()->get().message).utf8().get_data(), false, ERR_HANDLER_SCRIPT);
 		reloading = false;
 		return ERR_PARSE_ERROR;
@@ -842,6 +850,9 @@ Error GDScript::reload(bool p_keep_state) {
 		}
 
 		const List<GDScriptParser::ParserError>::Element *e = parser.get_errors().front();
+		last_error_kind = "parse";
+		last_error_line = e->get().start_line;
+		last_error = e->get().message;
 		while (e != nullptr) {
 			_err_print_error("GDScript::reload", path.is_empty() ? "built-in" : (const char *)path.utf8().get_data(), e->get().start_line, ("Parse Error: " + e->get().message).utf8().get_data(), false, ERR_HANDLER_SCRIPT);
 			e = e->next();
@@ -857,6 +868,9 @@ Error GDScript::reload(bool p_keep_state) {
 
 	if (err) {
 		// TODO: Provide the script function as the first argument.
+		last_error_kind = "compile";
+		last_error_line = compiler.get_error_line();
+		last_error = compiler.get_error();
 		_err_print_error("GDScript::reload", path.is_empty() ? "built-in" : (const char *)path.utf8().get_data(), compiler.get_error_line(), ("Compile Error: " + compiler.get_error()).utf8().get_data(), false, ERR_HANDLER_SCRIPT);
 		if (can_run) {
 			if (EngineDebugger::is_active()) {
@@ -1088,6 +1102,9 @@ void GDScript::_get_property_list(List<PropertyInfo> *p_properties) const {
 }
 
 void GDScript::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_last_error"), &GDScript::get_last_error);
+	ClassDB::bind_method(D_METHOD("get_last_error_kind"), &GDScript::get_last_error_kind);
+	ClassDB::bind_method(D_METHOD("get_last_error_line"), &GDScript::get_last_error_line);
 	ClassDB::bind_vararg_method(METHOD_FLAGS_DEFAULT, "new", &GDScript::_new, MethodInfo("new"));
 }
 

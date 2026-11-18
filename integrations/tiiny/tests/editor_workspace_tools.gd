@@ -253,6 +253,19 @@ func _run() -> void:
 		return
 	provider.approve_edit = original_approve
 
+	var compile_ok: Dictionary = await registry.execute("check_gdscript", {"source": "extends CharacterBody2D\n\nfunc _ready() -> void:\n\tpass\n", "target_class": "CharacterBody2D"})
+	if not compile_ok.get("ok", false) or str(compile_ok.get("data", {}).get("base_class", "")) != "CharacterBody2D":
+		_fail("check_gdscript did not compile a valid script: " + str(compile_ok)); return
+	var compile_bad: Dictionary = await registry.execute("check_gdscript", {"source": "extends Node\n\nfunc _ready() -> void:\n\tvar value: int = \"text\"\n"})
+	if bool(compile_bad.get("ok", false)) or int(compile_bad.get("data", {}).get("line", 0)) != 4:
+		_fail("check_gdscript did not report the failing line: " + str(compile_bad)); return
+	var compile_side_effect := "user://check_gdscript_tool_static.txt"
+	if FileAccess.file_exists(compile_side_effect):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(compile_side_effect))
+	var tool_static: Dictionary = await registry.execute("check_gdscript", {"source": "@tool\nextends Node\n\nstatic func _static_init() -> void:\n\tFileAccess.open(\"user://check_gdscript_tool_static.txt\", FileAccess.WRITE).store_string(\"ran\")\n"})
+	if not bool(tool_static.get("ok", false)) or not bool(tool_static.get("data", {}).get("tool_annotation_removed", false)) or FileAccess.file_exists(compile_side_effect):
+		_fail("check_gdscript ran a @tool static initializer: " + str(tool_static)); return
+
 	settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	dock.call("_refresh_registry_availability")
 	var editor_tools: Array = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))

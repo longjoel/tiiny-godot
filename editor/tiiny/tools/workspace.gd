@@ -318,7 +318,7 @@ func definitions() -> Array:
 		{
 			"name": "verify_scene_runtime",
 			"title": "Verify scene runtime",
-			"description": "Instantiate a saved scene headlessly, simulate physics frames, optionally press input actions, and report measured body motion plus scene-load, script-error, gravity, landing, and jump checks. Runs project scripts on the host: requires the allow_shell_commands setting and per-run approval. It does not modify the scene or project.",
+			"description": "Run a saved scene headlessly and report measured body motion plus scene-load, error, gravity, landing, and jump checks. Optional input actions. Requires allow_shell_commands and per-run approval; no scene edits.",
 			"parameters": {"type": "object", "properties": {
 				"scene_path": {"type": "string", "minLength": 1, "maxLength": 512},
 				"frames": {"type": "integer", "minimum": 10, "maximum": 600},
@@ -360,6 +360,16 @@ func definitions() -> Array:
 			"parameters": {"type": "object", "properties": {}, "additionalProperties": false},
 			"risk": "read", "timeout_ms": 30000, "mode": "both",
 		},
+		{
+			"name": "check_gdscript",
+			"title": "Check GDScript",
+			"description": "Compile GDScript in memory and return the first error with its line, plus base class, methods, signals, and target compatibility. Writes and runs nothing. @tool is ignored; preloading another .gd is refused.",
+			"parameters": {"type": "object", "properties": {
+				"source": {"type": "string", "minLength": 1, "maxLength": 100000},
+				"target_class": {"type": "string", "minLength": 1, "maxLength": 128},
+			}, "required": ["source"], "additionalProperties": false},
+			"risk": "read", "timeout_ms": 5000, "mode": "both",
+		},
 	]
 
 func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> Dictionary:
@@ -382,6 +392,7 @@ func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> 
 		"run_command": return await _run_command(arguments)
 		"reload_scene": return await _reload_scene(arguments)
 		"scan_filesystem": return _scan_filesystem()
+		"check_gdscript": return _check_gdscript(arguments)
 	return _error("unknown_tool", "Unknown workspace tool: " + name)
 
 ### Paths
@@ -1064,6 +1075,91 @@ func _git_log(arguments: Dictionary) -> Dictionary:
 	return await _git(["log", "--no-color", "--oneline", "-n", str(count)], "Git log", 20000)
 
 ### Execution
+
+func _check_gdscript(arguments: Dictionary) -> Dictionary:
+	var source := str(arguments.get("source", ""))
+	if source.strip_edges().is_empty():
+		return _error("invalid_arguments", "source must contain GDScript.")
+	if source.length() > 100000:
+		return _error("invalid_arguments", "source is too long; limit it to 100000 characters.")
+	var target_class := str(arguments.get("target_class", "")).strip_edges()
+	if not target_class.is_empty() and not ClassDB.class_exists(target_class):
+		return _error("invalid_arguments", "Unknown target class: " + target_class)
+	var script_preload := _script_preload(source)
+	if not script_preload.is_empty():
+		return _error("unsafe_source", "The check cannot resolve preload of another GDScript (%s); resolving it can run that script's static initializer. Remove the preload to check this snippet safely, or validate it through create_and_attach_gdscript with approval." % script_preload)
+	var sanitized := _strip_tool_annotation(source)
+	var script := GDScript.new()
+	script.source_code = sanitized
+	var compile_error := script.reload()
+	if compile_error != OK:
+		var kind := str(script.get_last_error_kind())
+		var line := int(script.get_last_error_line())
+		var message := str(script.get_last_error())
+		if message.is_empty():
+			message = "The script did not compile (error %d)." % compile_error
+		var where := (" at line %d" % line) if line > 0 else ""
+		return {
+			"ok": false,
+			"summary": ("%s%s: %s" % ["Compile" if kind == "compile" else "Parse", where, message]).left(1200),
+			"error": {"code": "compile_error" if kind == "compile" else "parse_error", "message": message, "line": line, "kind": kind},
+			"data": {"line": line, "kind": kind, "error_code": int(compile_error)},
+			"affected": [],
+		}
+	var base_class := str(script.get_instance_base_type())
+	if base_class.is_empty():
+		base_class = "RefCounted"
+	var methods: Array = []
+	for method in script.get_script_method_list():
+		if not method is Dictionary: continue
+		var method_name := str(method.get("name", ""))
+		if method_name.is_empty() or method_name in methods: continue
+		methods.append(method_name)
+		if methods.size() >= 80: break
+	var signals: Array = []
+	for signal_info in script.get_script_signal_list():
+		if not signal_info is Dictionary: continue
+		var signal_name := str(signal_info.get("name", ""))
+		if signal_name.is_empty() or signal_name in signals: continue
+		signals.append(signal_name)
+		if signals.size() >= 40: break
+	if not target_class.is_empty() and not ClassDB.is_parent_class(target_class, base_class):
+		return {
+			"ok": false,
+			"summary": "The script compiles but extends %s, which cannot attach to %s." % [base_class, target_class],
+			"error": {"code": "incompatible_target", "message": "The script base class is incompatible with the target node class."},
+			"data": {"base_class": base_class, "target_class": target_class, "methods": methods, "signals": signals},
+			"affected": [],
+		}
+	var details := "extends %s, %d method%s" % [base_class, methods.size(), "" if methods.size() == 1 else "s"]
+	if not target_class.is_empty():
+		details += "; compatible with %s" % target_class
+	return {
+		"ok": true,
+		"summary": "GDScript compiles: " + details + ".",
+		"data": {
+			"base_class": base_class,
+			"target_class": target_class,
+			"methods": methods,
+			"signals": signals,
+			"tool_annotation_removed": sanitized != source,
+			"preloaded": source.contains("preload("),
+		},
+		"affected": [],
+	}
+
+func _strip_tool_annotation(source: String) -> String:
+	var regex := RegEx.new()
+	if regex.compile("(?m)^[ \\t]*@tool\\b[^\\n]*") != OK:
+		return source
+	return regex.sub(source, "", false)
+
+func _script_preload(source: String) -> String:
+	var regex := RegEx.new()
+	if regex.compile("preload\\(\\s*[\"']([^\"']+\\.gd)[\"']") != OK:
+		return ""
+	var found := regex.search(source)
+	return str(found.get_string(1)) if found != null else ""
 
 func _run_godot_headless(arguments: Dictionary) -> Dictionary:
 	var spec := _headless_spec(arguments)

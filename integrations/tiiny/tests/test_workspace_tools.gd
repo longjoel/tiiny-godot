@@ -124,6 +124,7 @@ func _initialize() -> void:
 	await _git_tests()
 	await _command_tests()
 	await _bridge_tests()
+	await _check_script_tests()
 	await _runtime_tests()
 	await _mode_tests()
 
@@ -588,6 +589,25 @@ func _bridge_tests() -> void:
 	check(error_code(no_bridge) == "unavailable", "reload reports a missing editor bridge")
 	workspace.editor_bridge = Callable(self, "fake_bridge")
 
+func _check_script_tests() -> void:
+	var valid_source := "extends CharacterBody2D\n\nconst SPEED := 200.0\n\nfunc _physics_process(delta: float) -> void:\n\tvelocity.x = SPEED * delta\n\tmove_and_slide()\n"
+	var valid: Dictionary = await workspace.execute("check_gdscript", {"source": valid_source, "target_class": "CharacterBody2D"})
+	check(valid.get("ok", false) and str(valid.get("data", {}).get("base_class", "")) == "CharacterBody2D" and "_physics_process" in valid.get("data", {}).get("methods", []) and str(valid.get("data", {}).get("target_class", "")) == "CharacterBody2D", "check_gdscript compiles and reports base, methods, and target compatibility")
+	var invalid_source := "extends Node\n\nfunc _ready() -> void:\n\tvar value: int = \"text\"\n"
+	var invalid: Dictionary = await workspace.execute("check_gdscript", {"source": invalid_source})
+	check(not invalid.get("ok", true) and int(invalid.get("data", {}).get("line", 0)) == 4 and not str(invalid.get("error", {}).get("message", "")).is_empty(), "check_gdscript reports the failing line and message")
+	var mismatch: Dictionary = await workspace.execute("check_gdscript", {"source": "extends CharacterBody2D\n", "target_class": "Label"})
+	check(not mismatch.get("ok", true) and error_code(mismatch) == "incompatible_target", "check_gdscript rejects an incompatible target class")
+	var unknown_target: Dictionary = await workspace.execute("check_gdscript", {"source": "extends Node\n", "target_class": "NotARealClass"})
+	check(error_code(unknown_target) == "invalid_arguments", "check_gdscript rejects an unknown target class")
+	var tool_source := "@tool\nextends Node\n\nstatic func _static_init() -> void:\n\tpass\n"
+	var tool_check: Dictionary = await workspace.execute("check_gdscript", {"source": tool_source})
+	check(tool_check.get("ok", false) and bool(tool_check.get("data", {}).get("tool_annotation_removed", false)), "check_gdscript strips the @tool annotation")
+	var preload_guard: Dictionary = await workspace.execute("check_gdscript", {"source": "extends Node\n\nconst Other = preload(\"res://other.gd\")\n"})
+	check(error_code(preload_guard) == "unsafe_source", "check_gdscript rejects a GDScript preload that could run code")
+	check(error_code(await workspace.execute("check_gdscript", {"source": "  \n"})) == "invalid_arguments", "check_gdscript rejects empty source")
+	check(error_code(await workspace.execute("check_gdscript", {"source": "x".repeat(100001)})) == "invalid_arguments", "check_gdscript rejects oversized source")
+
 func _runtime_tests() -> void:
 	write_file(project.path_join("runtime.tscn"), '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n')
 	var runtime_definition: Dictionary = {}
@@ -637,6 +657,7 @@ func _mode_tests() -> void:
 	var editor_tools: Array = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))
 	var workspace_tools: Array = []
 	check("list_files" not in editor_tools and "run_command" not in editor_tools, "editor mode hides workspace tools")
+	check("check_gdscript" in editor_tools, "editor mode advertises the safe script check without host commands")
 	check("read_project_file" in editor_tools and "scan_filesystem" in editor_tools, "editor mode keeps shared file/scan tools")
 	check(registry.set_tool_mode("workspace"), "workspace mode is accepted")
 	workspace_tools = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))

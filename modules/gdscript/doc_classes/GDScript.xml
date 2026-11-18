@@ -12,6 +12,24 @@
 		<link title="GDScript documentation index">$DOCS_URL/tutorials/scripting/gdscript/index.html</link>
 	</tutorials>
 	<methods>
+		<method name="get_last_error" qualifiers="const">
+			<return type="String" />
+			<description>
+				Returns the first parser, analyzer, or compiler message from the most recent [method Script.reload], or an empty string if that reload succeeded. The error is cleared at the start of every reload and is intended for editor validation tools; it is not a runtime exception.
+			</description>
+		</method>
+		<method name="get_last_error_kind" qualifiers="const">
+			<return type="String" />
+			<description>
+				Returns the stage of the most recent [method Script.reload] failure: [code]parse[/code] or [code]compile[/code]. Returns an empty string when the last reload succeeded.
+			</description>
+		</method>
+		<method name="get_last_error_line" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the one-based source line of the most recent [method Script.reload] failure, or [code]0[/code] when the last reload succeeded or the line is unknown.
+			</description>
+		</method>
 		<method name="new" qualifiers="vararg">
 			<return type="Variant" />
 			<description>
