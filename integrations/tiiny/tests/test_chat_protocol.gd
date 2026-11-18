@@ -7,9 +7,9 @@ func _reply(message: Dictionary) -> PackedByteArray:
 func _call(id: String, path: String) -> Dictionary:
 	return {"id": id, "type": "function", "function": {"name": "create_gdscript", "arguments": JSON.stringify({"path": path, "source": "extends Node\n", "reason": "fixture fallback"})}}
 
-func _begin(dock: Control) -> void:
+func _begin(dock: Control, prompt := "Create a fixture") -> void:
 	dock.request_stage = "answer"
-	dock.pending_prompt = "Create a fixture"
+	dock.pending_prompt = prompt
 	dock.pending_key = "fixture-secret-key"
 	dock.pending_model = "fixture-code"
 	dock.send_button.disabled = true
@@ -166,8 +166,7 @@ func run(plugin: EditorPlugin) -> String:
 	dock.submit_error = OK
 	if not await _recover(dock): return "Immediate continuation failure prevented recovery."
 	# New chat clears model context and the dock history; the queue retains the results.
-	dock.conversation.assign([{"role": "user", "content": "x".repeat(20000)}])
-	_begin(dock)
+	_begin(dock, "x".repeat(20000))
 	if not _idle(dock): return "Context overflow locked controls."
 	var retained_tool_log: String = dock.history_text()
 	dock.new_chat_button.pressed.emit()

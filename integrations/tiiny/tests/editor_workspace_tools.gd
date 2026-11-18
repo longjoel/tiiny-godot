@@ -311,6 +311,17 @@ func _run() -> void:
 	if bool(dock.call("_check_context_budget", budget_payload)):
 		_fail("Image content was not counted by the context budget"); return
 	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 65536)
+	if bool(dock.call("_thinking_enabled")):
+		_fail("Model thinking should default off"); return
+	if not bool(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/unload_idle_models")):
+		_fail("Idle-model unloading should default on"); return
+	var long_messages: Array[Dictionary] = []
+	for index in range(80):
+		long_messages.append({"role": "user", "content": "u".repeat(1000)})
+		long_messages.append({"role": "assistant", "content": "a".repeat(1000)})
+	var trimmed_history: Array = dock.call("_trim_conversation", long_messages)
+	if trimmed_history.size() >= long_messages.size() or str(trimmed_history[0].get("role", "")) != "user" or not str(trimmed_history[0].get("content", "")).contains("trimmed"):
+		_fail("History trimming did not keep a bounded user-led history: " + str(trimmed_history.size())); return
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
 	await get_tree().process_frame

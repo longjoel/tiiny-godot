@@ -204,8 +204,15 @@ func _ready() -> void:
 		settings.set_setting("tiiny_ai/advanced/log_chat", true)
 	settings.add_property_info({"name": "tiiny_ai/advanced/log_chat", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Append prompts, reasoning, tool calls, and responses to res://.tiiny/logs/chat.log."})
 	if not settings.has_setting("tiiny_ai/advanced/model_thinking"):
-		settings.set_setting("tiiny_ai/advanced/model_thinking", true)
-	settings.add_property_info({"name": "tiiny_ai/advanced/model_thinking", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Request the model's reasoning mode. Disable for shorter, direct responses."})
+		settings.set_setting("tiiny_ai/advanced/model_thinking", false)
+	settings.add_property_info({"name": "tiiny_ai/advanced/model_thinking", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Request the model's reasoning mode. Off by default: thinking tokens count against max_tokens and add latency."})
+	if not settings.has_setting("_tiiny_ai/model_thinking_defaulted"):
+		# Move the old default-on behavior to the new default-off behavior once.
+		settings.set_setting("tiiny_ai/advanced/model_thinking", false)
+		settings.set_setting("_tiiny_ai/model_thinking_defaulted", true)
+	if not settings.has_setting("tiiny_ai/advanced/unload_idle_models"):
+		settings.set_setting("tiiny_ai/advanced/unload_idle_models", true)
+	settings.add_property_info({"name": "tiiny_ai/advanced/unload_idle_models", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Unload non-coding models when the job queue is idle. Frees NPU and SSD; specialized jobs reload their model on demand."})
 
 	history_scroll = ScrollContainer.new()
 	history_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1018,6 +1025,33 @@ func _request_timeout() -> float:
 func _thinking_enabled() -> bool:
 	return bool(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/model_thinking"))
 
+func _history_budget_bytes() -> int:
+	var settings := EditorInterface.get_editor_settings()
+	var tokens := int(settings.get_setting("tiiny_ai/models/context_tokens")) if settings.has_setting("tiiny_ai/models/context_tokens") else 8192
+	# Leave room for the tool payload, system prompt, and output reservation.
+	return clampi(tokens / 3, 4096, 512 * 1024)
+
+func _trim_conversation(messages: Array[Dictionary]) -> Array[Dictionary]:
+	var budget := _history_budget_bytes()
+	var total := JSON.stringify(messages).to_utf8_buffer().size()
+	var kept: Array[Dictionary] = []
+	if total <= budget:
+		for message in messages: kept.append(message.duplicate(true))
+		return kept
+	var start := 0
+	while start < messages.size() and total > budget:
+		total -= JSON.stringify(messages[start]).to_utf8_buffer().size()
+		start += 1
+	while start < messages.size() and str(messages[start].get("role", "")) != "user":
+		total -= JSON.stringify(messages[start]).to_utf8_buffer().size()
+		start += 1
+	if start >= messages.size():
+		return kept
+	for index in range(start, messages.size()):
+		kept.append(messages[index].duplicate(true))
+	kept.insert(0, {"role": "user", "content": "[Earlier conversation was trimmed to keep the request short.]"})
+	return kept
+
 func _coding_model() -> String:
 	var settings := EditorInterface.get_editor_settings()
 	if settings.has_setting("tiiny_ai/models/coding_model"):
@@ -1132,6 +1166,7 @@ func _generate() -> void:
 	var request_timeout := _request_timeout()
 	var chat_timeout_ms := 0 if request_timeout <= 0.0 else int(request_timeout * 1000.0)
 	var project_instructions := _capture_project_instructions()
+	conversation = _trim_conversation(conversation)
 	var parameters := {"prompt": pending_prompt, "context": _editor_context(), "conversation": conversation.duplicate(true), "custom_prompt": str(settings.get_setting("tiiny_ai/advanced/system_prompt_extra")).strip_edges(), "model": pending_model, "connection_hash": (pending_url + "|" + pending_host + "|" + pending_key).sha256_text(), "timeout_ms": chat_timeout_ms, "project_instructions": str(project_instructions.text), "project_instructions_sha256": str(project_instructions.sha256), "attachments": pending_attachments.duplicate(true)}
 	var submitted: Dictionary = jobs_service.append_job("chat-turn-" + Crypto.new().generate_random_bytes(16).hex_encode(), "chat_turn", parameters)
 	# Credentials are resolved again only at dispatch and are never saved in the job.
@@ -2509,7 +2544,7 @@ func _send_chat(system: String, user: Variant) -> void:
 	var messages: Array = [{"role": "system", "content": effective_system}]
 	if request_stage == "answer":
 		turn_system = effective_system
-		turn_messages = conversation.duplicate(true)
+		turn_messages = _trim_conversation(conversation)
 		turn_messages.append({"role": "user", "content": user})
 		tool_rounds = 0
 		turn_truncations = 0

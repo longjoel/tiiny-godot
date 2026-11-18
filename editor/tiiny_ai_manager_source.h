@@ -35,6 +35,7 @@ var model_job_result: Dictionary = {}
 var model_job_cancelled := false
 var model_job_checkpoint_failed := false
 var next_restore_check_msec := 0
+var storage_cache := {"at": -100000, "data": {}}
 var current_operation: Dictionary = {}
 var current_progress := 0.0
 var last_operation_failed := false
@@ -294,7 +295,74 @@ func _process(_delta: float) -> void:
 	for job in service.queue.snapshot().jobs:
 		if job.state in ["queued", "running"]: return
 		if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false): return
-	_refresh_snapshot(true, true)
+	await _refresh_snapshot(true, true)
+	if bool(settings.get_setting("tiiny_ai/advanced/unload_idle_models")):
+		await _unload_idle_models()
+
+func _queue_has_pending(service: Node) -> bool:
+	if service == null or service.get("queue") == null: return false
+	for job in service.queue.snapshot().jobs:
+		if job.state in ["queued", "running"]: return true
+		if job.state == "interrupted" and not job.attempts.is_empty() and job.attempts.back().get("device_started", false): return true
+	return false
+
+func _unload_idle_models() -> void:
+	if busy or applying or not model_job_id.is_empty(): return
+	var settings := EditorInterface.get_editor_settings()
+	if not bool(settings.get_setting("tiiny_ai/advanced/unload_idle_models")): return
+	var service := get_tree().get_first_node_in_group("tiiny_job_manager")
+	if service == null or not service.get("available") or service.get("queue") == null: return
+	if _queue_has_pending(service): return
+	var connection := _connection()
+	if connection.has("error"): return
+	var loaded: Dictionary = {}
+	var loaded_value: Variant = snapshot.get("loaded", {})
+	if loaded_value is Dictionary:
+		loaded = loaded_value
+	if loaded.is_empty(): return
+	var coding := str(settings.get_setting("tiiny_ai/models/coding_model"))
+	if coding.is_empty() or not loaded.has(coding): coding = _loaded_coding_model()
+	if coding.is_empty() or not loaded.has(coding): return
+	var idle: Array = []
+	for id in loaded.keys():
+		if str(id) != coding: idle.append(str(id))
+	if idle.is_empty(): return
+	if busy or applying or not model_job_id.is_empty(): return
+	if not _acquire_device("unload idle models"): return
+	busy = true
+	var changed: Array = []
+	_report("Unloading idle models…")
+	for id in idle:
+		if _queue_has_pending(service) or model_job_cancelled:
+			break
+		_report("Unloading idle model " + id + "…")
+		var exit_code := await _run_cli(["unload", id])
+		if exit_code != 0:
+			_report("Could not unload idle model " + id + "; leaving the device for review.")
+			busy = false
+			_release_device()
+			return
+		changed.append(id)
+	if changed.is_empty():
+		busy = false
+		_release_device()
+		return
+	var observed := await _fetch_snapshot()
+	if not observed.has("error") and observed.get("connection", "") == str(connection.identity) and observed.get("loaded") is Dictionary:
+		var remaining: Array = []
+		for id in changed:
+			if observed.loaded.has(id): remaining.append(id)
+		if not remaining.is_empty():
+			_report("Tiiny did not confirm unloading: " + ", ".join(PackedStringArray(remaining)) + ". Check the device.")
+			busy = false
+			_release_device()
+			return
+		snapshot = observed
+		_report("Unloaded idle model%s: %s. Keeping %s warm." % ["" if changed.size() == 1 else "s", ", ".join(PackedStringArray(changed)), coding])
+	else:
+		_report("Unloaded idle models; refresh to confirm capacity.")
+	busy = false
+	_release_device()
 
 static func _valid_saved_draft(saved: Variant) -> bool:
 	if not saved is Dictionary or not saved.get("roles") is Dictionary or not saved.get("extra_warm") is Array: return false
@@ -524,8 +592,13 @@ func _fetch_snapshot() -> Dictionary:
 	if raw.has("error"): return raw
 	var npu := await _get_json(connection, "/api/v1/models/npu/status")
 	if npu.has("error"): return npu
-	var storage := await _get_json(connection, "/api/v1/sys/storage")
-	if storage.has("error"): return storage
+	var storage: Dictionary
+	if Time.get_ticks_msec() - int(storage_cache.at) < 60000 and not storage_cache.data.is_empty() and str(storage_cache.get("identity", "")) == str(connection.identity):
+		storage = {"data": storage_cache.data.duplicate(true)}
+	else:
+		storage = await _get_json(connection, "/api/v1/sys/storage")
+		if storage.has("error"): return storage
+		storage_cache = {"at": Time.get_ticks_msec(), "data": storage.data.duplicate(true), "identity": str(connection.identity)}
 	if not raw.data is Array or not npu.data is Dictionary or not storage.data is Dictionary: return {"error": "Unsupported Tiiny inventory/capacity response."}
 	for record in raw.data:
 		if not record is Dictionary or not record.get("model_id", record.get("fullname")) is String or not record.get("supported", []) is Array:
@@ -1007,6 +1080,7 @@ func _run_scheduled_actions(actions: Array, identity: String, label: String, ign
 			return {"ok": false, "changed": changed, "uncertain": false, "error": "Could not record the scheduled model operation. Stopped before starting it."}
 		changed = true
 		var exit_code := await _run_cli([action.verb, action.id])
+		storage_cache.at = -100000
 		if exit_code != 0 or (not ignore_cancel and model_job_cancelled) or model_job_checkpoint_failed:
 			return {"ok": false, "cancelled": model_job_cancelled, "changed": changed, "uncertain": true, "error": "Scheduled %s did not finish; the device state is unknown, so no further model commands were sent." % str(action.verb)}
 		var observed := await _fetch_snapshot()
@@ -1185,6 +1259,7 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 			await _apply_failed("Could not record the model operation. Stopped before starting it.")
 			return
 		var exit_code := await _run_cli([action.verb, action.id])
+		storage_cache.at = -100000
 		if exit_code != 0 or model_job_cancelled or model_job_checkpoint_failed:
 			await _apply_failed("Operation failed (%d). Earlier operations may have completed; refresh and check again." % exit_code)
 			return
