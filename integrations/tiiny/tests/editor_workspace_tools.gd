@@ -339,8 +339,64 @@ func _run() -> void:
 	settings.set_setting("tiiny_ai/models/coding_model_vision", true)
 	dock.call("_refresh_registry_availability")
 	var vision_tools: Array = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))
-	if not ("capture_scene_view" in vision_tools and "capture_player_view" in vision_tools):
-		_fail("Vision-capable tool payload omitted the capture tools"); return
+	if not ("capture_scene_view" in vision_tools and "capture_player_view" in vision_tools and "classify_visual" in vision_tools):
+		_fail("Vision-capable tool payload omitted a visual tool: " + str(vision_tools)); return
+	var vision_image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	vision_image.fill(Color(0.1, 0.6, 0.9, 1.0))
+	if vision_image.save_png("res://vision_fixture.png") != OK:
+		_fail("Could not create the vision fixture image"); return
+	var prepared: Dictionary = await dock.call("_prepare_vision_image", {"source": "texture", "path": "res://vision_fixture.png"})
+	if not str(prepared.get("path", "")).begins_with("user://") or str(prepared.get("sha256", "")).length() != 64:
+		_fail("Vision image preparation did not produce a bounded user:// PNG: " + str(prepared)); return
+	dock.call("_vision_cache_put", str(prepared.sha256), "classify this", "fixture-model", {"description": "a blue square", "labels": ["blue", "square"]})
+	var cached: Dictionary = dock.call("_vision_cache_get", str(prepared.sha256), "classify this", "fixture-model")
+	if str(cached.get("description", "")) != "a blue square" or not Array(cached.get("labels", [])).has("blue"):
+		_fail("Vision cache did not return the stored classification: " + str(cached)); return
+	var cache_miss: Dictionary = dock.call("_vision_cache_get", str(prepared.sha256), "different prompt", "fixture-model")
+	if not cache_miss.is_empty():
+		_fail("Vision cache ignored the prompt version: " + str(cache_miss)); return
+	var cache_chat = load("res://fake_chat.gd").new()
+	add_child(cache_chat)
+	await get_tree().process_frame
+	cache_chat.queued_chat_parameters = {"model": "fixture-model", "connection_hash": "a".repeat(64), "timeout_ms": 120000}
+	var cache_call := {"id": "vision-cache", "name": "classify_visual", "arguments": {"source": "texture", "path": str(prepared.path), "prompt": "classify this"}}
+	var cache_job: Dictionary = await cache_chat.call("_prepare_vision_tool_job", cache_call, [])
+	if not bool(cache_job.get("result", {}).get("data", {}).get("cached", false)):
+		_fail("Cached visual classification did not skip the queued job: " + str(cache_job)); return
+	cache_chat.queue_free()
+	var successor_chat = load("res://fake_chat.gd").new()
+	add_child(successor_chat)
+	await get_tree().process_frame
+	var handoff := {
+		"chat": {
+			"turn": {"id": "turn-vision", "messages": [], "failed": {}, "ledger": [], "calls": ["vision-call"], "count": 1},
+			"conversation": [],
+		},
+		"call": {"id": "vision-call", "name": "classify_visual", "arguments": {"source": "texture", "path": "res://vision_fixture.png"}},
+		"remaining": [],
+	}
+	var successor: Variant = successor_chat.call("prepare_vision_tool_successor", {"parameters": {"kind": "vision", "chat_handoff": handoff}}, {"ok": true, "description": "a blue player", "labels": ["player"]})
+	if not successor is Dictionary or not JSON.stringify(successor.get("turn", {}).get("messages", [])).contains("a blue player") or Array(successor.get("turn", {}).get("ledger", [])).size() != 1:
+		_fail("Visual classification successor did not append a tool result and ledger entry: " + str(successor)); return
+	successor_chat.asset_job_parameters = {"kind": "vision", "image_sha256": str(prepared.sha256), "text": "classify this", "source": "texture", "path": "res://vision_fixture.png", "model": "fixture-model"}
+	successor_chat.vision_phase = "done"
+	successor_chat.vision_description = "a blue square"
+	successor_chat.vision_labels = ["blue"]
+	var finished: Dictionary = successor_chat.call("_finish_asset_job", "completed", "")
+	if str(finished.get("state", "")) != "completed" or not bool(finished.get("result", {}).get("ok", false)) or str(finished.get("result", {}).get("description", "")) != "a blue square":
+		_fail("Visual classification completion did not return the cached result shape: " + str(finished)); return
+	var inner_json := "```json\n" + JSON.stringify({"description": "a player on a platform", "labels": ["player", "platform"]}) + "\n```"
+	var response_body := JSON.stringify({"choices": [{"message": {"content": inner_json}}]}).to_utf8_buffer()
+	successor_chat.call("_on_vision_completed", HTTPRequest.RESULT_SUCCESS, 200, PackedStringArray(), response_body)
+	if str(successor_chat.vision_phase) != "done" or str(successor_chat.vision_description) != "a player on a platform" or not Array(successor_chat.vision_labels).has("player"):
+		_fail("Visual classification response parsing did not extract description and labels: " + str(successor_chat.vision_description)); return
+	successor_chat.queue_free()
+	var vision_params := {"kind": "vision", "image_path": str(prepared.path), "image_sha256": str(prepared.sha256), "path": "res://vision_fixture.png", "source": "texture", "text": "classify this", "model": "fixture-model", "connection_hash": "a".repeat(64), "timeout_ms": 120000}
+	var jobs_service_node: Variant = dock.get("jobs_service")
+	if jobs_service_node != null and jobs_service_node.has_method("_validate"):
+		var validation := str(jobs_service_node.call("_validate", "asset_generate", vision_params))
+		if not validation.is_empty():
+			_fail("Vision job validation rejected valid parameters: " + validation); return
 
 	settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	dock.call("_refresh_registry_availability")

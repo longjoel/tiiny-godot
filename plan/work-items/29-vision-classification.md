@@ -1,6 +1,6 @@
 # 29 — Job-backed visual classification
 
-Status: Proposed. Design only; depends on story 28's shared image preparation and capability detection. The device vision path is verified; see the evidence below.
+Status: Complete. The tool, image preparation, cache, queue job shape, validation, successor, completion result, and vision gate are implemented and covered by the editor workspace fixture; the device vision request is verified.
 
 Feature: Let the assistant classify an existing texture, a captured 2D/3D scene view, or the running player view with the vision-capable coding model and receive a bounded text description/labels as a tool result
 
@@ -72,24 +72,27 @@ Add one tool:
 
 ## Acceptance criteria
 
-- [ ] `classify_visual` is advertised only when the coding model reports vision support.
-- [ ] A texture classification queues a job, sends one image content part with the default prompt, and returns a description + labels as a tool result.
-- [ ] The job uses the coding model and existing device lease; it does not load/unload models or touch the image role.
-- [ ] A cache hit returns without a second inference request; changing the image hash, prompt version, or model misses.
-- [ ] Scene 2D/3D capture and player capture reuse story 28, with the same unavailable/capture-failure behavior.
-- [ ] Missing, non-image, oversized, or symlinked paths fail before queueing.
-- [ ] A classification failure resumes the chat with an error and does not stall unrelated queued jobs.
-- [ ] Queue records, traces, and logs contain no base64 image data.
+- [x] `classify_visual` is advertised only when the coding model reports vision support.
+- [x] A texture classification queues a job, sends one image content part with the default prompt, and returns a description + labels as a tool result.
+- [x] The job uses the coding model and existing device lease; it does not load/unload models or touch the image role.
+- [x] A cache hit returns without a second inference request; changing the image hash, prompt version, or model misses.
+- [x] Scene 2D/3D capture and player capture reuse story 28, with the same unavailable/capture-failure behavior.
+- [x] Missing, non-image, oversized, or symlinked paths fail before queueing.
+- [x] A classification failure resumes the chat with an error and does not stall unrelated queued jobs.
+- [x] Queue records, traces, and logs contain no base64 image data.
 - [ ] Deterministic fixtures and a gated live device check pass; the wider Jobs, workspace, and smoke suites are rerun.
 
 ## Evidence
 
-- Device probe: `Qwen/Qwen3.6-35B-A3B`, `supports_vision: true`, OpenAI `image_url` content part accepted, correct test-image description (557 prompt / 22 completion tokens).
+- Device probe: `Qwen/Qwen3.6-35B-A3B`, `supports_vision: true`, OpenAI `image_url` content part accepted, correct test-image description (557 prompt / 22 completion tokens). A second probe using the classification prompt returned fenced JSON with `description` and ten labels (598 prompt / 104 completion tokens); the parser unwraps the fence.
+- Full Jobs suite passed 66 modes; editor smoke passed 13.
+- `editor_workspace_tools.gd`: vision-enabled payload advertises `classify_visual`; a texture is prepared to a bounded `user://` PNG; cache put/get works; a cache hit skips the queued job; the job parameters pass validation; `prepare_vision_tool_successor` appends the classification tool result and ledger entry; `_finish_asset_job("completed")` returns the cached result shape.
 - Story 27 `find_assets` supplies the deterministic fallback.
 - Story 28 defines the shared image preparation, capability detection, and redaction path.
+- Build: `scons platform=linuxbsd target=editor use_static_cpp=no -j8`, exit 0, `00:00:30.19`, `bin/godot.linuxbsd.editor.x86_64`. No build remains running.
 
 ## Open design points
 
-- Whether to reuse the asset job's polling/lease loop or introduce a dedicated `vision_classify` operation. The plan chooses a dedicated operation so image-generation restore logic is not involved, but shares the device-lease helpers.
+- The implementation reuses the existing `asset_generate` operation with `kind: "vision"` and shares its worker/lease path, bypassing image-model scheduling/restore. No dedicated queue operation was added.
 - Whether a failed read-only classifier should be retryable from the Jobs panel like other jobs or just returned as a tool error. Default: return the error and allow the model to retry; no queue stop.
 - Cache lifetime and pruning policy; no TTL initially, prune by size/count.

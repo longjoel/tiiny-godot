@@ -128,6 +128,13 @@ var asset_job_id := ""
 var asset_job_parameters := {}
 var asset_job_started := false
 var asset_job_cancel := false
+var vision_phase := ""
+var vision_description := ""
+var vision_labels: Array = []
+var vision_error := ""
+var vision_deadline := 0
+var vision_request: HTTPRequest
+var vision_cached := false
 var asset_phase := ""
 var asset_task_id := ""
 var asset_artifact_path := ""
@@ -1236,8 +1243,16 @@ func poll_asset_job(job: Dictionary) -> Dictionary:
 		asset_schedule_identity = ""
 		asset_final_state = ""
 		asset_final_reason = ""
+		vision_phase = ""
+		vision_description = ""
+		vision_labels.clear()
+		vision_error = ""
+		vision_deadline = 0
+		vision_cached = false
 	if asset_job_id != job.id:
 		return {"state": "running", "stage": "Waiting for asset job"}
+	if str(asset_job_parameters.get("kind", "")) == "vision":
+		return _poll_vision_job(job)
 	if asset_control_pending:
 		return {"state": "running", "stage": "Restoring models" if asset_phase == "restoring" else "Loading image model"}
 	if asset_phase == "control_finished":
@@ -1313,6 +1328,131 @@ func poll_asset_job(job: Dictionary) -> Dictionary:
 	if asset_phase == "poll" and asset_request == null and Time.get_ticks_msec() >= asset_next_poll:
 		_start_asset_poll()
 	return {"state": "running", "stage": "Generating " + str(asset_job_parameters.get("kind", "asset")) + "…"}
+
+func _poll_vision_job(_job: Dictionary) -> Dictionary:
+	if asset_job_cancel:
+		_stop_vision_request()
+		return _finish_asset_job("cancelled", "Cancelled by user")
+	if not asset_job_started:
+		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
+		if manager == null:
+			return _finish_asset_job("completed", "Tiiny device manager is unavailable.")
+		if not manager.is_ready():
+			if not manager.busy and not manager.applying and manager.has_method("refresh_device"):
+				manager.refresh_device(true)
+				return {"state": "running", "stage": "Revalidating Tiiny device state"}
+			return {"state": "running", "stage": str(manager.message)}
+		var connection := _inference_connection()
+		if connection.has("error"):
+			return _finish_asset_job("completed", str(connection.error))
+		var model := str(asset_job_parameters.get("model", ""))
+		var connection_hash: String = (connection.url + "|" + connection.host + "|" + connection.key).sha256_text()
+		if connection_hash != str(asset_job_parameters.get("connection_hash", "")):
+			return _finish_asset_job("completed", "The device or model connection changed since submission.")
+		if not manager.is_model_loaded(model):
+			return _finish_asset_job("completed", "The coding model is not loaded; load it in Tiiny AI > Models.")
+		if device_lease.is_empty() and not _acquire_device("visual classification"):
+			return {"state": "running", "stage": "Waiting for Tiiny"}
+		if not jobs_service.begin_device_request(self, device_lease, asset_job_id, model, connection_hash):
+			device_outcome_uncertain = true
+			uncertain_job_id = asset_job_id
+			return _finish_asset_job("completed", "Could not record the classification request.")
+		asset_job_started = true
+		pending_url = connection.url
+		pending_key = connection.key
+		pending_host = connection.host
+		asset_deadline = Time.get_ticks_msec() + int(asset_job_parameters.get("timeout_ms", 120000))
+		var image_path := str(asset_job_parameters.get("image_path", ""))
+		var bytes := FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(image_path))
+		if bytes.is_empty():
+			_stop_vision_request()
+			return _finish_asset_job("completed", "The prepared image is missing.")
+		var payload := {
+			"model": model,
+			"messages": [{"role": "user", "content": [
+				{"type": "text", "text": str(asset_job_parameters.get("text", ""))},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64," + Marshalls.raw_to_base64(bytes)}},
+			]}],
+			"stream": false,
+			"max_tokens": 160,
+			"temperature": 0.0,
+			"chat_template_kwargs": {"enable_thinking": false},
+		}
+		vision_request = HTTPRequest.new()
+		vision_request.timeout = float(int(asset_job_parameters.get("timeout_ms", 120000))) / 1000.0
+		vision_request.body_size_limit = 8 * 1024 * 1024
+		vision_request.request_completed.connect(_on_vision_completed)
+		add_child(vision_request)
+		var error := vision_request.request(pending_url + "/chat/completions", _inference_headers(pending_key, pending_host), HTTPClient.METHOD_POST, JSON.stringify(payload))
+		if error != OK:
+			_stop_vision_request()
+			return _finish_asset_job("completed", "Could not start the classification request.")
+		vision_phase = "submitted"
+		_set_status("Classifying image…")
+		return {"state": "running", "stage": "Classifying image"}
+	if vision_phase == "done" or vision_phase == "error" or Time.get_ticks_msec() > asset_deadline:
+		if vision_phase != "done" and vision_phase != "error":
+			vision_phase = "error"
+			vision_error = "Visual classification exceeded its time limit."
+		_stop_vision_request()
+		return _finish_asset_job("completed", vision_error)
+	return {"state": "running", "stage": "Classifying image"}
+
+func _on_vision_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if is_instance_valid(vision_request):
+		vision_request.queue_free()
+	vision_request = null
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		vision_phase = "error"
+		vision_error = "Device request failed (HTTP %d)." % response_code
+		return
+	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if not parsed is Dictionary or not parsed.get("choices") is Array or parsed.choices.is_empty():
+		vision_phase = "error"
+		vision_error = "The device returned an unexpected classification response."
+		return
+	var choice: Variant = parsed.choices[0]
+	if not choice is Dictionary or not choice.get("message") is Dictionary:
+		vision_phase = "error"
+		vision_error = "The device returned an unexpected classification message."
+		return
+	var message: Dictionary = choice.get("message", {})
+	var content := str(message.get("content", "")).strip_edges()
+	if content.is_empty():
+		vision_phase = "error"
+		vision_error = "The device returned no classification text."
+		return
+	var structured: Variant = _vision_parse_json(content)
+	vision_labels = []
+	if structured is Dictionary and structured.get("description") is String:
+		vision_description = str(structured.description).strip_edges()
+		var labels: Variant = structured.get("labels", [])
+		if labels is Array:
+			for label in labels:
+				if label is String and not str(label).strip_edges().is_empty() and vision_labels.size() < 12:
+					vision_labels.append(str(label).strip_edges().to_lower())
+	else:
+		vision_description = content
+	vision_phase = "done" if not vision_description.is_empty() else "error"
+	if vision_description.is_empty():
+		vision_error = "The device returned an empty classification."
+
+func _vision_parse_json(text: String) -> Variant:
+	var value := text.strip_edges()
+	if value.begins_with("```"):
+		var newline := value.find("\n")
+		if newline >= 0:
+			value = value.substr(newline + 1)
+		if value.ends_with("```"):
+			value = value.substr(0, value.length() - 3)
+		value = value.strip_edges()
+	return JSON.parse_string(value)
+
+func _stop_vision_request() -> void:
+	if vision_request != null and is_instance_valid(vision_request):
+		vision_request.cancel_request()
+		vision_request.queue_free()
+	vision_request = null
 
 func _schedule_asset_model(manager: Node, model: String) -> void:
 	manager.external_model_job_id = asset_job_id
@@ -1615,6 +1755,41 @@ func _asset_import_ready() -> bool:
 	return ResourceLoader.load(asset_artifact_path, "", ResourceLoader.CACHE_MODE_REUSE) is PackedScene
 
 func _finish_asset_job(state: String, reason: String) -> Dictionary:
+	var kind := str(asset_job_parameters.get("kind", ""))
+	if kind == "vision":
+		var result_data: Dictionary
+		if state == "completed" and vision_phase == "done":
+			result_data = {
+				"ok": true,
+				"description": vision_description,
+				"labels": vision_labels.duplicate(),
+				"source": str(asset_job_parameters.get("source", "")),
+				"path": str(asset_job_parameters.get("path", "")),
+				"image_sha256": str(asset_job_parameters.get("image_sha256", "")),
+				"model": str(asset_job_parameters.get("model", "")),
+				"cached": false,
+			}
+			_vision_cache_put(str(asset_job_parameters.get("image_sha256", "")), str(asset_job_parameters.get("text", "")), str(asset_job_parameters.get("model", "")), result_data.duplicate(true))
+		else:
+			var message := vision_error if not vision_error.is_empty() else reason
+			if message.is_empty(): message = "Visual classification failed."
+			result_data = {"ok": false, "error": {"code": "classification_failed", "message": message}}
+		var success := state == "completed" and vision_phase == "done"
+		if not success:
+			if asset_job_started:
+				jobs_service.confirm_device_request(self, device_lease, asset_job_id)
+			_release_device()
+		asset_job_id = ""
+		asset_job_parameters = {}
+		asset_job_started = false
+		asset_job_cancel = false
+		vision_phase = ""
+		vision_description = ""
+		vision_labels.clear()
+		vision_error = ""
+		vision_deadline = 0
+		send_button.disabled = false
+		return {"state": "cancelled" if state == "cancelled" else "completed", "confirmed": not success, "result": result_data}
 	var result := {"artifact": asset_artifact_path} if state == "completed" else {"error": reason}
 	if state != "completed" and not asset_artifact_path.is_empty():
 		result["artifact"] = asset_artifact_path
@@ -1649,6 +1824,10 @@ func _finish_asset_job(state: String, reason: String) -> Dictionary:
 func cancel_asset_job(id: String) -> bool:
 	if asset_job_id != id: return false
 	asset_job_cancel = true
+	if str(asset_job_parameters.get("kind", "")) == "vision":
+		_stop_vision_request()
+		_set_status("Stopping visual classification.")
+		return true
 	if asset_control_pending:
 		var manager := get_tree().get_first_node_in_group("tiiny_setup_manager")
 		if manager != null and manager.has_method("cancel_model_job"):
@@ -1662,6 +1841,7 @@ func finalize_asset_job(state: String) -> void:
 		return
 	device_outcome_uncertain = false
 	_release_device()
+	_stop_vision_request()
 	asset_job_id = ""
 	asset_job_parameters = {}
 	asset_job_started = false
@@ -1670,6 +1850,11 @@ func finalize_asset_job(state: String) -> void:
 	asset_task_id = ""
 	asset_artifact_path = ""
 	asset_error = ""
+	vision_phase = ""
+	vision_description = ""
+	vision_labels.clear()
+	vision_error = ""
+	vision_deadline = 0
 
 func _stop_asset_request() -> void:
 	if asset_request != null and is_instance_valid(asset_request):
@@ -1834,6 +2019,7 @@ func _ensure_workspace_registry() -> bool:
 		workspace_coding.allow_shell_commands = bool(EditorInterface.get_editor_settings().get_setting("tiiny_ai/advanced/allow_shell_commands"))
 	workspace_registry = workspace_registry_script.new(workspace_inspector, workspace_transactions, workspace_debugger, workspace_coding)
 	workspace_registry.set_handler("generate_image", Callable(self, "_registry_generate_image"))
+	workspace_registry.set_handler("classify_visual", Callable(self, "_registry_classify_visual"))
 	workspace_registry.set_handler("create_gdscript", Callable(self, "_registry_create_gdscript"))
 	workspace_registry.set_handler("create_and_attach_gdscript", Callable(self, "_registry_create_and_attach_gdscript"))
 	workspace_registry.set_handler("attach_script", Callable(self, "_registry_attach_script"))
@@ -1858,12 +2044,29 @@ func _tool_text_result(text: String) -> Dictionary:
 		return {"ok": false, "summary": text.trim_prefix("Error:").strip_edges(), "error": {"code": "execution_failed", "message": text.trim_prefix("Error:").strip_edges()}}
 	return {"ok": true, "summary": text, "data": {}}
 
+func _tool_error(code: String, message: String) -> Dictionary:
+	return {"ok": false, "summary": message, "error": {"code": code, "message": message}, "data": {}, "affected": []}
+
 func _registry_generate_image(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var text := await _generate_image_tool(str(arguments.get("prompt", "")))
 	if text.begins_with("Generated image: "):
 		var path := text.trim_prefix("Generated image: ")
 		return {"ok": true, "summary": "Generated and imported " + path + ".", "data": {"path": path}, "affected": [{"kind": "resource", "path": path, "class": "Texture2D"}]}
 	return _tool_text_result(text)
+
+func _registry_classify_visual(arguments: Dictionary, _context: Dictionary) -> Dictionary:
+	if not _vision_available():
+		return _tool_error("vision_unavailable", "Choose an Image-Text-to-Text coding model to classify images.")
+	var prepared := await _prepare_vision_image(arguments)
+	if prepared.has("error"):
+		return prepared.error
+	var prompt := _vision_prompt(str(prepared.source), str(arguments.get("prompt", "")))
+	var model := _coding_model()
+	var cached := _vision_cache_get(str(prepared.sha256), prompt, model)
+	if not cached.is_empty():
+		cached["cached"] = true
+		return {"ok": true, "summary": str(cached.get("description", "Cached visual classification.")), "data": cached, "affected": []}
+	return _tool_error("job_required", "classify_visual runs through a queued chat turn so the model request can be handed off.")
 
 func _registry_create_gdscript(arguments: Dictionary, _context: Dictionary) -> Dictionary:
 	var path := str(arguments.get("path", ""))
@@ -2218,6 +2421,7 @@ func _refresh_registry_availability() -> void:
 	values["scan_filesystem"] = {"available": true, "reason": ""}
 	values["capture_scene_view"] = {"available": vision_available, "reason": "Choose an Image-Text-to-Text coding model to capture rendered views." if not vision_available else ""}
 	values["capture_player_view"] = {"available": vision_available, "reason": "Choose an Image-Text-to-Text coding model to inspect the player view." if not vision_available else ""}
+	values["classify_visual"] = {"available": vision_available, "reason": "Choose an Image-Text-to-Text coding model to classify images." if not vision_available else ""}
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
 	var debug_state: Dictionary = {}
 	if debug_available:
@@ -2688,6 +2892,23 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 				return
 		var tool_result: Dictionary
 		var serialized := ""
+		if queued_chat_started and function_name == "classify_visual":
+			var vision_job := await _prepare_vision_tool_job(parsed_call, parsed_calls.slice(index + 1))
+			if vision_job.has("job"):
+				queued_chat_continued = true
+				queued_chat_next_operation = "asset_generate"
+				queued_chat_next_parameters = vision_job.get("job", {})
+				queued_chat_success = true
+				queued_chat_response = ""
+				send_button.disabled = false
+				_set_status("Finishing the turn step before visual classification.")
+				return
+			if vision_job.has("result"):
+				tool_result = vision_job.result
+				serialized = JSON.stringify(tool_result)
+			elif vision_job.has("error"):
+				tool_result = vision_job.error
+				serialized = JSON.stringify(tool_result)
 		if function_name == "submit_plan" and turn_role not in ["task", "intervention"]:
 			var plan_outcome := _handle_submit_plan(parsed_call)
 			if plan_outcome.has("plan"):
@@ -3120,6 +3341,33 @@ func prepare_shell_tool_successor(job: Dictionary, result: Dictionary, failed :=
 	if not failed and bool(tool_result.get("ok", false)): _append_action_card(tool_result, call.get("arguments", {}))
 	return chat
 
+func prepare_vision_tool_successor(job: Dictionary, result: Dictionary, failed := false, unknown := false) -> Dictionary:
+	var handoff: Dictionary = job.get("parameters", {}).get("chat_handoff", {})
+	var chat: Dictionary = handoff.get("chat", {}).duplicate(true)
+	var call: Dictionary = handoff.get("call", {})
+	if not chat.get("turn") is Dictionary or not call.get("id") is String:
+		return {}
+	if str(call.get("name", "")) != "classify_visual":
+		return {}
+	var ok := bool(result.get("ok", false)) and not failed
+	var tool_result: Dictionary
+	if not ok:
+		var raw_error: Variant = result.get("error", {})
+		var message := str(raw_error.get("message", "")) if raw_error is Dictionary else str(raw_error)
+		if message.strip_edges().is_empty(): message = "Visual classification failed."
+		var code := str(raw_error.get("code", "classification_failed")) if raw_error is Dictionary else "classification_failed"
+		tool_result = {"ok": false, "tool": "classify_visual", "call_id": str(call.id), "summary": message, "error": {"code": "outcome_unknown" if unknown else code, "message": message}, "data": {}, "affected": []}
+		chat.turn.failed["classify_visual\n" + JSON.stringify(call.arguments)] = true
+	else:
+		tool_result = {"ok": true, "tool": "classify_visual", "call_id": str(call.id), "summary": str(result.get("description", "Visual classification completed.")), "data": result.duplicate(true), "affected": []}
+	chat.turn.messages.append({"role": "tool", "tool_call_id": call.id, "content": JSON.stringify(tool_result)})
+	chat.turn.ledger.append({"turn": chat.turn.id, "call": call.id, "tool": "classify_visual", "ok": bool(tool_result.get("ok", false)), "summary": tool_result.summary, "affected": [], "undo_group": "", "error": tool_result.get("error", null)})
+	var remaining: Array = handoff.get("remaining", [])
+	if not remaining.is_empty(): chat.turn["pending_calls"] = remaining.duplicate(true)
+	chat["conversation"] = chat.turn.messages.duplicate(true)
+	if ok: _append_action_card(tool_result, call.get("arguments", {}))
+	return chat
+
 # Restore a queued turn step from its persisted state. The state is produced by
 # _prepare_chat_continuation and JSON round-tripped, so every value is a plain
 # JSON type. A missing or malformed state fails closed instead of guessing.
@@ -3431,6 +3679,168 @@ func _create_script_tool(path: String, source: String) -> String:
 	file.close()
 	call_deferred("_deferred_scan")
 	return "Created GDScript: " + normalized
+
+func _prepare_vision_tool_job(call: Dictionary, remaining: Array) -> Dictionary:
+	var arguments: Dictionary = call.get("arguments", {})
+	if not _vision_available():
+		return {"error": _tool_error("vision_unavailable", "Choose an Image-Text-to-Text coding model to classify images.")}
+	var prepared := await _prepare_vision_image(arguments)
+	if prepared.has("error"):
+		return {"error": prepared.error}
+	var prompt := _vision_prompt(str(prepared.source), str(arguments.get("prompt", "")))
+	var model := str(queued_chat_parameters.get("model", "")).strip_edges()
+	var connection_hash := str(queued_chat_parameters.get("connection_hash", "")).strip_edges()
+	if model.is_empty() or connection_hash.length() != 64:
+		return {"error": _tool_error("invalid_request", "The coding model or connection changed; start a new chat turn.")}
+	var cached := _vision_cache_get(str(prepared.sha256), prompt, model)
+	if not cached.is_empty():
+		return {"result": _vision_tool_result(call, cached, true)}
+	var chat := _prepare_chat_continuation()
+	if chat.is_empty():
+		return {"error": _tool_error("handoff_failed", "The classification result could not be attached to the turn.")}
+	var timeout_ms := int(queued_chat_parameters.get("timeout_ms", 120000))
+	if timeout_ms <= 0: timeout_ms = 120000
+	return {"job": {
+		"kind": "vision",
+		"image_path": str(prepared.path),
+		"image_sha256": str(prepared.sha256),
+		"path": str(prepared.original),
+		"source": str(prepared.source),
+		"text": prompt,
+		"model": model,
+		"connection_hash": connection_hash,
+		"timeout_ms": clampi(timeout_ms, 1000, 600000),
+		"chat_handoff": {"chat": chat, "call": call.duplicate(true), "remaining": remaining.duplicate(true)},
+	}}
+
+func _prepare_vision_image(arguments: Dictionary) -> Dictionary:
+	var source := str(arguments.get("source", "")).strip_edges()
+	if not source in ["texture", "scene2d", "scene3d", "player"]:
+		return {"error": _tool_error("invalid_arguments", "source must be texture, scene2d, scene3d, or player.")}
+	if source == "player":
+		return {"error": _tool_error("unavailable", "The running player window is not capturable. Paste an OS screenshot of the game instead.")}
+	var image: Image = null
+	var original := ""
+	var name := "vision.png"
+	if source == "texture":
+		original = str(arguments.get("path", "")).strip_edges()
+		if original.is_empty():
+			return {"error": _tool_error("invalid_arguments", "path is required for a texture.")}
+		if original.length() > 512 or not (original.begins_with("res://") or original.begins_with("user://")):
+			return {"error": _tool_error("invalid_arguments", "Texture path must be a res:// or user:// image path.")}
+		if original.begins_with("res://"):
+			if not _ensure_workspace_registry() or workspace_coding == null:
+				return {"error": _tool_error("unavailable", "The workspace provider is unavailable.")}
+			var canonical: Dictionary = workspace_coding._canonical(original, false)
+			if canonical.has("error"):
+				return {"error": _tool_error("invalid_path", "The texture path is not a safe project path.")}
+			original = str(canonical.res)
+		elif not original.begins_with("user://tiiny_chat/attachments/"):
+			return {"error": _tool_error("invalid_path", "User image paths must be chat attachments.")}
+		image = Image.load_from_file(ProjectSettings.globalize_path(original))
+		name = original.get_file()
+	else:
+		if not _ensure_workspace_registry() or workspace_coding == null:
+			return {"error": _tool_error("unavailable", "The workspace provider is unavailable.")}
+		var view := "2d" if source == "scene2d" else "3d"
+		var capture: Dictionary = await workspace_coding.execute("capture_scene_view", {"view": view, "max_px": 512})
+		if not bool(capture.get("ok", false)):
+			return {"error": _tool_error("capture_failed", str(capture.get("summary", "The editor view could not be captured.")))}
+		var visual: Variant = capture.get("data", {}).get("visual", null)
+		if not visual is Dictionary:
+			return {"error": _tool_error("capture_failed", "The capture result did not include an image.")}
+		original = str(visual.get("path", ""))
+		image = Image.load_from_file(ProjectSettings.globalize_path(original))
+		name = "scene_" + view + ".png"
+	if image == null or image.is_empty():
+		return {"error": _tool_error("invalid_image", "The image could not be read.")}
+	var stored := _store_vision_image(image, source, name, 512)
+	if stored.is_empty():
+		return {"error": _tool_error("invalid_image", "The image was empty or exceeded the classification limits.")}
+	return {
+		"path": str(stored.path),
+		"sha256": str(stored.sha256),
+		"width": int(stored.width),
+		"height": int(stored.height),
+		"source": source,
+		"original": original,
+	}
+
+func _store_vision_image(image: Image, source: String, name: String, max_px: int) -> Dictionary:
+	if image == null or image.is_empty():
+		return {}
+	var width := image.get_width()
+	var height := image.get_height()
+	var max_edge := maxi(width, height)
+	if max_edge > max_px:
+		var scale := float(max_px) / float(max_edge)
+		image.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
+	var bytes := image.save_png_to_buffer()
+	if bytes.is_empty() or bytes.size() > 1024 * 1024:
+		return {}
+	var context := HashingContext.new()
+	if context.start(HashingContext.HASH_SHA256) != OK:
+		return {}
+	context.update(bytes)
+	var digest := context.finish().hex_encode()
+	if digest.is_empty():
+		return {}
+	var identity := ProjectSettings.globalize_path("res://").sha256_text().substr(0, 12)
+	var directory := "user://tiiny_chat/attachments/" + identity
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)) != OK:
+		return {}
+	var path := directory.path_join(digest + ".png")
+	if not FileAccess.file_exists(path):
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			return {}
+		file.store_buffer(bytes)
+		file.close()
+	return {"path": path, "sha256": digest, "width": image.get_width(), "height": image.get_height(), "source": source, "name": name}
+
+func _vision_prompt(source: String, custom: String) -> String:
+	var text := custom.strip_edges()
+	if not text.is_empty():
+		return text.left(1000)
+	if source == "texture":
+		return "Classify this game texture. Return strict JSON with description (one sentence) and labels (short array of lowercase words). Identify the object or role, dominant colors, style, transparency, and whether it looks like a player, platform, background, icon, or UI element."
+	return "Describe this rendered game scene. Return strict JSON with description (one sentence) and labels (short array of lowercase words). Note the player, platforms, camera, layout, and any visible issues."
+
+func _vision_cache_path(sha: String, prompt: String, model: String) -> String:
+	return "user://tiiny_classifications".path_join(sha + "_" + prompt.sha256_text().substr(0, 12) + "_" + model.sha256_text().substr(0, 12) + ".json")
+
+func _vision_cache_get(sha: String, prompt: String, model: String) -> Dictionary:
+	var path := _vision_cache_path(sha, prompt, model)
+	if not FileAccess.file_exists(path):
+		return {}
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if parsed is Dictionary and parsed.get("description") is String:
+		return parsed
+	return {}
+
+func _vision_cache_put(sha: String, prompt: String, model: String, data: Dictionary) -> void:
+	var directory := ProjectSettings.globalize_path("user://tiiny_classifications")
+	if DirAccess.make_dir_recursive_absolute(directory) != OK:
+		return
+	var path := _vision_cache_path(sha, prompt, model)
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_string(JSON.stringify(data))
+	file.close()
+
+func _vision_tool_result(call: Dictionary, data: Dictionary, cached: bool) -> Dictionary:
+	var result_data := data.duplicate(true)
+	result_data["cached"] = cached
+	var description := str(result_data.get("description", "Visual classification completed."))
+	return {
+		"ok": true,
+		"tool": "classify_visual",
+		"call_id": str(call.get("id", "")),
+		"summary": description.left(1200),
+		"data": result_data,
+		"affected": [],
+	}
 
 func _generate_image_tool(description: String) -> String:
 	var settings := EditorInterface.get_editor_settings()

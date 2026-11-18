@@ -198,10 +198,16 @@ class AssetWorker extends RefCounted:
 			return {"state": "cancelled", "result": {"error": "Cancelled before device execution"}}
 		polled = true
 		var result: Dictionary = owner.poll_asset_job(job)
-		if result.get("state") == "completed" and not owner.confirm_device_success(job.id):
+		if result.get("state") == "completed" and not bool(result.get("confirmed", false)) and not owner.confirm_device_success(job.id):
 			return {"state": "failed", "result": {"error": "Could not clear the shared device recovery record."}}
 		if result.get("state") == "completed" and job.parameters.has("chat_handoff"):
-			var continuation: Dictionary = owner.prepare_image_tool_successor(job, result.get("result", {}))
+			var continuation: Dictionary
+			if str(job.parameters.get("kind", "")) == "vision":
+				if not owner.has_method("prepare_vision_tool_successor"):
+					return {"state": "failed", "result": {"error": "Visual classification finished, but the turn continuation could not be prepared."}}
+				continuation = owner.prepare_vision_tool_successor(job, result.get("result", {}))
+			else:
+				continuation = owner.prepare_image_tool_successor(job, result.get("result", {}))
 			if continuation.is_empty():
 				return {"state": "failed", "result": {"error": "Image was generated, but the turn continuation could not be prepared.", "artifact": result.get("result", {}).get("artifact", "")}}
 			result["continuation"] = continuation
@@ -456,28 +462,37 @@ func _validate(operation: String, parameters: Dictionary) -> String:
 		return ""
 	if operation == "asset_generate":
 		for key in parameters:
-			if str(key) not in ["kind", "model", "connection_hash", "timeout_ms", "image_path", "image_artifact_id", "stage", "text", "voice", "manage_model", "chat_handoff"]:
+			if str(key) not in ["kind", "model", "connection_hash", "timeout_ms", "image_path", "image_artifact_id", "stage", "text", "voice", "manage_model", "chat_handoff", "image_sha256", "path", "source"]:
 				return "Invalid asset-generation request"
 		if parameters.has("manage_model") and (not parameters.manage_model is bool or parameters.get("kind") != "image"):
 			return "Automatic model scheduling is only available for image generation"
+		var job_kind := str(parameters.get("kind", ""))
 		if parameters.has("chat_handoff"):
 			var handoff: Variant = parameters.chat_handoff
-			if parameters.get("kind") != "image" or not handoff is Dictionary or handoff.size() != 3 or not handoff.get("chat") is Dictionary or not handoff.chat.has("turn") or not handoff.get("call") is Dictionary or not handoff.get("remaining") is Array:
-				return "Invalid image turn handoff"
+			if job_kind not in ["image", "vision"] or not handoff is Dictionary or handoff.size() != 3 or not handoff.get("chat") is Dictionary or not handoff.chat.has("turn") or not handoff.get("call") is Dictionary or not handoff.get("remaining") is Array:
+				return "Invalid asset turn handoff"
 			if not _validate_chat(handoff.chat).is_empty() or not _valid_pending_calls([handoff.call] + handoff.remaining):
-				return "Invalid image turn handoff"
-			if handoff.call.name != "generate_image" or handoff.call.arguments.get("prompt") != parameters.get("text") or handoff.call.id not in handoff.chat.turn.calls:
+				return "Invalid asset turn handoff"
+			var expected_tool := "generate_image" if job_kind == "image" else "classify_visual"
+			if handoff.call.name != expected_tool or handoff.call.id not in handoff.chat.turn.calls:
+				return "Asset turn handoff does not match the request"
+			if job_kind == "image" and handoff.call.arguments.get("prompt") != parameters.get("text"):
 				return "Image turn handoff does not match the request"
+			if job_kind == "vision" and handoff.call.arguments.get("source") != parameters.get("source"):
+				return "Visual classification handoff does not match the request"
 			for pending in handoff.remaining:
 				if pending.id in handoff.chat.turn.calls: return "Pending tool call was already executed"
-			if JSON.stringify(parameters).to_utf8_buffer().size() > 24 * 1024 * 1024: return "Image turn handoff is too large"
-		if not parameters.get("kind") in ["image", "image_to_3d", "speech"] or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.connection_hash.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
+			if JSON.stringify(parameters).to_utf8_buffer().size() > 24 * 1024 * 1024: return "Asset turn handoff is too large"
+		if not job_kind in ["image", "image_to_3d", "speech", "vision"] or not parameters.get("model") is String or parameters.model.is_empty() or parameters.model.length() > 512 or not parameters.get("connection_hash") is String or parameters.connection_hash.length() != 64 or not parameters.connection_hash.is_valid_hex_number(false) or not parameters.get("timeout_ms") is int or parameters.timeout_ms < 1000 or parameters.timeout_ms > 7200000:
 			return "Invalid asset-generation request"
 		if parameters.kind == "image_to_3d":
 			var has_path := parameters.get("image_path") is String and not str(parameters.image_path).strip_edges().is_empty()
 			var has_artifact := parameters.get("image_artifact_id") is String and str(parameters.image_artifact_id).ends_with(":image") and str(parameters.image_artifact_id).length() <= 128 and str(parameters.image_artifact_id).length() > 6
 			if has_path == has_artifact or not parameters.get("stage") in ["shape", "both"]:
 				return "Invalid image-to-3D request"
+		elif parameters.kind == "vision":
+			if not parameters.get("image_path") is String or str(parameters.image_path).strip_edges().is_empty() or not parameters.get("image_sha256") is String or str(parameters.image_sha256).length() != 64 or not str(parameters.image_sha256).is_valid_hex_number(false) or not parameters.get("text") is String or str(parameters.text).strip_edges().is_empty() or str(parameters.text).length() > 1000 or not parameters.get("path") is String or str(parameters.path).length() > 512 or not parameters.get("source") in ["texture", "scene2d", "scene3d"]:
+				return "Invalid visual classification request"
 		elif not parameters.get("text") is String or str(parameters.text).strip_edges().is_empty() or str(parameters.text).length() > 10000:
 			return "Invalid speech request"
 		if parameters.has("voice") and not parameters.get("voice") is String:
@@ -1267,9 +1282,14 @@ func _skip_with_tool_result(job: Dictionary, decision: String) -> bool:
 			return false
 		var continuation: Dictionary = {}
 		if job.operation == "asset_generate":
-			if not chat_service.has_method("prepare_image_tool_successor"):
-				return false
-			continuation = chat_service.prepare_image_tool_successor(job, job.get("result", {}), true, decision == "abandon")
+			if str(job.get("parameters", {}).get("kind", "")) == "vision":
+				if not chat_service.has_method("prepare_vision_tool_successor"):
+					return false
+				continuation = chat_service.prepare_vision_tool_successor(job, job.get("result", {}), true, decision == "abandon")
+			else:
+				if not chat_service.has_method("prepare_image_tool_successor"):
+					return false
+				continuation = chat_service.prepare_image_tool_successor(job, job.get("result", {}), true, decision == "abandon")
 		else:
 			if not chat_service.has_method("prepare_shell_tool_successor"):
 				return false

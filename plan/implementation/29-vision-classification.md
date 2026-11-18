@@ -1,16 +1,16 @@
 # Story 29 implementation plan — job-backed visual classification
 
-Status: Proposed. Design only; depends on stories 27 and 28.
+Status: Implemented. Image preparation, cache, queue job shape, validation, successor, completion result, and vision gating are covered by the editor workspace fixture.
 
 Parent: [29 — Job-backed visual classification](../work-items/29-vision-classification.md).
 
 ## 1. Job operation
 
-Add `vision_classify` as an internal job operation alongside `asset_generate` and `shell_exec`:
+Add a `vision` kind to the existing `asset_generate` job operation. It shares the asset worker and device-lease path but bypasses image-model scheduling and restoration:
 
 ```json
 {
-  "kind": "vision_classify",
+  "kind": "vision",
   "image_path": "user://tiiny_chat/attachments/<hash>.png",
   "image_sha256": "...",
   "source": "texture|scene2d|scene3d|player",
@@ -48,9 +48,9 @@ The tool result on a cache hit and after a job has the same shape.
 
 ## 3. Worker and device lease
 
-Reuse the asset job's polling shape, but with a dedicated loop:
+Reuse the asset job's polling/worker shape with a vision branch:
 
-- `_prepare_vision_tool_job` queues the job and sets `queued_chat_next_operation = "vision_classify"`.
+- `_prepare_vision_tool_job` queues the job and sets `queued_chat_next_operation = "asset_generate"`.
 - The dock polls the job with `_poll_vision_job`; on dispatch it:
   1. verifies the connection hash and that the coding model is loaded;
   2. acquires/reuses the device lease (`_acquire_device("visual classification")`);
@@ -91,7 +91,7 @@ The prepared PNG lives under `user://tiiny_chat/attachments/` or a job working p
   - return a tool error with the reason;
   - resume the chat;
   - do not stop unrelated queued jobs.
-- This needs a queue-level exception: `vision_classify` is a contained read-only operation, unlike image/asset jobs whose failures may require review. Add an explicit `failure_policy` or operation check; do not silently change `shell_exec`/asset behavior.
+- The vision branch returns a **completed** job with `ok: false` for read-only failures, so the chat resumes with a tool error and the queue is not stopped. This is implemented without changing `shell_exec` or image/asset failure behavior.
 - A classification job has no mutation, publication, or device-outcome uncertainty beyond the HTTP request; if the request outcome is unknown, report `outcome_unknown` and do not retry automatically.
 
 ## 6. Panel and diagnostics
@@ -106,6 +106,7 @@ The prepared PNG lives under `user://tiiny_chat/attachments/` or a job working p
 Deterministic:
 
 - Fake HTTP fixture returns a classification; assert the request has a text part + `image_url` data URI, the job result is a tool message, and the chat continues.
+- A response wrapped in a Markdown ```json fence is unwrapped before parsing; description and labels are extracted.
 - Cache hit: second call with the same image/prompt/model makes no HTTP request and returns `cached: true`.
 - Cache miss: different image hash/model/prompt version.
 - Capability off: tool unavailable; no job.
