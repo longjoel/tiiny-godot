@@ -1,6 +1,6 @@
 # Story 28 implementation plan — chat images and rendered views
 
-Status: Proposed. Design only; no source changes yet.
+Status: Implemented. Clipboard/project attachments, reference-safe payloads, budget accounting, trace redaction, scene capture, and the unavailable player-capture path are covered by the editor and workspace fixtures.
 
 Parent: [28 — Chat image attachments and rendered-view inspection](../work-items/28-chat-visuals.md).
 

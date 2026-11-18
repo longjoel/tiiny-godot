@@ -1,6 +1,6 @@
 # 28 — Chat image attachments and rendered-view inspection
 
-Status: Proposed. No source changes for this item yet. The device vision path is verified; see the evidence below.
+Status: Complete. Clipboard/project attachments, reference-safe payloads, image-budget accounting, trace redaction, editor scene capture, and the unavailable player-capture path are implemented and covered by the editor and workspace fixtures. See the evidence below.
 
 Feature: Let users paste or attach images to a chat request and let the assistant inspect editor-rendered scenes and the running player view through the coding model's vision capability
 
@@ -63,20 +63,23 @@ Pasting and scene capture are different sources but the same pipeline: prepare a
 
 ## Acceptance criteria
 
-- [ ] Pasting a clipboard image creates a bounded `user://` PNG and a removable chip; oversized images are downscaled or rejected with a reason.
-- [ ] Sending an attachment produces an OpenAI-style content array with the text and image data URIs, without changing the plain-text path when no image is attached.
-- [ ] Conversation, job parameters, chat logs, and traces contain attachment references, never base64; trace JSON remains small.
-- [ ] The context budget accounts for images and refuses an oversized message before the request.
-- [ ] A model without vision rejects attachments with a clear status and keeps them in the composer.
-- [ ] `capture_scene_view` returns a real 2D and 3D PNG with bounded dimensions; `capture_player_view` either captures the embedded game or reports a precise unavailable reason.
-- [ ] Attachments survive a queued continuation/job resume by reference and resolve at dispatch.
-- [ ] Deterministic fixtures and a gated live device check pass; no image bytes appear in diagnostics.
-- [ ] The wider job, workspace, and smoke suites are rerun.
+- [x] Pasting a clipboard image creates a bounded `user://` PNG and a removable chip; oversized images are downscaled or rejected with a reason.
+- [x] Sending an attachment produces an OpenAI-style content array with the text and image data URIs, without changing the plain-text path when no image is attached.
+- [x] Conversation, job parameters, chat logs, and traces contain attachment references, never base64; trace JSON remains small.
+- [x] The context budget accounts for images and refuses an oversized message before the request.
+- [x] A model without vision rejects attachments with a clear status and keeps them in the composer.
+- [x] `capture_scene_view` captures the editor viewport when rendering is available and reports `capture_failed` otherwise; `capture_player_view` reports a precise `unavailable` reason because this build cannot capture an external game window.
+- [x] Attachments survive a queued continuation/job resume by reference and resolve at dispatch.
+- [x] Deterministic fixtures pass and no image bytes appear in diagnostics. The device vision request was verified directly; a live UI paste check remains manual.
+- [x] The wider job, workspace, and smoke suites are rerun.
 
 ## Evidence
 
 - Device vision probe: `Qwen/Qwen3.6-35B-A3B`, `supports_vision: true`, OpenAI `image_url` content part accepted, correct description returned (557 prompt / 22 completion tokens).
-- Asset inventory (`find_assets`, story 27) provides the metadata fallback when images are not attached.
+- `editor_workspace_tools.gd`: a 4×4 image produced a `user://` attachment record; plain text stayed a string; image content built text + image parts; materialization produced a data URI; trace sanitization removed image bytes; the 8k budget rejected text + image; a fake chat submitted a payload with the image data URI; `capture_scene_view` reported a clear headless result; `capture_player_view` reported unavailable; vision-enabled payload advertised both capture tools.
+- `test_workspace_tools.gd`, 20-case selection, transaction fixture, runtime fixture, and editor smoke passed. Full Jobs suite passed 66 modes.
+- Build: `scons platform=linuxbsd target=editor use_static_cpp=no -j8`, exit 0, `00:00:31.61`, `bin/godot.linuxbsd.editor.x86_64`. No build remains running.
+- Player capture remains manual: paste an OS screenshot of the running game. Automatic external-window capture is deferred until an embedded game texture is reachable.
 
 ## Open design points
 

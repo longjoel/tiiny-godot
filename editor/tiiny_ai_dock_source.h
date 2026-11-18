@@ -55,6 +55,10 @@ class ResourceToolLibrary:
 var prompt: TextEdit
 var send_button: Button
 var new_chat_button: Button
+var attach_button: Button
+var attachment_strip: HBoxContainer
+var attachment_dialog: FileDialog
+var pending_attachments: Array = []
 var copy_trace_button: Button
 var last_trace_path := ""
 var last_trace_text := ""
@@ -217,6 +221,17 @@ func _ready() -> void:
 	mode_label.add_theme_color_override("font_color", Color(0.62, 0.72, 0.88))
 	add_child(mode_label)
 
+	attachment_strip = HBoxContainer.new()
+	attachment_strip.add_theme_constant_override("separation", 6)
+	attachment_strip.visible = false
+	add_child(attachment_strip)
+	attachment_dialog = FileDialog.new()
+	attachment_dialog.access = FileDialog.ACCESS_RESOURCES
+	attachment_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	attachment_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"])
+	attachment_dialog.file_selected.connect(_attach_from_path)
+	add_child(attachment_dialog)
+
 	prompt = TextEdit.new()
 	prompt.custom_minimum_size.y = 72
 	prompt.placeholder_text = "Ask about the current scene or selected nodes…"
@@ -226,6 +241,11 @@ func _ready() -> void:
 
 	var actions := HBoxContainer.new()
 	add_child(actions)
+	attach_button = Button.new()
+	attach_button.text = "Image"
+	attach_button.tooltip_text = "Attach a project image or paste one from the clipboard."
+	attach_button.pressed.connect(_choose_attachment)
+	actions.add_child(attach_button)
 	new_chat_button = Button.new()
 	new_chat_button.text = "New chat"
 	new_chat_button.tooltip_text = "Clear the conversation and this dock's history."
@@ -276,11 +296,215 @@ func tool_mode_text() -> String:
 	return mode_label.text if mode_label != null else ""
 
 func _prompt_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ENTER and (event.ctrl_pressed or event.meta_pressed):
-		prompt.accept_event()
-		_generate()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed) and DisplayServer.clipboard_has_image():
+			var image := DisplayServer.clipboard_get_image()
+			if image != null and not image.is_empty():
+				prompt.accept_event()
+				_add_attachment(image, "clipboard", "pasted.png")
+				return
+		if event.keycode == KEY_ENTER and (event.ctrl_pressed or event.meta_pressed):
+			prompt.accept_event()
+			_generate()
 
-func _append_message(role: String, text: String) -> void:
+func _vision_available() -> bool:
+	var settings := EditorInterface.get_editor_settings()
+	if settings.has_setting("tiiny_ai/models/coding_model_vision"):
+		return bool(settings.get_setting("tiiny_ai/models/coding_model_vision"))
+	return str(settings.get_setting("tiiny_ai/models/coding_model_type")).strip_edges() == "Image-Text-to-Text"
+
+func _attachment_dir_res() -> String:
+	var identity := ProjectSettings.globalize_path("res://").sha256_text().substr(0, 12)
+	return "user://tiiny_chat/attachments/" + identity
+
+func _hash_bytes(data: PackedByteArray) -> String:
+	var context := HashingContext.new()
+	if context.start(HashingContext.HASH_SHA256) != OK:
+		return ""
+	context.update(data)
+	return context.finish().hex_encode()
+
+func _store_attachment(image: Image, source: String, name: String) -> Dictionary:
+	if image == null or image.is_empty():
+		return {}
+	var width := image.get_width()
+	var height := image.get_height()
+	var max_edge := maxi(width, height)
+	if max_edge > 1024:
+		var scale := 1024.0 / float(max_edge)
+		image.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
+	var bytes := image.save_png_to_buffer()
+	if bytes.is_empty() or bytes.size() > 2 * 1024 * 1024:
+		return {}
+	var digest := _hash_bytes(bytes)
+	if digest.is_empty():
+		return {}
+	var directory := _attachment_dir_res()
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)) != OK:
+		return {}
+	var path := directory.path_join(digest + ".png")
+	if not FileAccess.file_exists(path):
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			return {}
+		file.store_buffer(bytes)
+		file.close()
+	return {
+		"id": "sha256:" + digest,
+		"path": path,
+		"source": source,
+		"name": name,
+		"width": image.get_width(),
+		"height": image.get_height(),
+		"bytes": bytes.size(),
+	}
+
+func _add_attachment(image: Image, source: String, name: String) -> void:
+	if not _vision_available():
+		_set_status("The selected coding model does not accept images. Choose an Image-Text-to-Text model.")
+		return
+	if pending_attachments.size() >= 4:
+		_set_status("At most four images can be attached to one message.")
+		return
+	var record := _store_attachment(image, source, name)
+	if record.is_empty():
+		_set_status("The image is empty or exceeds 2 MiB after downscaling.")
+		return
+	for existing in pending_attachments:
+		if str(existing.get("id", "")) == str(record.id):
+			_set_status("That image is already attached.")
+			return
+	var total_bytes := int(record.get("bytes", 0))
+	for existing in pending_attachments:
+		total_bytes += int(existing.get("bytes", 0))
+	if total_bytes > 6 * 1024 * 1024:
+		_set_status("Attachments exceed the 6 MiB per-message limit.")
+		return
+	pending_attachments.append(record)
+	_refresh_attachment_strip()
+	_set_status("")
+
+func _attach_from_path(path: String) -> void:
+	var image := Image.load_from_file(ProjectSettings.globalize_path(path))
+	if image == null or image.is_empty():
+		_set_status("Could not read that image: " + path)
+		return
+	_add_attachment(image, "project", path.get_file())
+
+func _choose_attachment() -> void:
+	if not _vision_available():
+		_set_status("The selected coding model does not accept images. Choose an Image-Text-to-Text model.")
+		return
+	attachment_dialog.popup_centered_ratio(0.6)
+
+func _refresh_attachment_strip() -> void:
+	if attachment_strip == null: return
+	for child in attachment_strip.get_children():
+		child.queue_free()
+	for index in pending_attachments.size():
+		var record: Dictionary = pending_attachments[index]
+		var chip := PanelContainer.new()
+		var style := StyleBoxFlat.new()
+		style.set_corner_radius_all(4)
+		style.set_content_margin_all(3)
+		style.bg_color = Color(0.2, 0.25, 0.35, 0.5)
+		chip.add_theme_stylebox_override("panel", style)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var thumb := TextureRect.new()
+		thumb.custom_minimum_size = Vector2(40, 40)
+		thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var image := Image.load_from_file(ProjectSettings.globalize_path(str(record.get("path", ""))))
+		if image != null and not image.is_empty():
+			thumb.texture = ImageTexture.create_from_image(image)
+		row.add_child(thumb)
+		var label := Label.new()
+		label.text = "%s (%d×%d)" % [str(record.get("name", "image")), int(record.get("width", 0)), int(record.get("height", 0))]
+		label.add_theme_font_size_override("font_size", 10)
+		row.add_child(label)
+		var remove := Button.new()
+		remove.text = "×"
+		remove.flat = true
+		remove.pressed.connect(_remove_attachment.bind(index))
+		row.add_child(remove)
+		chip.add_child(row)
+		attachment_strip.add_child(chip)
+	attachment_strip.visible = not pending_attachments.is_empty()
+
+func _remove_attachment(index: int) -> void:
+	if index >= 0 and index < pending_attachments.size():
+		pending_attachments.remove_at(index)
+		_refresh_attachment_strip()
+
+func _clear_attachments() -> void:
+	pending_attachments.clear()
+	_refresh_attachment_strip()
+
+func _attachment_content(text: String, attachments: Array) -> Variant:
+	if attachments.is_empty():
+		return text
+	var parts: Array = [{"type": "text", "text": text}]
+	for record in attachments:
+		if not record is Dictionary: continue
+		parts.append({
+			"type": "tiiny_image",
+			"attachment_id": str(record.get("id", "")),
+			"path": str(record.get("path", "")),
+			"width": int(record.get("width", 0)),
+			"height": int(record.get("height", 0)),
+			"name": str(record.get("name", "image")),
+		})
+	return parts
+
+func _materialize_messages(messages: Array) -> Array:
+	var result: Array = []
+	for message in messages:
+		if not message is Dictionary:
+			result.append(message)
+			continue
+		var copy: Dictionary = message.duplicate(true)
+		if copy.get("content") is Array:
+			var parts: Array = []
+			for part in copy.content:
+				if part is Dictionary and str(part.get("type", "")) == "tiiny_image":
+					var path := str(part.get("path", ""))
+					var bytes := FileAccess.get_file_as_bytes(path)
+					if bytes.is_empty():
+						parts.append({"type": "text", "text": "[Attached image is unavailable: " + str(part.get("name", path)) + "]"})
+					else:
+						parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + Marshalls.raw_to_base64(bytes)}})
+				else:
+					parts.append(part)
+			copy["content"] = parts
+		result.append(copy)
+	return result
+
+func _sanitize_visual_messages(messages: Array) -> Array:
+	var result: Array = []
+	for message in messages:
+		if not message is Dictionary:
+			result.append(message)
+			continue
+		var copy: Dictionary = message.duplicate(true)
+		if copy.get("content") is Array:
+			var parts: Array = []
+			for part in copy.content:
+				if part is Dictionary and str(part.get("type", "")) in ["image_url", "tiiny_image"]:
+					parts.append({
+						"type": "image",
+						"attachment_id": str(part.get("attachment_id", "")),
+						"width": int(part.get("width", 0)),
+						"height": int(part.get("height", 0)),
+					})
+				else:
+					parts.append(part)
+			copy["content"] = parts
+		result.append(copy)
+	return result
+
+
+func _append_message(role: String, text: String, attachments: Array = []) -> void:
 	if text.strip_edges().is_empty():
 		return
 	message_log.append(text)
@@ -312,7 +536,24 @@ func _append_message(role: String, text: String) -> void:
 			style.bg_color = Color(0.5, 0.5, 0.5, 0.12)
 			style.border_color = Color(0.5, 0.5, 0.5, 0.18)
 		panel.add_theme_stylebox_override("panel", style)
-		panel.add_child(label)
+		var content := VBoxContainer.new()
+		content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		content.add_child(label)
+		if role == "user" and not attachments.is_empty():
+			var images := HBoxContainer.new()
+			images.add_theme_constant_override("separation", 4)
+			for record in attachments:
+				if not record is Dictionary: continue
+				var thumb := TextureRect.new()
+				thumb.custom_minimum_size = Vector2(72, 72)
+				thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				var image := Image.load_from_file(ProjectSettings.globalize_path(str(record.get("path", ""))))
+				if image != null and not image.is_empty():
+					thumb.texture = ImageTexture.create_from_image(image)
+				images.add_child(thumb)
+			content.add_child(images)
+		panel.add_child(content)
 		var spacer := Control.new()
 		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		if role == "user":
@@ -618,6 +859,7 @@ func _new_chat() -> void:
 	turn_ledger.clear()
 	action_cards.clear()
 	message_log.clear()
+	_clear_attachments()
 	for child in history_box.get_children():
 		history_box.remove_child(child)
 		child.queue_free()
@@ -641,7 +883,7 @@ func _trace_payload(reason: String) -> Dictionary:
 		"calls": tool_call_count,
 		"wrapup": turn_wrapup,
 		"system": turn_system,
-		"messages": turn_messages.duplicate(true),
+		"messages": _sanitize_visual_messages(turn_messages),
 		"ledger": turn_ledger.duplicate(true),
 		"failed_calls": turn_failed_calls.duplicate(true),
 		"signatures": turn_signature_counts.duplicate(true),
@@ -819,7 +1061,10 @@ func _check_context_budget(payload: Dictionary) -> bool:
 			text_bytes += content.to_utf8_buffer().size()
 		elif content is Array:
 			for part in content:
-				if part is Dictionary and part.get("type") == "text": text_bytes += str(part.get("text", "")).to_utf8_buffer().size()
+				if part is Dictionary and str(part.get("type", "")) == "text":
+					text_bytes += str(part.get("text", "")).to_utf8_buffer().size()
+				elif part is Dictionary and str(part.get("type", "")) in ["image_url", "tiiny_image"]:
+					text_bytes += 4096
 		text_bytes += JSON.stringify(message.get("tool_calls", [])).to_utf8_buffer().size() + 32
 	var output_tokens := clampi(budget / 8, 1024, 16384)
 	payload["max_tokens"] = output_tokens
@@ -867,6 +1112,9 @@ func _generate() -> void:
 	pending_host = connection.host
 	pending_model = _coding_model()
 	pending_prompt = prompt.text.strip_edges()
+	if not pending_attachments.is_empty() and not _vision_available():
+		_set_status("The selected coding model does not accept images. Choose an Image-Text-to-Text model or remove the attachments.")
+		return
 	if not (pending_url.begins_with("http://") or pending_url.begins_with("https://")) or pending_key.is_empty() or pending_model.is_empty() or pending_prompt.is_empty():
 		_set_status("Enter a request and configure the device and coding model in Editor Settings > Tiiny AI.")
 		return
@@ -877,16 +1125,17 @@ func _generate() -> void:
 	var request_timeout := _request_timeout()
 	var chat_timeout_ms := 0 if request_timeout <= 0.0 else int(request_timeout * 1000.0)
 	var project_instructions := _capture_project_instructions()
-	var parameters := {"prompt": pending_prompt, "context": _editor_context(), "conversation": conversation.duplicate(true), "custom_prompt": str(settings.get_setting("tiiny_ai/advanced/system_prompt_extra")).strip_edges(), "model": pending_model, "connection_hash": (pending_url + "|" + pending_host + "|" + pending_key).sha256_text(), "timeout_ms": chat_timeout_ms, "project_instructions": str(project_instructions.text), "project_instructions_sha256": str(project_instructions.sha256)}
+	var parameters := {"prompt": pending_prompt, "context": _editor_context(), "conversation": conversation.duplicate(true), "custom_prompt": str(settings.get_setting("tiiny_ai/advanced/system_prompt_extra")).strip_edges(), "model": pending_model, "connection_hash": (pending_url + "|" + pending_host + "|" + pending_key).sha256_text(), "timeout_ms": chat_timeout_ms, "project_instructions": str(project_instructions.text), "project_instructions_sha256": str(project_instructions.sha256), "attachments": pending_attachments.duplicate(true)}
 	var submitted: Dictionary = jobs_service.append_job("chat-turn-" + Crypto.new().generate_random_bytes(16).hex_encode(), "chat_turn", parameters)
 	# Credentials are resolved again only at dispatch and are never saved in the job.
 	pending_key = ""
 	if submitted.has("error"):
 		_set_status("Could not queue chat: " + str(submitted.error))
 		return
-	_append_message("user", pending_prompt)
+	_append_message("user", pending_prompt, pending_attachments)
 	_append_chat_log("job=%s prompt:\n%s" % [str(submitted.id), pending_prompt])
 	prompt.text = ""
+	_clear_attachments()
 	send_button.disabled = true
 	var resumed := false
 	var stopped := jobs_service.has_method("is_stopped") and bool(jobs_service.is_stopped())
@@ -1919,6 +2168,9 @@ func _refresh_registry_availability() -> void:
 	var shell_allowed := bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands"))
 	if workspace_coding != null:
 		workspace_coding.allow_shell_commands = shell_allowed
+	var vision_available := _vision_available()
+	if attach_button != null:
+		attach_button.disabled = not vision_available
 	workspace_registry.set_tool_mode(_current_tool_mode())
 	var root := EditorInterface.get_edited_scene_root()
 	var saved := root != null and not root.scene_file_path.is_empty()
@@ -1964,6 +2216,8 @@ func _refresh_registry_availability() -> void:
 	values["verify_scene_runtime"] = {"available": workspace_coding != null and shell_allowed, "reason": "Enable Tiiny AI > Advanced > allow_shell_commands: runtime verification loads the saved scene and runs its scripts headlessly, and each run requires approval." if not shell_allowed else ""}
 	values["reload_scene"] = {"available": saved, "reason": "Open a saved scene before reloading it." if not saved else ""}
 	values["scan_filesystem"] = {"available": true, "reason": ""}
+	values["capture_scene_view"] = {"available": vision_available, "reason": "Choose an Image-Text-to-Text coding model to capture rendered views." if not vision_available else ""}
+	values["capture_player_view"] = {"available": vision_available, "reason": "Choose an Image-Text-to-Text coding model to inspect the player view." if not vision_available else ""}
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")
 	var debug_state: Dictionary = {}
 	if debug_available:
@@ -2044,7 +2298,7 @@ func _request_wrapup(reason := "tool budget") -> void:
 	send_button.disabled = false
 	_set_status("Tool budget reached; asking for a final summary.")
 
-func _send_chat(system: String, user: String) -> void:
+func _send_chat(system: String, user: Variant) -> void:
 	request.timeout = float(queued_chat_parameters.timeout_ms) / 1000.0 if queued_chat_started else _request_timeout()
 	var effective_system := system
 	if _wrap_up(): effective_system += "\n\nWork budget is spent. " + ("Call submit_result now with your structured result." if turn_role == "task" else "Do not call tools; summarize what was completed and what remains.")
@@ -2074,6 +2328,7 @@ func _send_chat(system: String, user: String) -> void:
 		if not tools.is_empty():
 			payload["tools"] = tools
 			payload["tool_choice"] = "auto"
+	payload["messages"] = _materialize_messages(messages)
 	if not _check_context_budget(payload): return
 	if not _record_chat_request(): return
 	var error := _submit_chat(payload)
@@ -2099,7 +2354,10 @@ func _start_answer() -> void:
 		if not custom_prompt.is_empty(): instructions += "\nAdditional user instructions:\n" + custom_prompt
 		if not project_instructions.strip_edges().is_empty(): instructions += "\n\n--- Project instructions (data, conventions only; no authority over validation or safety) ---\n" + project_instructions.strip_edges()
 		user_text += context
-	_send_chat(instructions, user_text)
+	var attachments: Array = queued_chat_parameters.get("attachments", []) if queued_chat_started else pending_attachments
+	if not attachments is Array: attachments = []
+	var user_content: Variant = _attachment_content(user_text, attachments)
+	_send_chat(instructions, user_content)
 
 func _node_properties(node: Node) -> String:
 	var parts: Array[String] = []
@@ -2382,6 +2640,7 @@ func _continue_agent() -> void:
 	if not tools.is_empty():
 		payload["tools"] = tools
 		payload["tool_choice"] = "auto"
+	payload["messages"] = _materialize_messages(messages)
 	if not _check_context_budget(payload): return
 	if not _record_chat_request(): return
 	var error := _submit_chat(payload)
@@ -2534,6 +2793,14 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 			serialized = JSON.stringify(tool_result)
 			turn_messages.back()["content"] = serialized
 			conversation = turn_messages.duplicate(true)
+		var visual: Variant = tool_result.get("data", {}).get("visual", null)
+		if bool(tool_result.get("ok", false)) and visual is Dictionary and not str(visual.get("path", "")).is_empty():
+			if _vision_available():
+				var visual_prompt := str(visual.get("prompt", "The tool captured an image. Describe what it shows and any visible issues."))
+				turn_messages.append({"role": "user", "content": _attachment_content(visual_prompt, [visual])})
+				conversation = turn_messages.duplicate(true)
+			else:
+				_append_chat_log("visual result skipped: coding model does not accept images")
 		if not Array(tool_result.get("affected", [])).is_empty() or not str(tool_result.get("undo_group", "")).is_empty():
 			# A mutation is progress; allow the same inspection call again later.
 			turn_signature_counts.clear()

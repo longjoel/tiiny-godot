@@ -39,6 +39,7 @@ def make_project(project: Path) -> None:
     shutil.copyfile(root / "integrations/tiiny/tests/editor_workspace_tools.gd", addon / "plugin.gd")
     chat_source = (root / "editor/tiiny_ai_dock_source.h").read_text().split('R"TIINY_GD(\n', 1)[1].split(')TIINY_GD"', 1)[0]
     (project / "chat.gd").write_text(chat_source)
+    shutil.copyfile(root / "integrations/tiiny/tests/fake_chat.gd", project / "fake_chat.gd")
     (project / "dirty.tscn").write_text(
         '[gd_scene load_steps=2 format=3]\n\n[ext_resource type="PackedScene" path="res://instance.tscn" id="1"]\n\n[node name="DirtyRoot" type="Node2D"]\n\n'
         '[node name="Label" type="Label" parent="."]\n'

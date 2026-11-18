@@ -566,7 +566,7 @@ func _validate_shell(parameters: Dictionary) -> String:
 
 func _validate_chat(parameters: Dictionary) -> String:
 	var strings := ["prompt", "context", "custom_prompt", "model", "connection_hash"]
-	var allowed := ["prompt", "context", "custom_prompt", "model", "connection_hash", "conversation", "timeout_ms", "turn", "project_instructions", "project_instructions_sha256", "role", "plan_root", "parent_job", "task_id", "task_title", "depends_on", "attempt", "depth", "plan_goal", "prior_attempt", "purpose", "failed_job", "dependency_results"]
+	var allowed := ["prompt", "context", "custom_prompt", "model", "connection_hash", "conversation", "timeout_ms", "turn", "project_instructions", "project_instructions_sha256", "role", "plan_root", "parent_job", "task_id", "task_title", "depends_on", "attempt", "depth", "plan_goal", "prior_attempt", "purpose", "failed_job", "dependency_results", "attachments"]
 	for key in parameters:
 		if str(key) not in allowed:
 			return "Invalid chat job parameters"
@@ -577,6 +577,21 @@ func _validate_chat(parameters: Dictionary) -> String:
 		return "Invalid chat request"
 	if not parameters.get("conversation") is Array:
 		return "Invalid chat context"
+	if parameters.has("attachments"):
+		if not parameters.attachments is Array or parameters.attachments.size() > 4:
+			return "Invalid chat attachments"
+		for attachment in parameters.attachments:
+			if not attachment is Dictionary:
+				return "Invalid chat attachment"
+			if not attachment.get("id") is String or not attachment.get("path") is String or not attachment.get("name") is String or not attachment.get("source") is String:
+				return "Invalid chat attachment"
+			var attachment_path := str(attachment.path)
+			if attachment_path.length() > 512 or not (attachment_path.begins_with("user://") or attachment_path.begins_with("res://")):
+				return "Invalid chat attachment path"
+			if not (attachment.get("bytes") is int or attachment.get("bytes") is float) or int(attachment.bytes) < 0 or int(attachment.bytes) > 2 * 1024 * 1024:
+				return "Invalid chat attachment size"
+			if not (attachment.get("width") is int or attachment.get("width") is float) or not (attachment.get("height") is int or attachment.get("height") is float) or int(attachment.width) < 1 or int(attachment.height) < 1:
+				return "Invalid chat attachment dimensions"
 	if parameters.has("project_instructions") != parameters.has("project_instructions_sha256"):
 		return "Invalid project instructions"
 	if parameters.has("project_instructions"):

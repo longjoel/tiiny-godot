@@ -614,6 +614,7 @@ func _adopt_loaded_coding_model(id: String) -> void:
 	if not Planner.suitable("coding_model", model): return
 	settings.set_setting("tiiny_ai/models/coding_model", id)
 	settings.set_setting("tiiny_ai/models/coding_model_type", str(model.get("type", "")))
+	settings.set_setting("tiiny_ai/models/coding_model_vision", bool(model.get("supports_vision", false)))
 	var context := int(draft.roles.coding_model.get("context", 8192))
 	var max_context := int(model.get("max_context", 0))
 	if max_context > 0: context = mini(context, max_context)
@@ -1228,6 +1229,7 @@ func _execute_model_configuration(approved: Dictionary) -> void:
 	for role in ROLES: settings.set_setting("tiiny_ai/models/" + role, approved.draft.roles[role].model)
 	var coding_id: String = approved.draft.roles.coding_model.model
 	settings.set_setting("tiiny_ai/models/coding_model_type", final.models[coding_id].type)
+	settings.set_setting("tiiny_ai/models/coding_model_vision", bool(final.models[coding_id].get("supports_vision", false)))
 	settings.set_setting("tiiny_ai/models/context_tokens", approved.draft.roles.coding_model.context)
 	settings.set_setting("_tiiny_ai/applied_configuration", approved.draft)
 	busy = false

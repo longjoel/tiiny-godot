@@ -288,6 +288,59 @@ func _run() -> void:
 	var asset_context := str(dock.call("_editor_context"))
 	if not asset_context.contains("Assets:"):
 		_fail("Editor context did not summarize existing assets: " + asset_context); return
+	var attachment_image := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	attachment_image.fill(Color(0.2, 0.5, 0.9, 1.0))
+	var attachment: Dictionary = dock.call("_store_attachment", attachment_image, "fixture", "fixture.png")
+	if attachment.is_empty() or not str(attachment.get("path", "")).begins_with("user://") or int(attachment.get("width", 0)) != 4 or int(attachment.get("height", 0)) != 4:
+		_fail("Attachment storage did not produce a bounded user:// PNG: " + str(attachment)); return
+	var text_content: Variant = dock.call("_attachment_content", "plain text", [])
+	if not text_content is String or str(text_content) != "plain text":
+		_fail("Plain text content changed when no image was attached"); return
+	var image_content: Variant = dock.call("_attachment_content", "What is this?", [attachment])
+	if not image_content is Array or Array(image_content).size() != 2:
+		_fail("Attachment content did not build text and image parts: " + str(image_content)); return
+	var materialized: Array = dock.call("_materialize_messages", [{"role": "user", "content": image_content}])
+	if not JSON.stringify(materialized).contains("data:image/png;base64,"):
+		_fail("Materialized message did not contain an image data URI"); return
+	var sanitized: Array = dock.call("_sanitize_visual_messages", materialized)
+	var sanitized_json := JSON.stringify(sanitized)
+	if sanitized_json.contains("data:image") or not sanitized_json.contains('"type":"image"'):
+		_fail("Trace sanitizer did not redact image bytes: " + sanitized_json); return
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 8192)
+	var budget_payload := {"messages": [{"role": "user", "content": [{"type": "text", "text": "x".repeat(4000)}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}]}]}
+	if bool(dock.call("_check_context_budget", budget_payload)):
+		_fail("Image content was not counted by the context budget"); return
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/models/context_tokens", 65536)
+	var chat = load("res://fake_chat.gd").new()
+	add_child(chat)
+	await get_tree().process_frame
+	chat.workspace_inspector_script = dock.get("workspace_inspector_script")
+	chat.workspace_transactions_script = dock.get("workspace_transactions_script")
+	chat.workspace_registry_script = dock.get("workspace_registry_script")
+	chat.workspace_coding_script = dock.get("workspace_coding_script")
+	chat.pending_prompt = "What is this?"
+	chat.pending_model = "fixture-model"
+	chat.pending_attachments = [attachment]
+	chat._start_answer()
+	if chat.submissions.is_empty():
+		_fail("Attachment chat did not submit a payload"); return
+	var sent: Dictionary = chat.submissions.back()
+	var user_message: Dictionary = sent.messages[1] if sent.messages.size() > 1 else {}
+	if not user_message.get("content") is Array or not JSON.stringify(user_message.content).contains("data:image/png;base64,"):
+		_fail("Attachment chat payload did not contain an image content part: " + str(user_message)); return
+	chat.queue_free()
+	var scene_capture: Dictionary = await provider.execute("capture_scene_view", {"view": "2d"})
+	if not bool(scene_capture.get("ok", false)) and str(scene_capture.get("error", {}).get("code", "")) != "capture_failed":
+		_fail("capture_scene_view did not report a clear headless result: " + str(scene_capture)); return
+	var player_capture: Dictionary = await provider.execute("capture_player_view", {})
+	if str(player_capture.get("error", {}).get("code", "")) != "unavailable":
+		_fail("capture_player_view did not report that the player window is unavailable: " + str(player_capture)); return
+	settings.set_setting("tiiny_ai/models/coding_model_type", "Image-Text-to-Text")
+	settings.set_setting("tiiny_ai/models/coding_model_vision", true)
+	dock.call("_refresh_registry_availability")
+	var vision_tools: Array = Array(registry.tools_payload()).map(func(tool): return str(tool.function.name))
+	if not ("capture_scene_view" in vision_tools and "capture_player_view" in vision_tools):
+		_fail("Vision-capable tool payload omitted the capture tools"); return
 
 	settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	dock.call("_refresh_registry_availability")

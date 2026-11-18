@@ -406,6 +406,25 @@ func definitions() -> Array:
 			}, "additionalProperties": false},
 			"risk": "read", "timeout_ms": 20000, "mode": "both",
 		},
+		{
+			"name": "capture_scene_view",
+			"title": "Capture scene view",
+			"description": "Capture the editor's rendered 2D or 3D view into a local image for the next model request. Requires a vision-capable coding model; read-only and does not save into the project.",
+			"parameters": {"type": "object", "properties": {
+				"view": {"type": "string", "enum": ["2d", "3d"]},
+				"max_px": {"type": "integer", "minimum": 128, "maximum": 1024},
+			}, "additionalProperties": false},
+			"risk": "read", "timeout_ms": 10000, "mode": "both",
+		},
+		{
+			"name": "capture_player_view",
+			"title": "Capture player view",
+			"description": "Capture the running player output when the editor exposes an embedded game view. Returns a precise unavailable result when the game window is external, because the whole editor UI is not the game.",
+			"parameters": {"type": "object", "properties": {
+				"max_px": {"type": "integer", "minimum": 128, "maximum": 1024},
+			}, "additionalProperties": false},
+			"risk": "read", "timeout_ms": 10000, "mode": "both",
+		},
 	]
 
 func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> Dictionary:
@@ -431,6 +450,8 @@ func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> 
 		"check_gdscript": return _check_gdscript(arguments)
 		"lookup_docs": return _lookup_docs(arguments)
 		"find_assets": return _find_assets(arguments)
+		"capture_scene_view": return await _capture_scene_view(arguments)
+		"capture_player_view": return _capture_player_view(arguments)
 	return _error("unknown_tool", "Unknown workspace tool: " + name)
 
 ### Paths
@@ -1113,6 +1134,83 @@ func _git_log(arguments: Dictionary) -> Dictionary:
 	return await _git(["log", "--no-color", "--oneline", "-n", str(count)], "Git log", 20000)
 
 ### Execution
+
+func _capture_scene_view(arguments: Dictionary) -> Dictionary:
+	var view := str(arguments.get("view", "2d")).strip_edges()
+	if not view in ["2d", "3d"]:
+		return _error("invalid_arguments", "view must be 2d or 3d.")
+	var max_px := clampi(int(arguments.get("max_px", 1024)), 128, 1024)
+	var viewport: SubViewport = EditorInterface.get_editor_viewport_2d() if view == "2d" else EditorInterface.get_editor_viewport_3d()
+	if viewport == null:
+		return _error("capture_failed", "The %s editor viewport is unavailable." % view)
+	var loop := Engine.get_main_loop()
+	if loop is SceneTree:
+		await (loop as SceneTree).process_frame
+	var image := viewport.get_texture().get_image()
+	if image == null or image.is_empty():
+		return _error("capture_failed", "The %s editor viewport produced no image; run the editor with rendering enabled." % view)
+	var record := _store_visual_attachment(image, "scene_" + view, "scene_" + view + ".png", max_px)
+	if record.is_empty():
+		return _error("capture_failed", "The captured view was empty or exceeded the attachment limits.")
+	return {
+		"ok": true,
+		"summary": "Captured the rendered %s view (%d×%d)." % [view, int(record.width), int(record.height)],
+		"data": {
+			"visual": {
+				"id": str(record.id),
+				"path": str(record.path),
+				"width": int(record.width),
+				"height": int(record.height),
+				"name": str(record.name),
+				"source": str(record.source),
+				"prompt": "This is the rendered %s view of the edited scene. Describe the layout, the player, platforms, camera, and any visible issues." % view,
+			},
+		},
+		"affected": [],
+	}
+
+func _capture_player_view(_arguments: Dictionary) -> Dictionary:
+	return _error("unavailable", "The running player window is not capturable in this build. Paste an OS screenshot of the game into the chat, or use capture_scene_view for the editor scene.")
+
+func _store_visual_attachment(image: Image, source: String, name: String, max_px: int) -> Dictionary:
+	if image == null or image.is_empty():
+		return {}
+	var width := image.get_width()
+	var height := image.get_height()
+	var max_edge := maxi(width, height)
+	if max_edge > max_px:
+		var scale := float(max_px) / float(max_edge)
+		image.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
+	var bytes := image.save_png_to_buffer()
+	if bytes.is_empty() or bytes.size() > 2 * 1024 * 1024:
+		return {}
+	var context := HashingContext.new()
+	if context.start(HashingContext.HASH_SHA256) != OK:
+		return {}
+	context.update(bytes)
+	var digest := context.finish().hex_encode()
+	if digest.is_empty():
+		return {}
+	var identity := ProjectSettings.globalize_path("res://").sha256_text().substr(0, 12)
+	var directory := "user://tiiny_chat/attachments/" + identity
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(directory)) != OK:
+		return {}
+	var path := directory.path_join(digest + ".png")
+	if not FileAccess.file_exists(path):
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			return {}
+		file.store_buffer(bytes)
+		file.close()
+	return {
+		"id": "sha256:" + digest,
+		"path": path,
+		"source": source,
+		"name": name,
+		"width": image.get_width(),
+		"height": image.get_height(),
+		"bytes": bytes.size(),
+	}
 
 func _find_assets(arguments: Dictionary) -> Dictionary:
 	var kind := str(arguments.get("kind", "all")).strip_edges()
