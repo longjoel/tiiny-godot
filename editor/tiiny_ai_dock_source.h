@@ -460,12 +460,12 @@ func _append_action_card(result: Dictionary, arguments: Dictionary) -> void:
 		if str(entry.get("kind", "")) == "node":
 			var select := _action_button("Select")
 			select.name = "ActionSelect"
-			select.pressed.connect(_select_action_node.bind(str(entry.get("scene_path", str(data.get("scene", {}).get("path", "")))), str(entry.get("path", ""))))
+			select.pressed.connect(_select_action_node.bind(str(entry.get("scene_path", _data_scene_path(data))), str(entry.get("path", ""))))
 			buttons.add_child(select)
 		elif str(entry.get("kind", "")) == "resource":
 			var open := _action_button("Open")
 			open.name = "ActionOpen"
-			open.pressed.connect(_open_action_resource.bind(str(entry.get("scene_path", str(data.get("scene", {}).get("path", "")))), str(entry.get("path", "")), str(entry.get("owner", ""))))
+			open.pressed.connect(_open_action_resource.bind(str(entry.get("scene_path", _data_scene_path(data))), str(entry.get("path", "")), str(entry.get("owner", ""))))
 			buttons.add_child(open)
 		elif str(entry.get("kind", "")) == "job":
 			var show := _action_button("Show job")
@@ -693,7 +693,11 @@ func _auto_save_after_edit(tool_result: Dictionary) -> void:
 	if not bool(tool_result.get("ok", false)) or not _auto_save_enabled():
 		return
 	var data: Dictionary = tool_result.get("data", {})
-	var dirty := bool(data.get("dirty", false)) or bool(data.get("scene", {}).get("dirty", false))
+	var scene_info: Variant = data.get("scene", {})
+	var scene_dirty := false
+	if scene_info is Dictionary:
+		scene_dirty = bool(scene_info.get("dirty", false))
+	var dirty := bool(data.get("dirty", false)) or scene_dirty
 	if not dirty:
 		return
 	var root := EditorInterface.get_edited_scene_root()
@@ -711,6 +715,12 @@ func _auto_save_after_edit(tool_result: Dictionary) -> void:
 	tool_result["data"] = data
 	tool_result["summary"] = str(tool_result.get("summary", "")) + " Scene saved: " + root.scene_file_path + "."
 	_refresh_registry_availability()
+
+func _data_scene_path(data: Dictionary) -> String:
+	var scene: Variant = data.get("scene", {})
+	if scene is Dictionary:
+		return str(scene.get("path", ""))
+	return str(scene) if scene is String else ""
 
 func _protocol_stop(reason: String) -> void:
 	_write_trace(reason)

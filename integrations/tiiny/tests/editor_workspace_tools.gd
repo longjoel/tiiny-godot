@@ -281,6 +281,10 @@ func _run() -> void:
 	var docs_invalid: Dictionary = await registry.execute("lookup_docs", {})
 	if str(docs_invalid.get("error", {}).get("code", "")) != "invalid_arguments":
 		_fail("lookup_docs accepted an empty request: " + str(docs_invalid)); return
+	# verify_scene_runtime reports data.scene as a path string. Auto-save and
+	# action cards must not treat that string as a scene dictionary.
+	EditorInterface.get_editor_settings().set_setting("tiiny_ai/advanced/auto_save_scene", true)
+	dock.call("_auto_save_after_edit", {"ok": true, "data": {"scene": "res://main.tscn"}})
 
 	settings.set_setting("tiiny_ai/advanced/tool_mode", "editor")
 	dock.call("_refresh_registry_availability")
