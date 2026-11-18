@@ -1951,6 +1951,7 @@ func _refresh_registry_availability() -> void:
 		values[name] = {"available": workspace_coding != null, "reason": "The workspace coding provider is unavailable." if workspace_coding == null else ""}
 	values["run_godot_headless"] = {"available": workspace_coding != null and shell_allowed, "reason": "Enable Tiiny AI > Advanced > allow_shell_commands: headless --script runs project code on the host, and each run requires approval." if not shell_allowed else ""}
 	values["run_command"] = {"available": workspace_coding != null and shell_allowed, "reason": "Enable Tiiny AI > Advanced > allow_shell_commands to use host commands; each command still requires approval." if not shell_allowed else ""}
+	values["verify_scene_runtime"] = {"available": workspace_coding != null and shell_allowed, "reason": "Enable Tiiny AI > Advanced > allow_shell_commands: runtime verification loads the saved scene and runs its scripts headlessly, and each run requires approval." if not shell_allowed else ""}
 	values["reload_scene"] = {"available": saved, "reason": "Open a saved scene before reloading it." if not saved else ""}
 	values["scan_filesystem"] = {"available": true, "reason": ""}
 	var debug_available := workspace_debugger != null and debugger_node != null and debugger_node.has_method("tiiny_debugger_state")

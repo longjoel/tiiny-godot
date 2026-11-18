@@ -124,6 +124,7 @@ func _initialize() -> void:
 	await _git_tests()
 	await _command_tests()
 	await _bridge_tests()
+	await _runtime_tests()
 	await _mode_tests()
 
 	var leftovers: Array = Array(DirAccess.open(project.path_join("scripts")).get_files()).filter(func(name): return ".tiiny-tmp-" in name)
@@ -586,6 +587,26 @@ func _bridge_tests() -> void:
 	var no_bridge: Dictionary = await workspace.execute("reload_scene", {"path": "res://main.tscn"})
 	check(error_code(no_bridge) == "unavailable", "reload reports a missing editor bridge")
 	workspace.editor_bridge = Callable(self, "fake_bridge")
+
+func _runtime_tests() -> void:
+	write_file(project.path_join("runtime.tscn"), '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n')
+	var runtime_definition: Dictionary = {}
+	for definition in workspace.definitions():
+		if str(definition.get("name", "")) == "verify_scene_runtime":
+			runtime_definition = definition
+	check(not runtime_definition.is_empty() and str(runtime_definition.get("mode", "")) == "both" and str(runtime_definition.get("risk", "")) == "long_running", "runtime verification is a shared long-running tool")
+	var passed: Dictionary = await workspace.execute("verify_scene_runtime", {"scene_path": "res://runtime.tscn", "frames": 30, "checks": ["scene_loads", "no_errors"]})
+	check(passed.get("ok", false) and bool(passed.get("data", {}).get("passed", false)) and int(passed.get("data", {}).get("frames", 0)) == 30, "runtime verification loads a saved scene and reports frames")
+	var unknown_action: Dictionary = await workspace.execute("verify_scene_runtime", {"scene_path": "res://runtime.tscn", "actions": [{"action": "not_a_real_action"}]})
+	check(error_code(unknown_action) == "invalid_arguments", "runtime verification rejects undefined input actions")
+	var unknown_check: Dictionary = await workspace.execute("verify_scene_runtime", {"scene_path": "res://runtime.tscn", "checks": ["not_a_check"]})
+	check(error_code(unknown_check) == "invalid_arguments", "runtime verification rejects unknown checks")
+	var missing: Dictionary = await workspace.execute("verify_scene_runtime", {"scene_path": "res://absent.tscn"})
+	check(error_code(missing) == "not_found", "runtime verification rejects a missing scene")
+	workspace.allow_shell_commands = false
+	var disabled: Dictionary = await workspace.execute("verify_scene_runtime", {"scene_path": "res://runtime.tscn"})
+	check(error_code(disabled) == "command_disabled", "runtime verification is gated by the shell setting")
+	workspace.allow_shell_commands = true
 
 func _mode_tests() -> void:
 	var registry = Registry.new(null, null, null, workspace)

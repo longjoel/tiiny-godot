@@ -26,6 +26,132 @@ const BINARY_EXTENSIONS := ["png", "jpg", "jpeg", "webp", "bmp", "tga", "svg", "
 const HEADLESS_FLAGS := ["--headless", "--path", "--script", "-s", "--quit", "--quit-after", "--check-only", "--import", "--verbose", "-v", "--debug", "--fixed-fps", "--time-scale", "--rendering-method", "--rendering-driver", "--display-driver", "--audio-driver", "--log-file", "--no-header", "--disable-vsync", "--single-threaded-scene", "--max-fps", "--resolution", "--position", "--write-movie"]
 const HEADLESS_VALUE_FLAGS := ["--path", "--script", "-s", "--quit-after", "--fixed-fps", "--time-scale", "--rendering-method", "--rendering-driver", "--display-driver", "--audio-driver", "--log-file", "--max-fps", "--resolution", "--position", "--write-movie"]
 
+# Probe executed with --script in the user's project. It instantiates a saved
+# scene, steps physics, optionally presses input actions, and writes measured
+# body motion plus sampled positions to a JSON file. The editor side decides
+# which checks pass; the probe only records evidence.
+const RUNTIME_PROBE_SOURCE := """extends SceneTree
+
+const SAMPLE_STRIDE := 6
+const SAMPLE_LIMIT := 24
+
+var spec: Dictionary = {}
+var frames := 0
+var frame_limit := 180
+var nodes: Array = []
+var records: Array = []
+var done := false
+
+func _initialize() -> void:
+	var user_args := OS.get_cmdline_user_args()
+	if user_args.is_empty():
+		_finish({"error": "missing_spec"})
+		return
+	var text := FileAccess.get_file_as_string(str(user_args[0]))
+	var parsed: Variant = JSON.parse_string(text)
+	if not parsed is Dictionary:
+		_finish({"error": "invalid_spec"})
+		return
+	spec = parsed
+	frame_limit = maxi(10, int(spec.get("frames", 180)))
+	var packed: Variant = load(str(spec.get("scene", "")))
+	if not packed is PackedScene:
+		_finish({"error": "scene_load_failed"})
+		return
+	var scene: Node = (packed as PackedScene).instantiate()
+	if scene == null:
+		_finish({"error": "instantiate_failed"})
+		return
+	root.add_child(scene)
+	_collect(scene, scene)
+	physics_frame.connect(_tick)
+
+func _collect(node: Node, scene_root: Node) -> void:
+	if node is CharacterBody2D or node is RigidBody2D:
+		var position := _pos(node)
+		nodes.append(node)
+		records.append({
+			"path": "." if node == scene_root else str(scene_root.get_path_to(node)),
+			"class": node.get_class(),
+			"start": [position.x, position.y],
+			"end": [position.x, position.y],
+			"max_y": position.y,
+			"end_vy": 0.0,
+			"min_vy_after_action": 0.0,
+			"end_on_floor": false,
+			"sampled": [],
+		})
+	for child in node.get_children():
+		_collect(child, scene_root)
+
+func _tick() -> void:
+	if done:
+		return
+	frames += 1
+	for entry in spec.get("actions", []):
+		if not entry is Dictionary:
+			continue
+		var action := str(entry.get("action", ""))
+		if action.is_empty():
+			continue
+		var start := int(entry.get("frame", 1))
+		var hold := maxi(1, int(entry.get("hold", 2)))
+		if frames == start:
+			Input.action_press(action)
+			for index in records.size():
+				records[index]["action_y"] = float(records[index]["end"][1])
+		elif frames == start + hold:
+			Input.action_release(action)
+	# The physics_frame signal fires before _physics_process, so this records the
+	# state produced by the previous physics step. That is enough for motion and
+	# landing checks and keeps the probe free of engine-internal hooks.
+	for index in nodes.size():
+		var node: Node = nodes[index]
+		if not is_instance_valid(node):
+			continue
+		var record: Dictionary = records[index]
+		var position := _pos(node)
+		record["end"] = [position.x, position.y]
+		record["max_y"] = maxf(float(record["max_y"]), position.y)
+		if node is CharacterBody2D:
+			record["end_on_floor"] = (node as CharacterBody2D).is_on_floor()
+			record["end_vy"] = (node as CharacterBody2D).velocity.y
+			if record.has("action_y"):
+				record["min_vy_after_action"] = minf(float(record["min_vy_after_action"]), (node as CharacterBody2D).velocity.y)
+		elif node is RigidBody2D:
+			record["end_vy"] = (node as RigidBody2D).linear_velocity.y
+		if frames % SAMPLE_STRIDE == 0 and record.sampled.size() < SAMPLE_LIMIT:
+			record["sampled"].append([frames, position.x, position.y])
+	if frames >= frame_limit:
+		_release_all()
+		done = true
+		_finish({})
+
+func _release_all() -> void:
+	for entry in spec.get("actions", []):
+		if entry is Dictionary:
+			var action := str(entry.get("action", ""))
+			if not action.is_empty():
+				Input.action_release(action)
+
+func _finish(payload: Dictionary) -> void:
+	payload["frames"] = frames
+	payload["bodies"] = records
+	payload["actions"] = spec.get("actions", [])
+	var output := str(spec.get("output", ""))
+	if not output.is_empty():
+		var file := FileAccess.open(output, FileAccess.WRITE)
+		if file != null:
+			file.store_string(JSON.stringify(payload))
+			file.close()
+	quit(0)
+
+func _pos(node: Node) -> Vector2:
+	if node is Node2D:
+		return (node as Node2D).global_position
+	return Vector2.ZERO
+"""
+
 var project_root := ""
 var editor_bridge: Callable
 var approve_command: Callable
@@ -190,6 +316,23 @@ func definitions() -> Array:
 			"risk": "long_running", "timeout_ms": 300000, "mode": "workspace",
 		},
 		{
+			"name": "verify_scene_runtime",
+			"title": "Verify scene runtime",
+			"description": "Instantiate a saved scene headlessly, simulate physics frames, optionally press input actions, and report measured body motion plus scene-load, script-error, gravity, landing, and jump checks. Runs project scripts on the host: requires the allow_shell_commands setting and per-run approval. It does not modify the scene or project.",
+			"parameters": {"type": "object", "properties": {
+				"scene_path": {"type": "string", "minLength": 1, "maxLength": 512},
+				"frames": {"type": "integer", "minimum": 10, "maximum": 600},
+				"actions": {"type": "array", "maxItems": 4, "items": {"type": "object", "properties": {
+					"action": {"type": "string", "minLength": 1, "maxLength": 64},
+					"frame": {"type": "integer", "minimum": 1, "maximum": 600},
+					"hold": {"type": "integer", "minimum": 1, "maximum": 120},
+				}, "required": ["action"], "additionalProperties": false}},
+				"checks": {"type": "array", "maxItems": 5, "items": {"type": "string", "enum": ["scene_loads", "no_errors", "gravity", "lands", "jump"]}},
+				"timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000},
+			}, "additionalProperties": false},
+			"risk": "long_running", "timeout_ms": 120000, "mode": "both",
+		},
+		{
 			"name": "run_command",
 			"title": "Run host command (gated)",
 			"description": "Run a shell command inside the project root. Disabled unless the advanced allow_shell_commands setting is enabled and the user explicitly approves this command. Host code execution.",
@@ -235,6 +378,7 @@ func execute(name: String, arguments: Dictionary, _context: Dictionary = {}) -> 
 		"git_diff": return await _git_diff(arguments)
 		"git_log": return await _git_log(arguments)
 		"run_godot_headless": return await _run_godot_headless(arguments)
+		"verify_scene_runtime": return await _verify_scene_runtime(arguments)
 		"run_command": return await _run_command(arguments)
 		"reload_scene": return await _reload_scene(arguments)
 		"scan_filesystem": return _scan_filesystem()
@@ -932,6 +1076,202 @@ func _run_godot_headless(arguments: Dictionary) -> Dictionary:
 	if not approved:
 		return _error("approval_required", "The user did not approve running project code headlessly.")
 	return await _execute_shell_spec(spec)
+
+func _verify_scene_runtime(arguments: Dictionary) -> Dictionary:
+	var scene_path := str(arguments.get("scene_path", "")).strip_edges()
+	if scene_path.is_empty():
+		if not editor_bridge.is_valid():
+			return _error("invalid_arguments", "A scene_path is required when no edited scene is available.")
+		var state: Dictionary = editor_bridge.call("edited_scene", {})
+		scene_path = str(state.get("path", ""))
+		if scene_path.is_empty():
+			return _error("no_scene", "Open a saved scene or pass scene_path.")
+		if bool(state.get("dirty", false)):
+			return _error("scene_dirty", "Save the scene before runtime verification; the run loads the saved file.")
+	if not scene_path.begins_with("res://") or not (scene_path.ends_with(".tscn") or scene_path.ends_with(".scn")):
+		return _error("invalid_arguments", "scene_path must be a saved res:// .tscn or .scn path.")
+	var canonical := _canonical(scene_path, false)
+	if canonical.has("error"): return canonical
+	if not FileAccess.file_exists(str(canonical.absolute)):
+		return _error("not_found", "The scene does not exist: " + scene_path)
+	if editor_bridge.is_valid():
+		var current: Dictionary = editor_bridge.call("edited_scene", {})
+		if str(current.get("path", "")) == scene_path and bool(current.get("dirty", false)):
+			return _error("scene_dirty", "Save the scene before runtime verification; the run loads the saved file.")
+	if not allow_shell_commands:
+		return _error("command_disabled", "Runtime verification is disabled. Enable tiiny_ai/advanced/allow_shell_commands and approve the run, because it executes project scripts on the host.")
+	var frames := clampi(int(arguments.get("frames", 180)), 10, 600)
+	var actions := _runtime_actions(arguments.get("actions", []))
+	if actions.has("error"): return actions
+	var checks := _runtime_checks(arguments.get("checks", []))
+	if checks.has("error"): return checks
+	var timeout_ms := clampi(int(arguments.get("timeout_ms", 30000)), 1000, 120000)
+	var directory := ProjectSettings.globalize_path("user://tiiny_runtime")
+	if DirAccess.make_dir_recursive_absolute(directory) != OK:
+		return _error("execution_failed", "Could not create the runtime probe directory.")
+	var token := Crypto.new().generate_random_bytes(6).hex_encode()
+	var probe_path := directory.path_join("probe_" + token + ".gd")
+	var spec_path := directory.path_join("spec_" + token + ".json")
+	var output_path := directory.path_join("result_" + token + ".json")
+	var probe_file := FileAccess.open(probe_path, FileAccess.WRITE)
+	if probe_file == null:
+		return _error("execution_failed", "Could not write the runtime probe.")
+	probe_file.store_string(RUNTIME_PROBE_SOURCE)
+	probe_file.close()
+	var spec_file := FileAccess.open(spec_path, FileAccess.WRITE)
+	if spec_file == null:
+		_runtime_remove([probe_path])
+		return _error("execution_failed", "Could not write the runtime probe specification.")
+	spec_file.store_string(JSON.stringify({"scene": str(canonical.res), "frames": frames, "actions": actions.actions, "output": output_path}))
+	spec_file.close()
+	var argv := ["--headless", "--path", project_root, "--script", probe_path, "--", spec_path]
+	var approved := false
+	if approve_headless.is_valid():
+		approved = bool(await approve_headless.call(argv.duplicate(), project_root))
+	if not approved:
+		_runtime_remove([probe_path, spec_path])
+		return _error("approval_required", "The user did not approve running the scene's project code headlessly.")
+	var spec := {"kind": "headless", "argv": argv, "cwd_res": "res://", "cwd_abs": project_root, "timeout_ms": timeout_ms}
+	var run := await _execute_shell_spec(spec)
+	var stderr_text := str(run.get("data", {}).get("stderr", ""))
+	var stdout_text := str(run.get("data", {}).get("stdout", ""))
+	if not run.get("ok", false):
+		_runtime_remove([probe_path, spec_path, output_path])
+		if run.get("error", {}).get("code", "") == "timeout":
+			return run
+		return _error("runtime_failed", str(run.get("summary", "The runtime probe failed.")), {"stderr": _tail_text(stderr_text, 3000), "stdout": _tail_text(stdout_text, 1000)})
+	var payload: Variant = null
+	if FileAccess.file_exists(output_path):
+		payload = JSON.parse_string(FileAccess.get_file_as_string(output_path))
+	_runtime_remove([probe_path, spec_path, output_path])
+	if not payload is Dictionary:
+		return _error("probe_failed", "The runtime probe did not write a usable result.", {"stderr": _tail_text(stderr_text, 3000), "stdout": _tail_text(stdout_text, 1000)})
+	if payload.has("error"):
+		return _runtime_probe_error(str(payload.error), stderr_text, stdout_text)
+	return _runtime_report(scene_path, frames, payload, checks.checks, stderr_text, int(run.get("data", {}).get("duration_ms", 0)))
+
+func _runtime_actions(raw: Variant) -> Dictionary:
+	if not raw is Array:
+		return _error("invalid_arguments", "actions must be an array.")
+	if raw.size() > 4:
+		return _error("invalid_arguments", "At most 4 input actions can be simulated.")
+	var actions: Array = []
+	for entry in raw:
+		if not entry is Dictionary:
+			return _error("invalid_arguments", "Each action must be an object with action, frame, and hold.")
+		var action := str(entry.get("action", "")).strip_edges()
+		if action.is_empty() or action.length() > 64 or not action.is_valid_identifier():
+			return _error("invalid_arguments", "Input action names must be identifiers of at most 64 characters.")
+		if not InputMap.has_action(action) and not ProjectSettings.has_setting("input/" + action):
+			return _error("invalid_arguments", "Input action is not defined: %s. Use a built-in ui_* action or define the action in the project input map first." % action)
+		var frame_value: Variant = entry.get("frame", 60)
+		var hold_value: Variant = entry.get("hold", 2)
+		if not (frame_value is int or frame_value is float) or not (hold_value is int or hold_value is float):
+			return _error("invalid_arguments", "Action frame and hold must be numbers.")
+		actions.append({"action": action, "frame": clampi(int(frame_value), 1, 600), "hold": clampi(int(hold_value), 1, 120)})
+	return {"actions": actions}
+
+func _runtime_checks(raw: Variant) -> Dictionary:
+	var allowed := ["scene_loads", "no_errors", "gravity", "lands", "jump"]
+	if not raw is Array:
+		return _error("invalid_arguments", "checks must be an array.")
+	if raw.is_empty():
+		return {"checks": ["scene_loads", "no_errors"]}
+	var checks: Array = []
+	for value in raw:
+		var name := str(value)
+		if not allowed.has(name):
+			return _error("invalid_arguments", "Unknown runtime check: " + name)
+		if not checks.has(name):
+			checks.append(name)
+	return {"checks": checks}
+
+func _runtime_probe_error(code: String, stderr_text: String, stdout_text: String) -> Dictionary:
+	var message := "The runtime probe could not run the scene."
+	match code:
+		"scene_load_failed": message = "The scene could not be loaded. Check that it is a saved .tscn and that its scripts parse."
+		"instantiate_failed": message = "The scene could not be instantiated."
+		"invalid_spec", "missing_spec": message = "The runtime probe received an invalid specification."
+	return _error(code, message, {"stderr": _tail_text(stderr_text, 3000), "stdout": _tail_text(stdout_text, 1000)})
+
+func _runtime_report(scene_path: String, frames: int, payload: Dictionary, checks: Array, stderr_text: String, duration_ms: int) -> Dictionary:
+	var bodies: Array = payload.get("bodies", [])
+	var details := {}
+	var failed: Array = []
+	for name in checks:
+		var passed := true
+		var detail := ""
+		match name:
+			"scene_loads":
+				detail = "Scene %s instantiated and ran for %d frames." % [scene_path, int(payload.get("frames", frames))]
+			"no_errors":
+				var error_line := _runtime_error_line(stderr_text)
+				passed = error_line.is_empty()
+				detail = "No script or load errors were reported." if passed else "Error output: " + error_line
+			"gravity":
+				var fall := 0.0
+				var fall_path := ""
+				for body in bodies:
+					if not body is Dictionary: continue
+					var delta := float(body.get("max_y", 0.0)) - float(body.start[1])
+					if delta > fall:
+						fall = delta
+						fall_path = str(body.get("path", "?"))
+				passed = fall >= 2.0
+				detail = ("A body fell %.1f px under gravity." % fall) if passed else "No body fell vertically; gravity may be missing or blocked."
+				if passed and not fall_path.is_empty():
+					detail += " (" + fall_path + ")"
+			"lands":
+				var grounded: Array = []
+				for body in bodies:
+					if body is Dictionary and bool(body.get("end_on_floor", false)):
+						grounded.append(str(body.get("path", "?")))
+				passed = not grounded.is_empty()
+				detail = ("On the floor at the final frame: " + ", ".join(grounded)) if passed else "No CharacterBody2D reported is_on_floor at the final frame."
+			"jump":
+				var jumped: Array = []
+				for body in bodies:
+					if body is Dictionary and float(body.get("min_vy_after_action", 0.0)) <= -1.0:
+						jumped.append(str(body.get("path", "?")))
+				passed = not jumped.is_empty()
+				detail = ("Upward velocity after an action: " + ", ".join(jumped)) if passed else "No body moved upward after the requested input action; check the action name and jump handling."
+		if not passed: failed.append(name)
+		details[name] = {"passed": passed, "detail": detail}
+	var summary := "Runtime verification %s for %s (%d frames): %s." % ["passed" if failed.is_empty() else "failed", scene_path, int(payload.get("frames", frames)), ", ".join(checks)]
+	if not failed.is_empty():
+		summary += " Failed: " + ", ".join(failed) + ". " + str(details[failed[0]].detail)
+	return {
+		"ok": true,
+		"summary": summary.left(1200),
+		"data": {
+			"scene": scene_path,
+			"frames": int(payload.get("frames", frames)),
+			"passed": failed.is_empty(),
+			"checks": details,
+			"failed": failed,
+			"bodies": bodies,
+			"actions": payload.get("actions", []),
+			"stderr": _tail_text(stderr_text, 3000),
+			"duration_ms": duration_ms,
+		},
+		"affected": [],
+	}
+
+func _runtime_error_line(stderr_text: String) -> String:
+	for line in stderr_text.split("\n"):
+		for marker in ["SCRIPT ERROR", "Parse Error", "Invalid call", "Failed loading resource", "Can't load script"]:
+			if line.contains(marker):
+				return line.strip_edges().left(400)
+	return ""
+
+func _runtime_remove(paths: Array) -> void:
+	for path in paths:
+		if FileAccess.file_exists(str(path)):
+			DirAccess.remove_absolute(str(path))
+
+func _tail_text(text: String, limit: int) -> String:
+	if text.length() <= limit: return text
+	return text.right(limit)
 
 func _headless_spec(arguments: Dictionary) -> Dictionary:
 	var raw_args: Variant = arguments.get("args", [])
