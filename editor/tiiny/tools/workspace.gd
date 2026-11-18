@@ -980,7 +980,13 @@ func _validate_script(source: String) -> Dictionary:
 	var script := GDScript.new()
 	script.source_code = source
 	if script.reload() != OK:
-		return _error("script_invalid", "The updated GDScript failed to parse; the file was not changed.")
+		var kind := str(script.get_last_error_kind())
+		var line := int(script.get_last_error_line())
+		var message := str(script.get_last_error())
+		if message.is_empty():
+			message = "The updated GDScript did not compile."
+		var where := (" at line %d" % line) if line > 0 else ""
+		return _error("script_invalid", "The updated GDScript failed to parse%s: %s; the file was not changed." % [where, message], {"line": line, "kind": kind})
 	return {}
 
 func _apply_exact_block(source: String, patch: String) -> Dictionary:

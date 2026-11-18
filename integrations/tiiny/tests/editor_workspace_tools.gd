@@ -372,6 +372,38 @@ func _run() -> void:
 	if not post_edit_read is Dictionary or not bool(post_edit_read.get("ok", false)) or str(post_edit_read.get("error", {}).get("code", "")) == "repeated_call":
 		_fail("Post-edit re-read was blocked by the task read-only guard: " + str(post_edit_read)); return
 	edited_task.queue_free()
+	EditorInterface.open_scene_from_path("res://dirty.tscn")
+	if not await _wait_for_scene("res://dirty.tscn"):
+		_fail("Could not open the stale-retry scene"); return
+	var stale_chat = load("res://fake_chat.gd").new()
+	add_child(stale_chat)
+	await get_tree().process_frame
+	stale_chat.workspace_inspector_script = dock.get("workspace_inspector_script")
+	stale_chat.workspace_transactions_script = dock.get("workspace_transactions_script")
+	stale_chat.workspace_registry_script = dock.get("workspace_registry_script")
+	stale_chat.workspace_coding_script = dock.get("workspace_coding_script")
+	stale_chat._ensure_workspace_registry()
+	stale_chat.workspace_registry.set_tool_mode("editor")
+	var stale_scene_context: Dictionary = stale_chat.workspace_registry.current_scene_context({})
+	var stale_scene: Dictionary = stale_scene_context.get("scene", {}).duplicate(true)
+	if stale_scene.is_empty():
+		_fail("Could not capture scene context for the stale retry fixture: " + str(stale_scene_context)); return
+	stale_scene["revision"] = "sha256:stale"
+	stale_chat.turn_id = "stale-retry"
+	stale_chat.turn_role = "chat"
+	stale_chat.turn_messages.clear()
+	stale_chat.turn_ledger.clear()
+	stale_chat.turn_failed_calls.clear()
+	stale_chat.turn_signature_counts.clear()
+	stale_chat.turn_last_signature = ""
+	stale_chat.turn_scene_context = stale_scene
+	await stale_chat._execute_turn_calls([{"id": "stale-1", "name": "get_scene_tree", "arguments": {"max_depth": 4}}])
+	var stale_first: Variant = JSON.parse_string(str(stale_chat.turn_messages.back().get("content", "")))
+	await stale_chat._execute_turn_calls([{"id": "stale-2", "name": "get_scene_tree", "arguments": {"max_depth": 4}}])
+	var stale_second: Variant = JSON.parse_string(str(stale_chat.turn_messages.back().get("content", "")))
+	if not stale_first is Dictionary or str(stale_first.get("error", {}).get("code", "")) != "stale_scene" or not stale_second is Dictionary or not bool(stale_second.get("ok", false)) or str(stale_second.get("error", {}).get("code", "")) == "repeated_call":
+		_fail("Stale-scene retry was blocked instead of re-inspecting: " + str(stale_first) + " / " + str(stale_second)); return
+	stale_chat.queue_free()
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
 	await get_tree().process_frame
@@ -631,6 +663,21 @@ func _run() -> void:
 	var partial_history = manager.get_history_undo_redo(manager.get_object_history_id(root))
 	if not partial_history.undo() or label.text != "saved text":
 		_fail("Could not restore the intervening scene edit"); return
+	var replace_path := "res://replace_invalid.gd"
+	var replace_source := "extends Node\n\nfunc _ready():\n\tpass\n"
+	var replace_file := FileAccess.open(replace_path, FileAccess.WRITE)
+	if replace_file == null:
+		_fail("Could not prepare the replace_in_gdscript fixture file"); return
+	replace_file.store_string(replace_source)
+	replace_file.close()
+	var replace_sha := FileAccess.get_sha256(replace_path)
+	var replace_chat = load("res://fake_chat.gd").new()
+	add_child(replace_chat)
+	await get_tree().process_frame
+	var invalid_replace: Dictionary = replace_chat._replace_script_tool(replace_path, replace_sha, "\tpass", "\tmove_and_slide()", "fixture")
+	if invalid_replace.get("ok", true) or not str(invalid_replace.get("summary", "")).contains("at line") or not str(invalid_replace.get("summary", "")).contains("move_and_slide") or FileAccess.get_file_as_string(replace_path) != replace_source:
+		_fail("replace_in_gdscript did not report the parse line and message: " + str(invalid_replace)); return
+	replace_chat.queue_free()
 	provider.approve_edit = original_approve
 	manager.create_action("workspace-tools-fixture-dirty", UndoRedo.MERGE_DISABLE, root)
 	manager.add_do_property(label, "text", "unsaved editor text")

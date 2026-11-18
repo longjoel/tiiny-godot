@@ -77,9 +77,12 @@ def editor_fixture() -> None:
             raise
         output = result.stdout + result.stderr
         expected_parse = output.count("SCRIPT ERROR: Parse Error: Expected parameter name.")
-        errors = output.count("SCRIPT ERROR") - expected_parse
+        # The replace_in_gdscript fixture deliberately submits an unknown method
+        # and asserts the tool result, not the engine diagnostic.
+        expected_replace = output.count('SCRIPT ERROR: Parse Error: Function "move_and_slide()" not found in base self.')
+        errors = output.count("SCRIPT ERROR") - expected_parse - expected_replace
         progress_error = "Do not use progress dialog" in output or "!tasks.has(p_task)" in output
-        if result.returncode or "Workspace coding editor integration passed." not in output or errors or expected_parse != 1 or progress_error:
+        if result.returncode or "Workspace coding editor integration passed." not in output or errors or expected_parse != 1 or expected_replace != 1 or progress_error:
             print(output)
             raise SystemExit(result.returncode or 1)
         print("Workspace coding editor integration passed.")

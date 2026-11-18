@@ -2074,6 +2074,20 @@ func supports_ai_resource_type(type: String) -> bool:
 		return workspace_registry.supports_resource_type(type)
 	return type == "ConvexPolygonShape2D"
 
+func _script_error_detail(script: GDScript) -> String:
+	var line := int(script.get_last_error_line())
+	var message := str(script.get_last_error())
+	if message.is_empty():
+		message = "The script did not compile."
+	return (" at line %d: %s" % [line, message]) if line > 0 else (": " + message)
+
+func _script_compile_failure(source: String) -> String:
+	var script := GDScript.new()
+	script.source_code = source
+	if script.reload() == OK:
+		return ""
+	return _script_error_detail(script)
+
 func _tool_text_result(text: String) -> Dictionary:
 	if text.begins_with("Error:"):
 		return {"ok": false, "summary": text.trim_prefix("Error:").strip_edges(), "error": {"code": "execution_failed", "message": text.trim_prefix("Error:").strip_edges()}}
@@ -2153,7 +2167,7 @@ func _registry_create_and_attach_gdscript(arguments: Dictionary, turn_context: D
 	var script := GDScript.new()
 	script.source_code = source
 	if script.reload() != OK:
-		return _tool_text_result("Error: The script failed validation; no file or scene change was made.")
+		return _tool_text_result("Error: The script failed validation%s; no file or scene change was made." % _script_error_detail(script))
 	var context: Dictionary = workspace_inspector.scene_context(turn_context)
 	if context.has("error"): return context
 	if context.dirty:
@@ -3027,6 +3041,7 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 					append_message += " Call apply_editor_transaction directly with an operations array; do not wrap it in append_job."
 				tool_result = {"ok": false, "tool": "append_job", "call_id": call_id, "summary": append_message, "error": {"code": "invalid_arguments", "field": "operation", "message": append_message}, "data": {}, "affected": []}
 				serialized = JSON.stringify(tool_result)
+		var scene_refreshed := false
 		if tool_result.is_empty() and _ensure_workspace_registry():
 			tool_result = await workspace_registry.execute(function_name, arguments, _turn_context(call_id))
 			var scene: Variant = tool_result.get("data", {}).get("scene", null)
@@ -3039,6 +3054,7 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 				var refreshed: Dictionary = workspace_registry.current_scene_context({})
 				if not refreshed.has("error"):
 					turn_scene_context = refreshed.get("scene", {}).duplicate(true)
+					scene_refreshed = true
 			turn_ledger.append(workspace_registry.ledger_entry(tool_result, turn_id))
 			serialized = JSON.stringify(tool_result)
 		elif tool_result.is_empty():
@@ -3080,6 +3096,13 @@ func _execute_turn_calls(parsed_calls: Array) -> void:
 			# A mutation is progress; allow the same inspection call again later.
 			turn_signature_counts.clear()
 			turn_last_signature = ""
+		elif scene_refreshed and str(tool_result.get("error", {}).get("code", "")) == "stale_scene":
+			# Re-inspection is the documented recovery, and the stale branch above
+			# refreshed turn_scene_context. Let the same call run once more with the
+			# fresh context instead of treating the retry as a repeat.
+			turn_signature_counts.erase(call_signature)
+			if turn_last_signature == call_signature:
+				turn_last_signature = ""
 		if queued_chat_started and queued_chat_request_recorded:
 			queued_chat_success = false
 			send_button.disabled = false
@@ -3635,10 +3658,9 @@ func _replace_script_tool(path: String, expected_sha256: String, old_text: Strin
 	if matches != 1:
 		return _tool_text_result("Error: The old snippet matched %d times; provide one unique snippet. No edit was applied." % matches)
 	var updated := source.replace(old_text, new_text)
-	var script := GDScript.new()
-	script.source_code = updated
-	if script.reload() != OK:
-		return _tool_text_result("Error: The edited script failed validation; the file was not changed.")
+	var failure := _script_compile_failure(updated)
+	if not failure.is_empty():
+		return _tool_text_result("Error: The edited script failed validation%s; the file was not changed." % failure)
 	var file := FileAccess.open(normalized, FileAccess.WRITE)
 	if file == null:
 		return _tool_text_result("Error: Could not write the script (error %d)." % FileAccess.get_open_error())
@@ -3722,10 +3744,9 @@ func _create_script_tool(path: String, source: String) -> String:
 		return "Error: Script tool requires a new res:// .gd path and valid source."
 	if FileAccess.file_exists(normalized):
 		return "Error: Script already exists; it was not overwritten: " + normalized
-	var script := GDScript.new()
-	script.source_code = source
-	if script.reload() != OK:
-		return "Error: Generated script failed validation; see editor errors."
+	var failure := _script_compile_failure(source)
+	if not failure.is_empty():
+		return "Error: Generated script failed validation%s; the file was not created." % failure
 	var file := FileAccess.open(normalized, FileAccess.WRITE)
 	if file == null:
 		return "Error: Could not create script (error %d)." % FileAccess.get_open_error()

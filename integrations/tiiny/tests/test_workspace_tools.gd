@@ -262,7 +262,7 @@ func _write_tests() -> void:
 
 	var invalid_hash := FileAccess.get_sha256(project.path_join("scripts/player.gd"))
 	var invalid: Dictionary = await workspace.execute("write_file", {"path": "res://scripts/player.gd", "content": "extends Node(\n", "expected_sha256": invalid_hash})
-	check(error_code(invalid) == "script_invalid" and file_text(project.path_join("scripts/player.gd")).contains("speed := 2"), "invalid GDScript is rejected before commit")
+	check(error_code(invalid) == "script_invalid" and str(invalid.get("summary", "")).contains("at line") and int(invalid.get("data", {}).get("line", 0)) > 0 and file_text(project.path_join("scripts/player.gd")).contains("speed := 2"), "invalid GDScript is rejected before commit with its parse line")
 
 	var concurrent_source := file_text(project.path_join("scripts/notes.txt"))
 	var stale_date := FileAccess.get_sha256(project.path_join("scripts/notes.txt"))
@@ -305,7 +305,7 @@ func _patch_tests() -> void:
 	hash = FileAccess.get_sha256(project.path_join("scripts/patch_target.gd"))
 	var invalid_script := "@@ -1,5 +1,5 @@\n extends Node\n \n-var speed := 7\n+var speed := (\n var health := 10\n"
 	var invalid: Dictionary = await workspace.execute("apply_patch", {"path": "res://scripts/patch_target.gd", "expected_sha256": hash, "patch": invalid_script})
-	check(error_code(invalid) == "script_invalid" and "speed := 7" in file_text(project.path_join("scripts/patch_target.gd")), "invalid patched script is not committed")
+	check(error_code(invalid) == "script_invalid" and str(invalid.get("summary", "")).contains("at line") and "speed := 7" in file_text(project.path_join("scripts/patch_target.gd")), "invalid patched script reports its parse line and is not committed")
 
 	hash = FileAccess.get_sha256(project.path_join("scripts/patch_target.gd"))
 	var final_patch := "@@ -1,5 +1,5 @@\n extends Node\n \n-var speed := 7\n+var speed := 8\n var health := 10\n"
