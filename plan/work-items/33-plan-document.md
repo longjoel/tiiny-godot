@@ -108,11 +108,11 @@ tasks:
 - **Plan tools:** create, read, update, validate, and run the document. The model edits through bounded plan fields, not by emitting raw YAML.
 - **Execution:** `run_plan` validates, requires approval to queue work, and compiles the tasks into the existing coordinator → child jobs → deferred join sequence. Each child carries `plan_doc_path`, `plan_doc_hash`, and `plan_run_id`; dependencies use the existing eligibility rules.
 - **Writeback:** at join completion, map structured `verification` entries to `done_when` checks, append evidence with the source, update task statuses, and update the document status. A hash mismatch during the run is a conflict: do not overwrite user edits; return the stale hash and a diff/patch suggestion. A completed run with no evidence stays `unverified`.
-- **Questions:** stored in the document. A run refuses while any `blocking: true` question is unanswered. The model may add questions and stop; the user answers in chat or in the file. The wizard card UI is story 34.
+- **Questions:** stored in the document. A run refuses while any `blocking: true` question is unanswered. The model may add questions and stop; the user answers in chat or in the file. The wizard card UI is story 35.
 
 ## Out of scope
 
-- The visual plan wizard, question cards, and edit/review UI (story 34).
+- The visual plan wizard, question cards, and edit/review UI (story 35).
 - Mid-task questions; a blocked task plus **Fix task** remains the first mechanism.
 - A general YAML class in `core/io` or a vendored YAML library.
 - Executing arbitrary operations or scripts from the document. The model still uses typed Godot tools; the YAML describes intent, acceptance, and task order.

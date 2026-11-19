@@ -191,7 +191,7 @@ One run per document: `plan_run` rejects a document that already has an active r
 
 ## Questions
 
-Questions live in the document. The model can create or update them with `plan_update`; the user answers in the file or in chat. A blocking unanswered question prevents `plan_run`. The card UI and an `ask_user` tool are story 34; the document contract is ready for them.
+Questions live in the document. The model can create or update them with `plan_update`; the user answers in the file or in chat. A blocking unanswered question prevents `plan_run`. The card UI and an `ask_user` tool are story 35; the document contract is ready for them.
 
 ## Limits and non-goals
 

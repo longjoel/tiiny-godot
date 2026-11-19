@@ -404,6 +404,49 @@ func _run() -> void:
 	if not stale_first is Dictionary or str(stale_first.get("error", {}).get("code", "")) != "stale_scene" or not stale_second is Dictionary or not bool(stale_second.get("ok", false)) or str(stale_second.get("error", {}).get("code", "")) == "repeated_call":
 		_fail("Stale-scene retry was blocked instead of re-inspecting: " + str(stale_first) + " / " + str(stale_second)); return
 	stale_chat.queue_free()
+	var approval_chat = load("res://fake_approval_chat.gd").new()
+	add_child(approval_chat)
+	await get_tree().process_frame
+	approval_chat.turn_id = "turn-approval"
+	approval_chat.queued_chat_parameters = {"plan_root": "plan-approval"}
+	var previous_shell := bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands"))
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", true)
+	var first_create: bool = await approval_chat._approve_file_edit("create", "res://approval_a.gd", "fixture")
+	var second_create: bool = await approval_chat._approve_file_edit("create", "res://approval_b.gd", "fixture")
+	var granted_headless: bool = await approval_chat._approve_headless_run(["--headless", "--path", "."], "res://")
+	if not first_create or not second_create or not granted_headless or approval_chat.dialog_calls != 1:
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("Plan authoring grant did not suppress repeated prompts: " + str(approval_chat.dialog_calls)); return
+	var moved: bool = await approval_chat._approve_file_edit("move", "res://approval_a.gd", "fixture")
+	if not moved or approval_chat.dialog_calls != 2:
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("Move was incorrectly covered by the authoring grant: " + str(approval_chat.dialog_calls)); return
+	approval_chat.queued_chat_parameters = {"plan_root": "plan-other"}
+	var other_plan: bool = await approval_chat._approve_file_edit("create", "res://approval_c.gd", "fixture")
+	if not other_plan or approval_chat.dialog_calls != 3:
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("A different plan did not prompt again: " + str(approval_chat.dialog_calls)); return
+	approval_chat.queued_chat_parameters = {}
+	approval_chat.turn_id = "turn-other"
+	var other_turn: bool = await approval_chat._approve_file_edit("create", "res://approval_d.gd", "fixture")
+	if not other_turn or approval_chat.dialog_calls != 4:
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("A different turn did not prompt again: " + str(approval_chat.dialog_calls)); return
+	approval_chat.allow = false
+	approval_chat.queued_chat_parameters = {"plan_root": "plan-cancel"}
+	var cancelled: bool = await approval_chat._approve_file_edit("create", "res://approval_e.gd", "fixture")
+	approval_chat.allow = true
+	var retried: bool = await approval_chat._approve_file_edit("create", "res://approval_e.gd", "fixture")
+	if cancelled or not retried or approval_chat.dialog_calls != 6:
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("Cancelled approval created a grant or did not prompt again: " + str(approval_chat.dialog_calls)); return
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", false)
+	approval_chat.queued_chat_parameters = {"plan_root": "plan-noshell"}
+	var disabled_headless: bool = await approval_chat._approve_headless_run(["--headless", "--path", "."], "res://")
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+	if disabled_headless or approval_chat.dialog_calls != 6:
+		_fail("Disabled shell execution prompted or approved a headless run: " + str(approval_chat.dialog_calls)); return
+	approval_chat.queue_free()
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
 	await get_tree().process_frame

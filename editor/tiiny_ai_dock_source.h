@@ -86,6 +86,8 @@ var debugger_node: Object
 var turn_ledger: Array[Dictionary] = []
 var action_cards: Array[Dictionary] = []
 var turn_id := ""
+var approval_grants := {}
+var approval_scope_granted := false
 var tool_call_count := 0
 var turn_failed_calls := {}
 var turn_scene_context: Dictionary = {}
@@ -2355,13 +2357,36 @@ func _next_frame() -> void:
 	if loop is SceneTree:
 		await (loop as SceneTree).process_frame
 
-func _approval_dialog(title: String, text: String, ok_text: String) -> bool:
+func _approval_scope_key() -> String:
+	var plan_root := str(queued_chat_parameters.get("plan_root", ""))
+	if not plan_root.is_empty(): return "plan:" + plan_root
+	if not turn_id.is_empty(): return "turn:" + turn_id
+	return ""
+
+func _approval_granted(kind: String) -> bool:
+	var scope := _approval_scope_key()
+	return not scope.is_empty() and bool(approval_grants.get(kind + "|" + scope, false))
+
+func _grant_approval(kind: String) -> void:
+	var scope := _approval_scope_key()
+	if not scope.is_empty():
+		approval_grants[kind + "|" + scope] = true
+
+func _approval_dialog(title: String, text: String, ok_text: String, scope_text := "") -> bool:
+	approval_scope_granted = false
 	var dialog := ConfirmationDialog.new()
 	dialog.title = title
 	dialog.dialog_text = text
 	dialog.ok_button_text = ok_text
 	dialog.cancel_button_text = "Cancel"
 	add_child(dialog)
+	if not scope_text.is_empty():
+		dialog.add_button(scope_text, true, "scope")
+		dialog.custom_action.connect(func(action: StringName) -> void:
+			if action == "scope":
+				approval_scope_granted = true
+				dialog.hide()
+				approval_closed.emit(true))
 	dialog.confirmed.connect(func() -> void: approval_closed.emit(true))
 	dialog.canceled.connect(func() -> void: approval_closed.emit(false))
 	dialog.close_requested.connect(func() -> void:
@@ -2383,18 +2408,38 @@ func _approve_shell_command(command: String, cwd: String) -> bool:
 	return await _approval_dialog("Run host command?", "This runs host code with your permissions in %s:\n\n%s\n\nOnly approve commands you understand. Output is bounded and redacted, and the process group is stopped on timeout." % [cwd, command.left(1200)], "Run once")
 
 func _approve_file_edit(action: String, path: String, reason: String) -> bool:
+	if action == "create" and _approval_granted("authoring"):
+		return true
 	var detail := "The assistant wants to %s %s.\n\nThis is a workspace file edit; it is not recorded in scene Undo." % [action, path]
 	if not reason.strip_edges().is_empty():
 		detail += "\n\nReason: " + reason.strip_edges().left(600)
-	return await _approval_dialog(action.capitalize() + " file?", detail, action.capitalize())
+	var scope_text := ""
+	if action == "create" and not _approval_scope_key().is_empty():
+		scope_text = "Allow for this plan" if _approval_scope_key().begins_with("plan:") else "Allow for this turn"
+		detail += "\n\nOne approval covers creating project files and running project code headlessly for this %s. Move, delete, and host shell commands still ask separately." % ("plan" if _approval_scope_key().begins_with("plan:") else "turn")
+	var approved := await _approval_dialog(action.capitalize() + " file?", detail, "Allow once" if not scope_text.is_empty() else action.capitalize(), scope_text)
+	if approved and approval_scope_granted:
+		_grant_approval("authoring")
+	return approved
 
 func _approve_headless_run(args: Array, cwd: String) -> bool:
 	var settings := EditorInterface.get_editor_settings()
 	if not bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands")):
 		return false
+	if _approval_granted("authoring"):
+		return true
 	var rendered_parts: PackedStringArray = PackedStringArray(args.map(func(value): return str(value)))
 	var rendered := " ".join(rendered_parts).left(1200)
-	return await _approval_dialog("Run project code headlessly?", "This runs Godot project scripts on your machine in %s with these arguments:\n\n%s\n\nProject scripts are host code. Only approve a run you understand. Output is bounded and redacted, and the process group is stopped on timeout." % [cwd, rendered], "Run once")
+	var scope_text := ""
+	if not _approval_scope_key().is_empty():
+		scope_text = "Allow for this plan" if _approval_scope_key().begins_with("plan:") else "Allow for this turn"
+	var detail := "This runs Godot project scripts on your machine in %s with these arguments:\n\n%s\n\nProject scripts are host code. Only approve a run you understand. Output is bounded and redacted, and the process group is stopped on timeout." % [cwd, rendered]
+	if not scope_text.is_empty():
+		detail += "\n\nOne approval covers creating project files and running project code headlessly for this %s. Move, delete, and host shell commands still ask separately." % ("plan" if _approval_scope_key().begins_with("plan:") else "turn")
+	var approved := await _approval_dialog("Run project code headlessly?", detail, "Allow once" if not scope_text.is_empty() else "Run once", scope_text)
+	if approved and approval_scope_granted:
+		_grant_approval("authoring")
+	return approved
 
 func _approve_scene_discard(path: String) -> bool:
 	return await _approval_dialog("Discard unsaved scene changes?", "Reloading %s from disk will discard its unsaved editor changes.\n\nChoose Cancel to save the scene first." % path, "Discard and reload")
