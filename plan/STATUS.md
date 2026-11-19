@@ -1,6 +1,6 @@
 # Work in progress
 
-Active feature: **none**. Story 32 is complete; a new work item is required for further scope.
+Active feature: **33 — Reviewable game plan document and job execution** (design under review; implementation not started).
 
 Status: all parent story 01 criteria pass. See [completion evidence](evidence/01-completion.md). Story 02 is complete; `check_jobs_displayed.py` captured a real X11 editor with the completed fixture card and column counts. Stories 03–32 are accepted. Story 18's workspace fixture passed pure and editor checks, displayed workspace/hybrid mode captures, the 10-task bake-off, and regressions; see [story 18 acceptance](evidence/18-acceptance.md). The catalog reports 32 supported / 68 partial / 0 missing. Story 21 closes the job-backed long-tool and review findings, including live workspace/hybrid and plan traces. Story 22 removes pre-answer classification and adds `AGENTS.md` and plain-text output rules. Story 23 adds serial planned task trees with deferred joins, contained failures, structured results, intervention retry/skip/cancel, and planner guidance.
 
@@ -82,9 +82,11 @@ Pickup diagnosis: `check_builtin_jobs.py` failed with "Unsupported job operation
 
 Verified: exact embedded parsing/startup, isolated offline/fake Apply and protocol checks, owned process cleanup/shutdown, stale readiness, native resource/node creation and late callbacks, real loopback HTTP timeouts/error/image import/polygon adapter, Output while a scene runs, displayed X11/Wayland UI, and real Tiiny chat plus polygon save/reopen. The original Qwen3.6 + Qwen3.8 warm set was preserved. Models and Advanced are visible without Godot's global advanced switch.
 
-Next action: none for the planned sequence. Story 32 is complete; a new work item is required for further scope. The known boundaries are: the live plan trace exercised a prose fallback for one child, the intervention dialog has code-level but not displayed-capture coverage, and the image-to-3D device path was not rerun for story 21.
+Next action: confirm the constrained-YAML format and the eight-task v1 cap, then implement the parser/validator before execution and writeback. The known boundaries are: the live plan trace exercised a prose fallback for one child, the intervention dialog has code-level but not displayed-capture coverage, and the image-to-3D device path was not rerun for story 21.
 
 ## Evidence log
+
+- Plan document design: story 33 is scoped as a strict YAML-subset plan document, not a general engine YAML class. It defines schema v1, `depends_on` eligibility, `done_when` checks with evidence provenance, a draft/validate/run path, and compilation into the existing plan coordinator, child jobs, and deferred join. Writeback is hash-guarded and idempotent; a user edit during a run is a conflict, not an overwrite. No implementation has started. The visual wizard, question cards, and mid-task questions remain follow-ups.
 
 - Tool failure recovery: a `stale_scene` result now clears that call signature and the last-signature marker after the loop refreshes `turn_scene_context`, so the documented identical re-inspection can execute once more instead of returning `repeated_call`. Rejected GDScript candidates from `write_file`, `apply_patch`, `replace_in_gdscript`, `create_gdscript`, and `create_and_attach_gdscript` now report the parser line, kind, and message; the workspace provider returns `data.line`/`data.kind`, and the engine's own `SCRIPT ERROR` diagnostics remain expected validation output. The editor fixture forces a stale revision, sees `stale_scene`, retries the identical `get_scene_tree` call, and requires success; it also asserts `replace_in_gdscript` reports "failed validation at line 4" plus the parser message and leaves the file unchanged. The pure fixture asserts invalid `write_file`/`apply_patch` results include the parse line and leave the file unchanged. Workspace pure/editor, transaction, 20-case selection, and runtime passed. Editor smoke passed 13 on rerun (the first run hit the known headless resource-dialog crash). Full Jobs passed 66 modes. Build exited 0 in 31.70 s; no build remains running.
 
