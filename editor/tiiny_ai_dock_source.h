@@ -202,6 +202,9 @@ func _ready() -> void:
 	if not settings.has_setting("tiiny_ai/advanced/allow_shell_commands"):
 		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", false)
 	settings.add_property_info({"name": "tiiny_ai/advanced/allow_shell_commands", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Host code execution. Each command still requires explicit approval."})
+	if not settings.has_setting("tiiny_ai/advanced/auto_approve_assistant_actions"):
+		settings.set_setting("tiiny_ai/advanced/auto_approve_assistant_actions", false)
+	settings.add_property_info({"name": "tiiny_ai/advanced/auto_approve_assistant_actions", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Skip assistant confirmation dialogs for file edits and host commands. This can change or delete files and run project code without review. Unsaved-scene discard confirmations remain."})
 	if not settings.has_setting("tiiny_ai/advanced/log_chat"):
 		settings.set_setting("tiiny_ai/advanced/log_chat", true)
 	settings.add_property_info({"name": "tiiny_ai/advanced/log_chat", "type": TYPE_BOOL, "hint": PROPERTY_HINT_NONE, "hint_string": "Append prompts, reasoning, tool calls, and responses to res://.tiiny/logs/chat.log."})
@@ -2357,6 +2360,10 @@ func _next_frame() -> void:
 	if loop is SceneTree:
 		await (loop as SceneTree).process_frame
 
+func _auto_approve_assistant_actions() -> bool:
+	var settings := EditorInterface.get_editor_settings()
+	return settings.has_setting("tiiny_ai/advanced/auto_approve_assistant_actions") and bool(settings.get_setting("tiiny_ai/advanced/auto_approve_assistant_actions"))
+
 func _approval_scope_key() -> String:
 	var plan_root := str(queued_chat_parameters.get("plan_root", ""))
 	if not plan_root.is_empty(): return "plan:" + plan_root
@@ -2405,9 +2412,13 @@ func _approve_shell_command(command: String, cwd: String) -> bool:
 	var settings := EditorInterface.get_editor_settings()
 	if not bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands")):
 		return false
+	if _auto_approve_assistant_actions():
+		return true
 	return await _approval_dialog("Run host command?", "This runs host code with your permissions in %s:\n\n%s\n\nOnly approve commands you understand. Output is bounded and redacted, and the process group is stopped on timeout." % [cwd, command.left(1200)], "Run once")
 
 func _approve_file_edit(action: String, path: String, reason: String) -> bool:
+	if _auto_approve_assistant_actions():
+		return true
 	if action == "create" and _approval_granted("authoring"):
 		return true
 	var detail := "The assistant wants to %s %s.\n\nThis is a workspace file edit; it is not recorded in scene Undo." % [action, path]
@@ -2426,6 +2437,8 @@ func _approve_headless_run(args: Array, cwd: String) -> bool:
 	var settings := EditorInterface.get_editor_settings()
 	if not bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands")):
 		return false
+	if _auto_approve_assistant_actions():
+		return true
 	if _approval_granted("authoring"):
 		return true
 	var rendered_parts: PackedStringArray = PackedStringArray(args.map(func(value): return str(value)))

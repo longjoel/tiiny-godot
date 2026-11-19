@@ -50,11 +50,14 @@ func _run() -> void:
 		_fail("The workspace coding script was not injected into the dock")
 		return
 	var settings := EditorInterface.get_editor_settings()
-	if not settings.has_setting("tiiny_ai/advanced/tool_mode") or not settings.has_setting("tiiny_ai/advanced/allow_shell_commands"):
+	if not settings.has_setting("tiiny_ai/advanced/tool_mode") or not settings.has_setting("tiiny_ai/advanced/allow_shell_commands") or not settings.has_setting("tiiny_ai/advanced/auto_approve_assistant_actions"):
 		_fail("Workspace tool settings are not registered")
 		return
 	if bool(settings.get_setting("tiiny_ai/advanced/allow_shell_commands")):
 		_fail("Host command execution must default to disabled")
+		return
+	if bool(settings.get_setting("tiiny_ai/advanced/auto_approve_assistant_actions")):
+		_fail("Auto-approval must default to disabled")
 		return
 
 	dock.call("_refresh_registry_availability")
@@ -447,6 +450,32 @@ func _run() -> void:
 	if disabled_headless or approval_chat.dialog_calls != 6:
 		_fail("Disabled shell execution prompted or approved a headless run: " + str(approval_chat.dialog_calls)); return
 	approval_chat.queue_free()
+	var auto_chat = load("res://fake_approval_chat.gd").new()
+	add_child(auto_chat)
+	await get_tree().process_frame
+	auto_chat.turn_id = "turn-auto"
+	auto_chat.queued_chat_parameters = {"plan_root": "plan-auto"}
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", true)
+	settings.set_setting("tiiny_ai/advanced/auto_approve_assistant_actions", true)
+	var auto_create: bool = await auto_chat._approve_file_edit("create", "res://auto_a.gd", "fixture")
+	var auto_move: bool = await auto_chat._approve_file_edit("move", "res://auto_a.gd", "fixture")
+	var auto_delete: bool = await auto_chat._approve_file_edit("delete", "res://auto_a.gd", "fixture")
+	var auto_headless: bool = await auto_chat._approve_headless_run(["--headless", "--path", "."], "res://")
+	var auto_shell: bool = await auto_chat._approve_shell_command("echo fixture", "res://")
+	var auto_discard: bool = await auto_chat._approve_scene_discard("res://dirty.tscn")
+	if not auto_create or not auto_move or not auto_delete or not auto_headless or not auto_shell or not auto_discard or auto_chat.dialog_calls != 1:
+		settings.set_setting("tiiny_ai/advanced/auto_approve_assistant_actions", false)
+		settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+		_fail("Auto-approval did not suppress authoring dialogs or still covered scene discard: " + str(auto_chat.dialog_calls)); return
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", false)
+	var auto_headless_off: bool = await auto_chat._approve_headless_run(["--headless", "--path", "."], "res://")
+	var auto_shell_off: bool = await auto_chat._approve_shell_command("echo fixture", "res://")
+	var auto_create_off: bool = await auto_chat._approve_file_edit("create", "res://auto_b.gd", "fixture")
+	settings.set_setting("tiiny_ai/advanced/auto_approve_assistant_actions", false)
+	settings.set_setting("tiiny_ai/advanced/allow_shell_commands", previous_shell)
+	if auto_headless_off or auto_shell_off or not auto_create_off or auto_chat.dialog_calls != 1:
+		_fail("Auto-approval bypassed the shell gate or prompted for a file edit: " + str(auto_chat.dialog_calls)); return
+	auto_chat.queue_free()
 	var chat = load("res://fake_chat.gd").new()
 	add_child(chat)
 	await get_tree().process_frame
